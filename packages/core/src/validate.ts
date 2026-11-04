@@ -6,7 +6,7 @@ import { isMap, isSeq } from "yaml";
 import type { Document, Node, YAMLMap, YAMLSeq } from "yaml";
 import { splitBlockHeader } from "./block-header.ts";
 import type { ErrorCode } from "./errors.ts";
-import { parseWithString } from "./expressions.ts";
+import { parseWithString, refsOf } from "./expressions.ts";
 import {
   BLOCK_NAME_RE,
   DEFAULT_KILL_GRACE_SECONDS,
@@ -796,14 +796,6 @@ function typeOfRef(
   const block = blocks.get(ref.step);
   if (block === "invalid" || block === "unresolved" || block === undefined) return null;
   return block.outputs.find((output) => output.name === ref.output)?.type ?? null;
-}
-
-function refsOf(value: WithValue): ExpressionRef[] {
-  if (value.kind === "whole") return [value.ref];
-  if (value.kind === "template") {
-    return value.parts.filter((part) => part.kind === "expr").map((part) => (part as { kind: "expr"; ref: ExpressionRef }).ref);
-  }
-  return [];
 }
 
 // --- dependency cycles (section 3.9) ------------------------------------

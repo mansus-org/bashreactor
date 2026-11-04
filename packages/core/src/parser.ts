@@ -12,7 +12,11 @@ import type { Block, Pipeline } from "./types.ts";
 export function parseBlock(source: string): Block {
   const split = splitBlockHeader(source);
   if (!split.ok) throw new BashreactorError("block_header_malformed", split.error);
-  const yaml = parseYamlDocument(split.header);
+  return parseBlockHeaderText(split.header);
+}
+
+export function parseBlockHeaderText(header: string): Block {
+  const yaml = parseYamlDocument(header);
   if (!yaml.ok) throw new BashreactorError("block_header_malformed", yaml.error);
   if (!isMap(yaml.root)) throw new BashreactorError("block_header_malformed", "the header must be a mapping");
   const { block, issues } = buildBlock(yaml.root, yaml.doc);

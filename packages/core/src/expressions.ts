@@ -23,6 +23,17 @@ export type WithStringResult =
   | { ok: true; value: WithValue }
   | { ok: false };
 
+// The expression references inside a with value, for dependency discovery and binding.
+export function refsOf(value: WithValue): ExpressionRef[] {
+  if (value.kind === "whole") return [value.ref];
+  if (value.kind === "template") {
+    return value.parts
+      .filter((part) => part.kind === "expr")
+      .map((part) => (part as { kind: "expr"; ref: ExpressionRef }).ref);
+  }
+  return [];
+}
+
 // A `with` string value is a literal, one whole expression, or a template. Any `${{` that does not
 // start a valid expression makes the value invalid.
 export function parseWithString(text: string): WithStringResult {

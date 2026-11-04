@@ -1,3 +1,4 @@
+export * from "./block-header.ts";
 export * from "./errors.ts";
 export * from "./expressions.ts";
 export * from "./parser.ts";
