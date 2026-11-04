@@ -64,7 +64,7 @@
         name: parsed.title,
         status: "pending",
         block: { uses: parsed.uses, name: parsed.blockName, sha256: block ? window.BR.sha256Hex(window.BR.model.latest(block).source) : null },
-        needs: parsed.deps,
+        needs: parsed.deps.slice().sort((a, b) => analysis.order.indexOf(a) - analysis.order.indexOf(b)),
         with: null,
         outputs: null,
         failure: null,
