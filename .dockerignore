@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+**/*.test.ts
+**/*.md
+.git
+.github
+.k3s
+.claude
+paseo.json
+Dockerfile
+.dockerignore
+docs
+mockup
+examples

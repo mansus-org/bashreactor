@@ -1,0 +1,15 @@
+# Deploy settings for bashreactor.mansus.org on the mansus.org cluster.
+# All options: charts/app/values.yaml in nemoNoboru/k3s-hetzner-gitops.
+
+ingress:
+  host: bashreactor.mansus.org
+
+port: 8080
+
+healthCheck:
+  path: /healthz
+
+# The scaffold server idles around 30 MB under bun; the limit leaves room for the API that replaces it.
+resources:
+  requests: { cpu: 10m, memory: 64Mi }
+  limits: { memory: 256Mi }
