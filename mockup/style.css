@@ -194,7 +194,7 @@ input[type="checkbox"]:checked::after {
 }
 input[type="checkbox"]:disabled { cursor: not-allowed; }
 input[type="checkbox"]:disabled::before { border-style: dashed; }
-input:disabled, select:disabled { border-style: dashed; }
+select:disabled, input:not([type="checkbox"]):disabled { border-style: dashed; }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
