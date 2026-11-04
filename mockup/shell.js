@@ -22,11 +22,15 @@ window.BR = window.BR || {};
   }
 
   // Each state has a shape as well as a word, so a row can be read at a glance in two inks.
+  // The run states are the spec's (SPEC 4.4); queued stays as the editor's generic not-started sign.
   const SIGNS = {
     queued: ["#######", "#.....#", "#.....#", "#.....#", "#.....#", "#.....#", "#######"],
+    pending: ["#######", "#.....#", "#.....#", "#.....#", "#.....#", "#.....#", "#######"],
     running: ["#.#.#.#", ".#.#.#.", "#.#.#.#", ".#.#.#.", "#.#.#.#", ".#.#.#.", "#.#.#.#"],
     succeeded: ["#######", "#######", "#######", "#######", "#######", "#######", "#######"],
     failed: ["#.....#", ".#...#.", "..#.#..", "...#...", "..#.#..", ".#...#.", "#.....#"],
+    waiting_retry: ["#######", "#.....#", "#.#.#.#", "#.#.#.#", "#.#.#.#", "#.....#", "#######"],
+    skipped: ["##.....", "###....", "####...", "#####..", "####...", "###....", "##....."],
     cancelled: ["#######", "#....##", "#...#.#", "#..#..#", "#.#...#", "##....#", "#######"],
   };
 
@@ -103,7 +107,7 @@ window.BR = window.BR || {};
       mine = { name, versions: [] };
       made.push(mine);
     }
-    mine.versions.push({ version, published: new Date().toISOString().slice(0, 10), note, source });
+    mine.versions.push({ version, published: new Date().toISOString().slice(0, 10), note, sha256: window.BR.sha256Hex(source), source });
     store.set("blocks", made);
     return version;
   }

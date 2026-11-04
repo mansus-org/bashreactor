@@ -1,15 +1,79 @@
-// All the mockup's fake data. Nothing else in mockup/ holds a pipeline, a block or a log line.
+// All the mockup's fake data. Nothing else in mockup/ holds a pipeline, a block, a run or a log line.
 //
 // The pipeline is stored as YAML text because in the product the YAML is the document: the graph
 // is derived from it, never stored next to it. A block's inputs and outputs are not listed here
 // either, they are read from the front matter of its source.
 //
-// RECONCILE: this follows docs/examples/word-report.yaml and its block files as the spec task had
-// them in progress, with bigger numbers (lines, timeouts) so a run lasts hours, and progress lines
-// added to two block files so a log has something to stream. Run and version records have no
-// schema yet; `runs`, `versions`, `logs` and `failures` below are the mockup's guess at them.
+// The shape of everything below now follows docs/SPEC.md:
+//   - `pipeline` is the exact bytes of a pipeline.yaml snapshot (section 3).
+//   - `blocks` are the block files (section 2); a version's identity is the SHA-256 of its bytes,
+//     so each version carries the real hash. `published` and `note` are store metadata, which the
+//     store task (BASHR-4) owns; the block file itself is the source of truth.
+//   - `runs` are run.json documents (section 4.9): string ids, ISO times, steps in declaration
+//     order with the spec's statuses, attempts with exit_code, signal and failure.code, file
+//     values stored as paths relative to the run directory.
+//   - `logs` and `failures` are the attempt log files the run view streams. The product keeps one
+//     log per attempt under steps/<id>/attempts/<n>/log; the mockup has no engine to write them,
+//     so it replays these. They are keyed by block only so the simulator can reuse them.
+//
+// The numbers are much bigger than docs/examples/word-report.yaml so a run lasts hours, and two
+// block files print progress so a log has something to stream.
+
+window.BR = window.BR || {};
 
 window.BashreactorData = (() => {
+  // A block version's identity is the SHA-256 of the file's exact bytes (SPEC 2). This is the one
+  // synchronous hash the mockup needs; the real store computes it the same way.
+  function sha256Hex(text) {
+    const bytes = new TextEncoder().encode(text);
+    const K = new Uint32Array([
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ]);
+    const len = bytes.length;
+    const total = Math.ceil((len + 9) / 64) * 64;
+    const padded = new Uint8Array(total);
+    padded.set(bytes);
+    padded[len] = 0x80;
+    const bitLen = len * 8;
+    const dv = new DataView(padded.buffer);
+    dv.setUint32(total - 8, Math.floor(bitLen / 0x100000000));
+    dv.setUint32(total - 4, bitLen >>> 0);
+
+    const h = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+    const w = new Uint32Array(64);
+    for (let i = 0; i < total; i += 64) {
+      for (let t = 0; t < 16; t++) w[t] = dv.getUint32(i + t * 4);
+      for (let t = 16; t < 64; t++) {
+        const x = w[t - 15];
+        const y = w[t - 2];
+        const s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+        const s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) >>> 0;
+      }
+      let [a, b, c, d, e, f, g, hh] = h;
+      for (let t = 0; t < 64; t++) {
+        const S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        const ch = (e & f) ^ (~e & g);
+        const t1 = (hh + S1 + ch + K[t] + w[t]) >>> 0;
+        const S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const t2 = (S0 + maj) >>> 0;
+        hh = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+      }
+      h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0; h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+      h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0; h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + hh) >>> 0;
+    }
+    return Array.from(h).map((x) => x.toString(16).padStart(8, "0")).join("");
+  }
+  window.BR.sha256Hex = sha256Hex;
+
   const pipeline = `name: word-report
 description: Generate a corpus, gate it, count its words and render a report.
 
@@ -393,25 +457,25 @@ TS
     {
       name: "generate-corpus",
       versions: [
-        { version: 1, published: "2026-08-02", note: "First version.", source: generateV1 },
-        { version: 2, published: "2026-09-14", note: "Same bytes whatever the attempt count, and carry on after a retry.", source: generateV2 },
-        { version: 3, published: "2026-10-21", note: "Print progress every two million lines.", source: generateV3 },
+        { version: 1, published: "2026-08-02", note: "First version.", sha256: sha256Hex(generateV1), source: generateV1 },
+        { version: 2, published: "2026-09-14", note: "Same bytes whatever the attempt count, and carry on after a retry.", sha256: sha256Hex(generateV2), source: generateV2 },
+        { version: 3, published: "2026-10-21", note: "Print progress every two million lines.", sha256: sha256Hex(generateV3), source: generateV3 },
       ],
     },
     {
       name: "check-corpus",
-      versions: [{ version: 1, published: "2026-09-14", note: "First version.", source: checkV1 }],
+      versions: [{ version: 1, published: "2026-09-14", note: "First version.", sha256: sha256Hex(checkV1), source: checkV1 }],
     },
     {
       name: "count-words",
       versions: [
-        { version: 1, published: "2026-09-30", note: "First version.", source: countV1 },
-        { version: 2, published: "2026-10-28", note: "Return the top words and a file of all counts.", source: countV2 },
+        { version: 1, published: "2026-09-30", note: "First version.", sha256: sha256Hex(countV1), source: countV1 },
+        { version: 2, published: "2026-10-28", note: "Return the top words and a file of all counts.", sha256: sha256Hex(countV2), source: countV2 },
       ],
     },
     {
       name: "render-report",
-      versions: [{ version: 1, published: "2026-10-28", note: "First version.", source: renderV1 }],
+      versions: [{ version: 1, published: "2026-10-28", note: "First version.", sha256: sha256Hex(renderV1), source: renderV1 }],
     },
   ];
 
@@ -419,7 +483,7 @@ TS
   const last = `${WORDS} ${WORDS} ${WORDS} ${WORDS} ${WORDS}`;
 
   // What one run of a block prints, as [seconds into the step, stream, text]. A fourth element marks
-  // the line where a new attempt begins. {name} is filled from the step's inputs and context.
+  // the line where a new attempt begins. {name} is filled from the step's bound `with` and run id.
   const logs = {
     "generate-corpus": [
       [0, "sys", "attempt 1 of {max_attempts} started in /var/lib/bashreactor/runs/{run}/generate", 1],
@@ -467,7 +531,7 @@ TS
     ],
   };
 
-  // What the attempts that end badly print. Only the blocks a fixture run fails need one.
+  // The log a failed run's attempt leaves. Only the block a fixture run fails needs one.
   const failures = {
     "generate-corpus": [
       [0, "sys", "attempt 1 of {max_attempts} started in /var/lib/bashreactor/runs/{run}/generate", 1],
@@ -485,56 +549,255 @@ TS
     ],
   };
 
-  // Output values per block, for the step panel of the run view. {name} works as in `logs`.
-  const outputValues = {
-    "generate-corpus": { corpus: "/var/lib/bashreactor/runs/{run}/outputs/generate/corpus", line_count: "{lines}" },
-    "check-corpus": {},
-    "count-words": {
-      total_words: "143002118",
-      top_words: '[{"word":"ember","count":11941204},{"word":"juniper","count":11938877},{"word":"cedar","count":11937012},{"word":"kestrel","count":11936540},{"word":"amber","count":11934118}]',
-      counts: "/var/lib/bashreactor/runs/{run}/outputs/count/counts",
-    },
-    "render-report": { report: "/var/lib/bashreactor/runs/{run}/outputs/report/report", report_bytes: "412" },
-  };
+  // The run.json fixtures. Times are built relative to page load so the live run still looks alive;
+  // every value follows SPEC 4.9.
+  const NOW = Date.now();
+  const iso = (agoSeconds) => new Date(NOW - agoSeconds * 1000).toISOString();
+  const at = (startedAgo, offsetSeconds) => iso(startedAgo - offsetSeconds);
 
-  // Steps not named in a run's `steps` are queued. `shown` is how many lines of the block's log had
-  // already arrived when the page opened; the rest stream in from there.
-  const runs = [
-    {
-      id: 42,
-      startedAgo: 14400 + 1730,
-      inputs: { lines: 20000000, seed: 7, title: "Word report" },
-      steps: {
-        generate: { state: "succeeded", attempt: 2, seconds: 14090 },
-        check: { state: "succeeded", attempt: 1, seconds: 41 },
-        count: { state: "running", attempt: 1, seconds: 1999, shown: 3 },
-      },
-    },
-    {
-      id: 41,
-      startedAgo: 94210,
-      finishedAgo: 93300,
-      inputs: { lines: 20000000, seed: 7, title: "Word report" },
-      steps: {
-        generate: { state: "failed", attempt: 3, seconds: 910, error: "No space left on device. All 3 attempts are used, and the work directory is kept." },
-        check: { state: "cancelled", reason: "generate failed" },
-        count: { state: "cancelled", reason: "generate failed" },
-        report: { state: "cancelled", reason: "generate failed" },
-      },
-    },
-    {
-      id: 40,
-      startedAgo: 179800,
-      finishedAgo: 156500,
-      inputs: { lines: 20000000, seed: 7, title: "Word report" },
-      steps: {
-        generate: { state: "succeeded", attempt: 2, seconds: 14090 },
-        check: { state: "succeeded", attempt: 1, seconds: 41 },
-        count: { state: "succeeded", attempt: 1, seconds: 9143 },
-        report: { state: "succeeded", attempt: 1, seconds: 3 },
-      },
-    },
+  const topWords = [
+    { word: "ember", count: 11941204 },
+    { word: "juniper", count: 11938877 },
+    { word: "cedar", count: 11937012 },
+    { word: "kestrel", count: 11936540 },
+    { word: "amber", count: 11934118 },
   ];
+  const corpusPath = (attempt) => `steps/generate/attempts/${attempt}/outputs/corpus`;
+  const countsPath = "steps/count/attempts/1/outputs/counts";
+  const reportPath = "steps/report/attempts/1/outputs/report";
 
-  return { pipeline, blocks, logs, failures, outputValues, runs };
+  const run42 = (() => {
+    const started = 16130;
+    const t = (s) => at(started, s);
+    return {
+      schema: 1,
+      id: "20261104T093000Z-3fa9c2d1",
+      pipeline: "word-report",
+      status: "running",
+      created_at: iso(started),
+      finished_at: null,
+      cancel_requested_at: null,
+      inputs: { lines: 20000000, seed: 7, title: "Word report" },
+      outputs: null,
+      steps: {
+        generate: {
+          name: "Generate the corpus",
+          status: "succeeded",
+          block: { uses: "./generate-corpus.sh", name: "generate-corpus", sha256: sha256Hex(generateV3) },
+          needs: [],
+          with: { lines: 20000000, seed: 7, interrupt_at: 12000000 },
+          outputs: { corpus: corpusPath(2), line_count: 20000000 },
+          failure: null,
+          attempts_used: 2,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "failed", pid: 48211, pid_start: 91827364, started_at: t(0), finished_at: t(8441), exit_code: 75, signal: null, failure: { code: "retry_requested", message: "exit 75" } },
+            { n: 2, status: "succeeded", pid: 48230, pid_start: 91827466, started_at: t(8442), finished_at: t(14090), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+        check: {
+          name: "Check the corpus is long enough",
+          status: "succeeded",
+          block: { uses: "./check-corpus.sh", name: "check-corpus", sha256: sha256Hex(checkV1) },
+          needs: ["generate"],
+          with: { corpus: corpusPath(2), min_lines: 100 },
+          outputs: {},
+          failure: null,
+          attempts_used: 1,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "succeeded", pid: 48240, pid_start: 91827511, started_at: t(14090), finished_at: t(14131), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+        count: {
+          name: "Count the words",
+          status: "running",
+          block: { uses: "./count-words.sh", name: "count-words", sha256: sha256Hex(countV2) },
+          needs: ["generate"],
+          with: { corpus: corpusPath(2), top: 5 },
+          outputs: null,
+          failure: null,
+          attempts_used: 1,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "running", pid: 48299, pid_start: 91827601, started_at: t(14091), finished_at: null, exit_code: null, signal: null, failure: null },
+          ],
+        },
+        report: {
+          name: "Render the report",
+          status: "pending",
+          block: { uses: "./render-report.sh", name: "render-report", sha256: sha256Hex(renderV1) },
+          needs: ["generate", "check", "count"],
+          with: null,
+          outputs: null,
+          failure: null,
+          attempts_used: 0,
+          next_attempt_at: null,
+          attempts: [],
+        },
+      },
+    };
+  })();
+
+  const run41 = (() => {
+    const started = 94210;
+    const t = (s) => at(started, s);
+    const exit1 = { code: "exit_nonzero", message: "exit 1" };
+    const attempt = (n, from, to) => ({
+      n,
+      status: "failed",
+      pid: 47100 + n,
+      pid_start: 91700000 + n,
+      started_at: t(from),
+      finished_at: t(to),
+      exit_code: 1,
+      signal: null,
+      failure: exit1,
+    });
+    return {
+      schema: 1,
+      id: "20261104T061500Z-7b2a90c4",
+      pipeline: "word-report",
+      status: "failed",
+      created_at: iso(started),
+      finished_at: t(910),
+      cancel_requested_at: null,
+      inputs: { lines: 20000000, seed: 7, title: "Word report" },
+      outputs: null,
+      steps: {
+        generate: {
+          name: "Generate the corpus",
+          status: "failed",
+          block: { uses: "./generate-corpus.sh", name: "generate-corpus", sha256: sha256Hex(generateV3) },
+          needs: [],
+          with: { lines: 20000000, seed: 7, interrupt_at: 12000000 },
+          outputs: null,
+          failure: { code: "exit_nonzero", message: "No space left on device (exit 1)" },
+          attempts_used: 3,
+          next_attempt_at: null,
+          attempts: [attempt(1, 0, 904), attempt(2, 905, 907), attempt(3, 908, 910)],
+        },
+        check: {
+          name: "Check the corpus is long enough",
+          status: "skipped",
+          block: { uses: "./check-corpus.sh", name: "check-corpus", sha256: sha256Hex(checkV1) },
+          needs: ["generate"],
+          with: null,
+          outputs: null,
+          failure: null,
+          attempts_used: 0,
+          next_attempt_at: null,
+          attempts: [],
+        },
+        count: {
+          name: "Count the words",
+          status: "skipped",
+          block: { uses: "./count-words.sh", name: "count-words", sha256: sha256Hex(countV2) },
+          needs: ["generate"],
+          with: null,
+          outputs: null,
+          failure: null,
+          attempts_used: 0,
+          next_attempt_at: null,
+          attempts: [],
+        },
+        report: {
+          name: "Render the report",
+          status: "skipped",
+          block: { uses: "./render-report.sh", name: "render-report", sha256: sha256Hex(renderV1) },
+          needs: ["generate", "check", "count"],
+          with: null,
+          outputs: null,
+          failure: null,
+          attempts_used: 0,
+          next_attempt_at: null,
+          attempts: [],
+        },
+      },
+    };
+  })();
+
+  const run40 = (() => {
+    const started = 179800;
+    const t = (s) => at(started, s);
+    return {
+      schema: 1,
+      id: "20261103T083000Z-9e1d5f02",
+      pipeline: "word-report",
+      status: "succeeded",
+      created_at: iso(started),
+      finished_at: t(23237),
+      cancel_requested_at: null,
+      inputs: { lines: 20000000, seed: 7, title: "Word report" },
+      outputs: { report: reportPath, total_words: 143002118 },
+      steps: {
+        generate: {
+          name: "Generate the corpus",
+          status: "succeeded",
+          block: { uses: "./generate-corpus.sh", name: "generate-corpus", sha256: sha256Hex(generateV3) },
+          needs: [],
+          with: { lines: 20000000, seed: 7, interrupt_at: 12000000 },
+          outputs: { corpus: corpusPath(2), line_count: 20000000 },
+          failure: null,
+          attempts_used: 2,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "failed", pid: 43111, pid_start: 91217364, started_at: t(0), finished_at: t(8441), exit_code: 75, signal: null, failure: { code: "retry_requested", message: "exit 75" } },
+            { n: 2, status: "succeeded", pid: 43130, pid_start: 91217466, started_at: t(8442), finished_at: t(14090), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+        check: {
+          name: "Check the corpus is long enough",
+          status: "succeeded",
+          block: { uses: "./check-corpus.sh", name: "check-corpus", sha256: sha256Hex(checkV1) },
+          needs: ["generate"],
+          with: { corpus: corpusPath(2), min_lines: 100 },
+          outputs: {},
+          failure: null,
+          attempts_used: 1,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "succeeded", pid: 43140, pid_start: 91217511, started_at: t(14090), finished_at: t(14131), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+        count: {
+          name: "Count the words",
+          status: "succeeded",
+          block: { uses: "./count-words.sh", name: "count-words", sha256: sha256Hex(countV2) },
+          needs: ["generate"],
+          with: { corpus: corpusPath(2), top: 5 },
+          outputs: { total_words: 143002118, top_words: topWords, counts: countsPath },
+          failure: null,
+          attempts_used: 1,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "succeeded", pid: 43199, pid_start: 91217601, started_at: t(14091), finished_at: t(23234), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+        report: {
+          name: "Render the report",
+          status: "succeeded",
+          block: { uses: "./render-report.sh", name: "render-report", sha256: sha256Hex(renderV1) },
+          needs: ["generate", "check", "count"],
+          with: {
+            title: "Word report: 20000000 lines",
+            total_words: 143002118,
+            top_words: topWords,
+            counts: countsPath,
+          },
+          outputs: { report: reportPath, report_bytes: 412 },
+          failure: null,
+          attempts_used: 1,
+          next_attempt_at: null,
+          attempts: [
+            { n: 1, status: "succeeded", pid: 43220, pid_start: 91217701, started_at: t(23234), finished_at: t(23237), exit_code: 0, signal: null, failure: null },
+          ],
+        },
+      },
+    };
+  })();
+
+  const runs = [run42, run41, run40];
+
+  return { pipeline, blocks, logs, failures, runs };
 })();

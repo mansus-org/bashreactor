@@ -174,7 +174,26 @@ select {
   background: var(--paper) var(--arrow) right 12px center no-repeat;
   text-overflow: ellipsis;
 }
-input[type="checkbox"] { width: 22px; height: 22px; margin: 0; accent-color: var(--ink); flex: none; }
+input[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  width: 44px; height: 44px; margin: 0; flex: none;
+  display: grid; place-items: center;
+  background: transparent; border: 0; cursor: pointer;
+}
+input[type="checkbox"]::before {
+  content: ""; width: 22px; height: 22px;
+  border: 2px solid var(--ink); background: var(--paper);
+}
+input[type="checkbox"]:checked::before { background: var(--ink); }
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 13px; height: 7px;
+  border-left: 3px solid var(--paper); border-bottom: 3px solid var(--paper);
+  transform: translate(-50%, -62%) rotate(-45deg);
+}
+input[type="checkbox"]:disabled { cursor: not-allowed; }
+input[type="checkbox"]:disabled::before { border-style: dashed; }
 input:disabled, select:disabled { border-style: dashed; }
 
 .btn {
@@ -374,6 +393,12 @@ input:disabled, select:disabled { border-style: dashed; }
   .runhead__tools { grid-column: 1 / -1; }
   .runhead__tools .field { flex: 1 1 11rem; width: auto; }
 }
+.runhead__meta a, .logpanel__meta a { position: relative; }
+/* A 44 px hit area drawn over the link, so the row's rhythm does not change. */
+.runhead__meta a::after, .logpanel__meta a::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%);
+}
+
 .params { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 0 0 20px; font-size: 0.9375rem; }
 .params div { display: flex; gap: 6px; min-width: 0; }
 .params dt { font-weight: 700; }
@@ -510,6 +535,35 @@ input:disabled, select:disabled { border-style: dashed; }
   .lib--open .back { display: inline-flex; justify-self: start; }
   .lib:not(.lib--open) .detail { display: none; }
 }
+
+/* ---------- entry page ---------- */
+
+.gate { display: grid; gap: clamp(28px, 4vw, 48px); max-width: 60rem; }
+.screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 16px; }
+.screen {
+  display: grid; gap: 8px; align-content: start; min-height: 44px;
+  padding: 16px; border: 3px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink); text-decoration: none;
+}
+.screen:hover { background: var(--ink); color: var(--paper); }
+.screen:hover .screen__num { background: var(--paper); color: var(--ink); }
+.screen:focus-visible { outline-offset: 3px; }
+.screen__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.screen__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex: none;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-code); font-weight: 800;
+}
+.screen__name {
+  font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
+  font-size: 1.75rem; line-height: 1; overflow-wrap: anywhere;
+}
+.screen__text { font-size: 0.9375rem; }
+.status { display: grid; gap: 12px; padding: 16px 18px; border: 3px solid var(--ink); background: var(--dots); }
+.status > p { max-width: 72ch; }
+.truth { margin: 0; padding: 0; list-style: none; }
+.truth li { padding: 6px 0; background: var(--dots); }
 
 /* ---------- motion: one e-ink repaint when something changed, nothing that loops ---------- */
 

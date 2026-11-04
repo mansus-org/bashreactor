@@ -1,6 +1,7 @@
 // The live run. A small simulator plays each step's fixture log on a timer and moves steps through
-// queued, running, succeeded, failed and cancelled by the rules the pipeline declares: dependencies,
-// max_parallel, retries. The screen only ever reads the run's state, the way it would read the API.
+// the spec's statuses (pending, running, waiting_retry, succeeded, failed, skipped, cancelled) by the
+// rules the pipeline declares: dependencies, max_parallel, retries. The screen only ever reads the
+// run's state, the way it would read run.json and the attempt logs from the API.
 
 (() => {
   const { el } = BR;
@@ -41,62 +42,146 @@
         ];
   }
 
-  function makeRun(fixture, doc) {
+  function runId(now) {
+    const pad = (n) => String(n).padStart(2, "0");
+    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}Z`;
+    let hex = "00000000";
+    try {
+      hex = Array.from(crypto.getRandomValues(new Uint8Array(4))).map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch {
+      hex = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0");
+    }
+    return `${stamp}-${hex}`;
+  }
+
+  function freshRun(doc, inputs) {
+    const analysis = BR.model.analyze(doc, library);
+    const steps = {};
+    for (const id of analysis.order) {
+      const parsed = analysis.byId[id];
+      const block = library.find((b) => b.name === parsed.blockName);
+      steps[id] = {
+        name: parsed.title,
+        status: "pending",
+        block: { uses: parsed.uses, name: parsed.blockName, sha256: block ? window.BR.sha256Hex(window.BR.model.latest(block).source) : null },
+        needs: parsed.deps,
+        with: null,
+        outputs: null,
+        failure: null,
+        attempts_used: 0,
+        next_attempt_at: null,
+        attempts: [],
+      };
+    }
+    return {
+      schema: 1,
+      id: runId(new Date()),
+      pipeline: analysis.name,
+      status: "running",
+      created_at: new Date().toISOString(),
+      finished_at: null,
+      cancel_requested_at: null,
+      inputs,
+      outputs: null,
+      steps,
+    };
+  }
+
+  function makeRun(runJson, doc) {
     const analysis = BR.model.analyze(doc, library);
     const run = {
-      id: fixture.id,
-      inputs: fixture.inputs,
-      pipeline: analysis.name,
+      id: runJson.id,
+      inputs: runJson.inputs,
+      pipeline: runJson.pipeline,
       maxParallel: analysis.maxParallel,
-      startedAt: Date.now() - (fixture.startedAgo || 0) * 1000,
-      finishedAt: fixture.finishedAgo ? Date.now() - fixture.finishedAgo * 1000 : null,
+      startedAt: Date.parse(runJson.created_at),
+      finishedAt: runJson.finished_at ? Date.parse(runJson.finished_at) : null,
+      cancelRequestedAt: runJson.cancel_requested_at,
+      outputs: runJson.outputs,
       order: analysis.order,
       connected: true,
       steps: {},
     };
     for (const id of analysis.order) {
       const parsed = analysis.byId[id];
-      const given = fixture.steps ? fixture.steps[id] || {} : {};
+      const s = runJson.steps && runJson.steps[id] ? runJson.steps[id] : null;
       const step = {
         id,
-        title: parsed.title,
+        title: s && s.name ? s.name : parsed.title,
         uses: parsed.uses,
         blockName: parsed.blockName,
         version: parsed.version,
-        deps: parsed.deps,
+        deps: s && Array.isArray(s.needs) ? s.needs : parsed.deps,
         maxAttempts: parsed.maxAttempts || 1,
         vars: {},
-        state: given.state || "queued",
-        attempt: given.attempt || 0,
-        seconds: given.seconds || 0,
+        state: s ? s.status : "pending",
+        attempts: s ? s.attempts : [],
+        attemptsUsed: s ? s.attempts_used : 0,
+        outputs: s ? s.outputs : null,
+        failure: s ? s.failure : null,
+        nextAttemptAt: s && s.next_attempt_at ? Date.parse(s.next_attempt_at) : null,
+        attempt: 0,
+        seconds: 0,
         runningSince: null,
-        reason: given.reason || null,
-        error: given.error || null,
+        reason: null,
+        error: null,
         lines: [],
         script: [],
         cursor: 0,
       };
-      for (const input of parsed.inputs) {
-        const raw = input.source.value;
-        if (input.source.kind === "input") step.vars[input.name] = run.inputs[input.source.name];
-        else if (input.source.kind === "literal") step.vars[input.name] = raw;
+
+      // Bound values come from run.json; a fresh run has not bound them yet, so the simulator fills
+      // the literals and input references the engine would bind on first start.
+      if (s && s.with) {
+        Object.assign(step.vars, s.with);
+      } else {
+        for (const input of parsed.inputs) {
+          const raw = input.source.value;
+          if (input.source.kind === "input") step.vars[input.name] = run.inputs[input.source.name];
+          else if (input.source.kind === "literal") step.vars[input.name] = raw;
+        }
       }
       step.vars.run = run.id;
       step.vars.step = id;
       step.vars.max_attempts = step.maxAttempts;
       if (step.vars.lines === undefined) step.vars.lines = run.inputs.lines;
-      run.steps[id] = step;
 
-      const script = blockScript(parsed.blockName || id, step.state);
+      const attempts = step.attempts;
+      if (attempts.length) {
+        step.attempt = attempts[attempts.length - 1].n;
+        const first = Date.parse(attempts[0].started_at);
+        const last = attempts[attempts.length - 1];
+        if (step.state === "running") {
+          step.runningSince = Date.parse(last.started_at);
+          step.seconds = (Date.now() - first) / 1000;
+        } else if (last.finished_at) {
+          step.seconds = (Date.parse(last.finished_at) - first) / 1000;
+        }
+      }
+
+      if (step.state === "failed" && step.failure) {
+        const word = step.attemptsUsed === 1 ? "attempt" : "attempts";
+        step.error = `${step.failure.message}. All ${step.attemptsUsed} ${word} are used, and the work directory is kept.`;
+      }
+
+      const script = blockScript(parsed.blockName || id, step.state === "failed" ? "failed" : "ok");
       step.script = script;
       if (step.state === "succeeded" || step.state === "failed") {
         script.forEach((line) => pushLine(step, line, line[0]));
         step.cursor = script.length;
       } else if (step.state === "running") {
-        const shown = given.shown || 0;
+        const elapsed = stepSeconds(step);
+        const shown = script.filter((line) => line[0] <= elapsed).length;
         script.slice(0, shown).forEach((line) => pushLine(step, line, line[0]));
         step.cursor = shown;
-        step.runningSince = Date.now() - step.seconds * 1000;
+      }
+      run.steps[id] = step;
+    }
+    for (const id of run.order) {
+      const step = run.steps[id];
+      if (step.state === "skipped") {
+        const bad = step.deps.find((d) => ["failed", "cancelled"].includes(run.steps[d] && run.steps[d].state));
+        step.reason = bad ? `${bad} ${run.steps[bad].state}` : "A dependency did not succeed";
       }
     }
     return run;
@@ -113,15 +198,17 @@
 
   function runState(run) {
     const states = run.order.map((id) => run.steps[id].state);
-    if (states.includes("running") || states.includes("queued")) return "running";
+    if (states.includes("running") || states.includes("pending") || states.includes("waiting_retry")) return "running";
     if (states.includes("failed")) return "failed";
     if (states.includes("cancelled")) return "cancelled";
     return "succeeded";
   }
 
   function outputsOf(step) {
-    const values = data.outputValues[step.blockName] || {};
-    return Object.entries(values).map(([name, value]) => ({ name, value: fill(value, step) }));
+    return Object.entries(step.outputs || {}).map(([name, value]) => ({
+      name,
+      value: typeof value === "string" ? value : JSON.stringify(value),
+    }));
   }
 
   function stepSeconds(step) {
@@ -129,6 +216,10 @@
   }
 
   function waitingFor(run, step) {
+    if (step.state === "waiting_retry") {
+      if (step.nextAttemptAt) return `Retries in ${BR.duration(Math.max(0, (step.nextAttemptAt - Date.now()) / 1000))}.`;
+      return "Waiting to retry.";
+    }
     const open = step.deps.filter((d) => run.steps[d].state !== "succeeded");
     if (open.length) return `Waits for ${open.join(", ")}.`;
     return "Waits for a free slot.";
@@ -147,22 +238,24 @@
       if (step.cursor >= step.script.length) {
         step.seconds = stepSeconds(step);
         step.state = "succeeded";
+        const known = succeededRun && succeededRun.steps[id];
+        if (known && known.outputs) step.outputs = known.outputs;
         onState(run, step);
       }
     }
     let running = run.order.filter((id) => run.steps[id].state === "running").length;
     for (const id of run.order) {
       const step = run.steps[id];
-      if (step.state !== "queued") continue;
+      if (step.state !== "pending") continue;
       const blocked = step.deps.find((d) => ["failed", "cancelled"].includes(run.steps[d].state));
       if (blocked) {
-        step.state = "cancelled";
+        step.state = "skipped";
         step.reason = `${blocked} ${run.steps[blocked].state}`;
         onState(run, step);
       } else if (running < run.maxParallel && step.deps.every((d) => run.steps[d].state === "succeeded")) {
         step.state = "running";
         step.attempt = 1;
-        step.script = blockScript(step.blockName || id);
+        step.script = blockScript(step.blockName || id, "ok");
         step.cursor = 0;
         step.lines = [];
         step.runningSince = Date.now();
@@ -186,7 +279,7 @@
         step.reason = "You cancelled the run";
         onLine(run, step);
         onState(run, step);
-      } else if (step.state === "queued") {
+      } else if (step.state === "pending" || step.state === "waiting_retry") {
         step.state = "cancelled";
         step.reason = "You cancelled the run";
         onState(run, step);
@@ -199,35 +292,40 @@
   function retry(run) {
     for (const id of run.order) {
       const step = run.steps[id];
-      if (step.state === "failed" || step.state === "cancelled") {
-        step.state = "queued";
+      if (step.state === "failed" || step.state === "cancelled" || step.state === "skipped") {
+        step.state = "pending";
         step.reason = null;
         step.error = null;
         step.attempt = 0;
         step.seconds = 0;
         step.lines = [];
         step.cursor = 0;
+        step.outputs = null;
+        step.failure = null;
         onState(run, step);
       }
     }
     run.finishedAt = null;
+    run.cancelRequestedAt = null;
   }
 
   // ---------- which runs exist ----------
 
   const fixtureDoc = data.pipeline;
-  const runs = data.runs.map((fixture) => makeRun(fixture, fixtureDoc));
+  const succeededRun = data.runs.find((r) => r.status === "succeeded");
+  const runs = data.runs.map((runJson) => makeRun(runJson, fixtureDoc));
   const params = new URLSearchParams(location.search);
   let current = runs[0];
 
   if (params.get("start")) {
     const start = BR.store.get("start");
-    const run = makeRun({ id: 43, startedAgo: 0, inputs: start ? start.inputs : data.runs[0].inputs }, start ? start.doc : fixtureDoc);
+    const doc = start ? start.doc : fixtureDoc;
+    const run = makeRun(freshRun(doc, start ? start.inputs : data.runs[0].inputs), doc);
     runs.unshift(run);
     current = run;
   }
-  const wanted = location.hash.match(/^#(\d+)$/);
-  if (wanted) current = runs.find((r) => r.id === Number(wanted[1])) || current;
+  const wanted = location.hash.match(/^#([0-9]{8}T[0-9]{6}Z-[0-9a-f]{8})$/);
+  if (wanted) current = runs.find((r) => r.id === wanted[1]) || current;
 
   // ---------- the screen ----------
 
@@ -278,7 +376,7 @@
       "div",
       { class: "dialog__body" },
       el("h2", { class: "dialog__title", id: "cancel-title" }, "Cancel this run?"),
-      el("p", {}, "The running step gets SIGTERM and every queued step is cancelled. The work directories stay, so a retry carries on from them."),
+      el("p", {}, "The running step gets SIGTERM and every pending step is cancelled. The work directories stay, so a retry carries on from them."),
       el(
         "div",
         { class: "row" },
@@ -478,11 +576,12 @@
       row.button.setAttribute("aria-selected", String(isSelected));
       row.button.tabIndex = isSelected ? 0 : -1;
       row.stamp.replaceChildren(BR.stateStamp(step.state));
-      row.time.textContent = step.state === "queued" || (step.state === "cancelled" && !step.seconds) ? "" : BR.duration(stepSeconds(step));
+      row.time.textContent = step.attempt > 0 ? BR.duration(stepSeconds(step)) : "";
       let note = step.title;
-      if (step.state === "queued") note = waitingFor(run, step);
+      if (step.state === "pending" || step.state === "waiting_retry") note = waitingFor(run, step);
       if (step.state === "running" || step.state === "failed") note = `Attempt ${step.attempt} of ${step.maxAttempts}`;
       if (step.state === "cancelled") note = step.reason ? `${step.reason}.` : "Cancelled.";
+      if (step.state === "skipped") note = step.reason ? `${step.reason}.` : "Skipped.";
       if (step.state === "succeeded" && step.attempt > 1) note = `Took ${step.attempt} attempts`;
       row.note.textContent = note;
     }
@@ -510,7 +609,9 @@
     if (streamLost && isLive) logStatus.textContent = "Disconnected.";
     else if (paused && isLive) logStatus.textContent = held ? `Paused, ${held} ${held === 1 ? "line" : "lines"} held back.` : "Paused.";
     else if (isLive) logStatus.textContent = "Streaming.";
-    else if (step.state === "queued") logStatus.textContent = "Not started.";
+    else if (step.state === "pending") logStatus.textContent = "Not started.";
+    else if (step.state === "waiting_retry") logStatus.textContent = "Waiting to retry.";
+    else if (step.state === "skipped") logStatus.textContent = "Skipped.";
     else logStatus.textContent = "Finished.";
 
     connectionBox.replaceChildren(
@@ -551,11 +652,15 @@
     }
     if (!step.lines.length) {
       const message =
-        step.state === "queued"
+        step.state === "pending"
           ? `${step.id} has not started. ${waitingFor(current, step)}`
           : step.state === "cancelled"
             ? `${step.id} was cancelled before it printed anything.`
-            : "Waiting for the first line.";
+            : step.state === "skipped"
+              ? `${step.id} was skipped. ${step.reason || "A dependency did not succeed."}`
+              : step.state === "waiting_retry"
+                ? `${step.id} is waiting to retry. ${waitingFor(current, step)}`
+                : "Waiting for the first line.";
       logLines.replaceChildren(el("li", { class: "log__empty" }, message));
       shownCount = 0;
       return;
@@ -631,8 +736,8 @@
   }
 
   window.addEventListener("hashchange", () => {
-    const id = location.hash.match(/^#(\d+)$/);
-    const run = id && runs.find((r) => r.id === Number(id[1]));
+    const id = location.hash.match(/^#([0-9]{8}T[0-9]{6}Z-[0-9a-f]{8})$/);
+    const run = id && runs.find((r) => r.id === id[1]);
     if (run) loadRun(run);
   });
 
