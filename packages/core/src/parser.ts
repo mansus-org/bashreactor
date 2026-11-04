@@ -1,13 +1,35 @@
-import { NotImplementedError } from "./errors.ts";
+// The block and pipeline parsers. `parseBlock` turns a block file's header into a Block, and
+// `parsePipeline` turns a pipeline file into a Pipeline; both throw a BashreactorError on the first
+// problem they find. Full multi-error validation lives in validate.ts.
+
+import { isMap } from "yaml";
+import { splitBlockHeader } from "./block-header.ts";
+import { BashreactorError } from "./errors.ts";
+import { buildBlock, buildPipeline } from "./validate.ts";
+import { parseYamlDocument } from "./yaml.ts";
 import type { Block, Pipeline } from "./types.ts";
 
-// TODO(parser): the block declaration and pipeline YAML parsers land here, once docs/SPEC.md (BASHR-1)
-// fixes the syntax. They produce the types in types.ts and report problems through validate.ts.
-
-export function parseBlock(_source: string): Block {
-  throw new NotImplementedError("parseBlock");
+export function parseBlock(source: string): Block {
+  const split = splitBlockHeader(source);
+  if (!split.ok) throw new BashreactorError("block_header_malformed", split.error);
+  const yaml = parseYamlDocument(split.header);
+  if (!yaml.ok) throw new BashreactorError("block_header_malformed", yaml.error);
+  if (!isMap(yaml.root)) throw new BashreactorError("block_header_malformed", "the header must be a mapping");
+  const { block, issues } = buildBlock(yaml.root, yaml.doc);
+  if (issues.length > 0) {
+    const first = issues[0]!;
+    throw new BashreactorError(first.code, first.message, { path: first.path });
+  }
+  return block!;
 }
 
-export function parsePipeline(_source: string): Pipeline {
-  throw new NotImplementedError("parsePipeline");
+export function parsePipeline(source: string): Pipeline {
+  const yaml = parseYamlDocument(source);
+  if (!yaml.ok) throw new BashreactorError("pipeline_yaml_invalid", yaml.error);
+  const { pipeline, issues } = buildPipeline(yaml.root, yaml.doc);
+  if (issues.length > 0) {
+    const first = issues[0]!;
+    throw new BashreactorError(first.code, first.message, { path: first.path });
+  }
+  return pipeline!;
 }
