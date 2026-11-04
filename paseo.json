@@ -1,0 +1,11 @@
+{
+  "worktree": {
+    "setup": [
+      "if [ -f package.json ]; then bun install; fi"
+    ]
+  },
+  "scripts": {
+    "check": { "command": "bun run check" },
+    "mockup": { "command": "python3 -m http.server 8081 --directory mockup", "type": "service", "port": 8081 }
+  }
+}
