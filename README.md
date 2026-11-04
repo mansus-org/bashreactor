@@ -28,6 +28,8 @@ Status: being built. The spec is in [`docs/SPEC.md`](docs/SPEC.md).
 ```bash
 bun install
 bun run check     # lint + typecheck + test
+bun run test      # the tests alone
+bun run build     # bundle the server into dist/
 ```
 
 ## Deploy
@@ -36,3 +38,6 @@ Push to `main` builds the Dockerfile and pushes `sha-<commit>` to GHCR; the clus
 `bashreactor.mansus.org`. A pull request pushes `pr-<number>-<commit>` and gets
 `https://bashreactor-pr-<number>.mansus.org` until it closes. See
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
+
+The image listens on `PORT` (default 8080) and answers `GET /healthz` with 200 and the version it was
+tagged with. Every other route returns 501 with a JSON error until the API lands.

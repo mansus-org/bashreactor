@@ -1,0 +1,13 @@
+{
+  "name": "@bashreactor/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "bin": { "bashreactor": "./src/bin.ts" },
+  "dependencies": { "@bashreactor/core": "workspace:*" },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc -p ."
+  }
+}

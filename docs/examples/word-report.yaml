@@ -1,0 +1,68 @@
+name: word-report
+description: Generate a corpus, gate it, count its words and render a report.
+
+max_parallel: 2
+
+inputs:
+  lines:
+    type: integer
+    description: How many lines of corpus to generate.
+    default: 200
+  seed:
+    type: integer
+    description: The same seed and line count always produce the same report.
+    default: 7
+  title:
+    type: string
+    description: The heading of the report.
+    default: Word report
+
+steps:
+  generate:
+    name: Generate the corpus
+    uses: ./generate-corpus.sh
+    with:
+      lines: ${{ inputs.lines }}
+      seed: ${{ inputs.seed }}
+      # Attempt 1 stops here and exits 75, attempt 2 carries on from the work directory.
+      interrupt_at: 120
+    timeout: 5m
+    retry:
+      max_attempts: 3
+      delay: 1s
+
+  check:
+    name: Check the corpus is long enough
+    uses: ./check-corpus.sh
+    with:
+      corpus: ${{ steps.generate.outputs.corpus }}
+      min_lines: 100
+    timeout: 1m
+    retry:
+      # A corpus that is too short exits 78, which never spends this budget.
+      max_attempts: 2
+      delay: 1s
+
+  count:
+    name: Count the words
+    uses: ./count-words.sh
+    with:
+      corpus: ${{ steps.generate.outputs.corpus }}
+      top: 5
+    timeout: 10m
+
+  report:
+    name: Render the report
+    uses: ./render-report.sh
+    # The report reads nothing from check, it only must not run on a corpus that failed it.
+    needs: [check]
+    with:
+      title: "${{ inputs.title }}: ${{ steps.generate.outputs.line_count }} lines"
+      total_words: ${{ steps.count.outputs.total_words }}
+      top_words: ${{ steps.count.outputs.top_words }}
+      counts: ${{ steps.count.outputs.counts }}
+    timeout: 10m
+
+outputs:
+  report: ${{ steps.report.outputs.report }}
+  total_words: ${{ steps.count.outputs.total_words }}

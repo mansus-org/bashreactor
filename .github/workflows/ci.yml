@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    strategy:
+      # One OS failing says nothing about the other, so let both report.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run test
+      - run: bun run build
+
+  # deploy.yml only runs on main and on PRs and pushes straight to the registry, so this is the one place
+  # a branch learns that the image it would ship actually starts and answers.
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --build-arg VERSION=ci-test -t bashreactor:ci .
+      - name: Run the image and probe it
+        run: |
+          docker run -d --name app -p 8080:8080 bashreactor:ci
+          trap 'docker logs app; docker rm -f app' EXIT
+
+          curl --silent --show-error --fail --retry 20 --retry-delay 1 --retry-all-errors \
+            http://localhost:8080/healthz | tee /dev/stderr | grep -q '"version":"ci-test"'
+
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8080/)
+          test "$status" = 501
+
+          test "$(docker exec app id -u)" = 10001
