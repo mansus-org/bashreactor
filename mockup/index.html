@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bashreactor mockup</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#view">Skip to content</a>
+<header class="chrome">
+  <a class="mark" href="index.html">bashreactor</a>
+  <nav class="nav" aria-label="Screens">
+    <ul class="nav__list">
+      <li><a class="nav__link" href="pipeline.html">Pipeline</a></li>
+      <li><a class="nav__link" href="run.html">Runs</a></li>
+      <li><a class="nav__link" href="blocks.html">Blocks</a></li>
+    </ul>
+  </nav>
+  <span class="stamp chrome__note">mockup</span>
+</header>
+<main id="view" tabindex="-1">
+  <div class="gate">
+    <div class="head">
+      <div class="head__text">
+        <h1 class="title">Bashreactor</h1>
+        <p class="lead">A resumable pipeline runner for bash: one YAML file says what runs, every step is one bash file, and a run is a directory you can restart.</p>
+      </div>
+      <span class="stamp">mockup</span>
+    </div>
+
+    <section aria-labelledby="screens-title">
+      <h2 class="h2" id="screens-title">The three screens</h2>
+      <div class="screens">
+        <a class="screen" href="pipeline.html">
+          <span class="screen__head">
+            <span class="screen__num">1</span>
+            <span class="stamp stamp--type">editor</span>
+          </span>
+          <span class="screen__name">Pipeline</span>
+          <span class="screen__text">Write the YAML. The graph is drawn from it, never stored beside it, so the two cannot drift.</span>
+        </a>
+        <a class="screen" href="run.html">
+          <span class="screen__head">
+            <span class="screen__num">2</span>
+            <span class="stamp stamp--type">live</span>
+          </span>
+          <span class="screen__name">Runs</span>
+          <span class="screen__text">A run streaming its logs and step states, with cancel and retry, the way it would read the API.</span>
+        </a>
+        <a class="screen" href="blocks.html">
+          <span class="screen__head">
+            <span class="screen__num">3</span>
+            <span class="stamp stamp--type">library</span>
+          </span>
+          <span class="screen__name">Blocks</span>
+          <span class="screen__text">The library of bash files. Their front matter says what goes in and what comes out.</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="status" aria-labelledby="status-title">
+      <h2 class="h2" id="status-title">State of the project</h2>
+      <p>The spec has landed, and this mockup is built against the data the API will return: <code>run.json</code> and the block files. Nothing on these pages runs; the data is fake and the logs are replayed.</p>
+      <ul class="truth">
+        <li>The pipeline text, block files and run fixtures follow <code>docs/SPEC.md</code>.</li>
+        <li>The engine, store, API, MCP server, CLI and web app are not built yet.</li>
+        <li>Screenshots at 1440 and 390 wide are in <code>mockup/screenshots/</code>.</li>
+      </ul>
+    </section>
+  </div>
+</main>
+<footer class="foot">
+  <p>Mockup. The data is fake and nothing runs.</p>
+  <span class="stamp stamp--type">BASHR-8</span>
+</footer>
+</body>
+</html>

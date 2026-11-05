@@ -18,6 +18,11 @@ RUN bun run build
 
 FROM oven/bun:1-alpine
 WORKDIR /app
+# SPEC 2.6: an engine checks these on PATH at startup and refuses to start without them. The base
+# image already brings bun and busybox's awk, grep, gzip, sed, tar and coreutils; these four are what
+# it is missing, so without them the image we ship would reject its first block. Before USER, as apk
+# needs root.
+RUN apk add --no-cache bash curl jq uv
 COPY --from=build /app/dist/server.js ./server.js
 # Declared after the build stage so a new version only touches this metadata, not the cached build.
 ARG VERSION
