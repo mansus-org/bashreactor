@@ -1,0 +1,7 @@
+name: spawn-child
+description: A step that spawns a background child; a short timeout must kill the whole group.
+steps:
+  spawn:
+    uses: ./spawn-child.sh
+    timeout: 1s
+    kill_grace: 1s

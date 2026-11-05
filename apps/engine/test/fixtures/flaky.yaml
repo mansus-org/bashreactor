@@ -1,0 +1,8 @@
+name: flaky
+description: One step that fails once, then a manual retry finishes it.
+steps:
+  run:
+    uses: ./flaky.sh
+    timeout: 30s
+    retry:
+      max_attempts: 1
