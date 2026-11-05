@@ -1,0 +1,84 @@
+// The files the browser asks for, read into memory once at startup.
+//
+// The deployed image is one bundled `server.js` with nothing beside it — the Dockerfile copies that
+// one file out of the build stage — so every asset has to be inside the bundle. Text comes in
+// through `with { type: "text" }` imports, which bun build inlines; the three woff2 faces come in as
+// base64 from fonts.ts, which apps/web/scripts/embed-fonts.ts generates from mockup/fonts/.
+//
+// The browser code is TypeScript, because the repo is TypeScript and `bun run check` should read it.
+// The browser is not, so each module is transpiled here, once, at startup, and served as `.js`.
+// There is still no build step for the UI: what the server holds is what the source files say.
+
+import { createHash } from "node:crypto";
+import {
+  apiSource,
+  appSource,
+  blocksSource,
+  domSource,
+  editorSource,
+  graphSource,
+  indexHtml,
+  logsSource,
+  modelSource,
+  runsSource,
+  styleCss,
+  yamlSource,
+} from "./raw.js";
+import { FONT_BASE64, FONT_LICENCE } from "./fonts.ts";
+
+export interface Asset {
+  data: Uint8Array<ArrayBuffer>;
+  ctype: string;
+  etag: string;
+  /** Fonts never change under a name; everything else is revalidated on every load. */
+  immutable: boolean;
+}
+
+const TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".txt": "text/plain; charset=utf-8",
+  ".woff2": "font/woff2",
+};
+
+const CLIENT_MODULES: Record<string, string> = {
+  app: appSource,
+  api: apiSource,
+  dom: domSource,
+  yaml: yamlSource,
+  model: modelSource,
+  graph: graphSource,
+  editor: editorSource,
+  runs: runsSource,
+  blocks: blocksSource,
+  logs: logsSource,
+};
+
+function asset(data: Uint8Array | string, name: string): Asset {
+  const bytes = typeof data === "string" ? new TextEncoder().encode(data) : new Uint8Array(data);
+  const hash = createHash("sha256").update(bytes).digest("hex").slice(0, 16);
+  const dot = name.lastIndexOf(".");
+  return {
+    data: bytes,
+    ctype: TYPES[name.slice(dot)] ?? "application/octet-stream",
+    etag: `"${hash}"`,
+    immutable: name.startsWith("assets/fonts/"),
+  };
+}
+
+/** The table the mount serves: every path under `/app/` that is a file, keyed by the rest of the URL. */
+export function buildAssets(): { index: Asset; files: Map<string, Asset> } {
+  const transpiler = new Bun.Transpiler({ loader: "ts" });
+  const files = new Map<string, Asset>();
+  for (const [name, source] of Object.entries(CLIENT_MODULES)) {
+    // transformSync is typed for every loader Bun has; with loader "ts" it answers with a string.
+    files.set(`assets/${name}.js`, asset(String(transpiler.transformSync(source)), `assets/${name}.js`));
+  }
+  files.set("assets/style.css", asset(styleCss, "assets/style.css"));
+  for (const [name, base64] of Object.entries(FONT_BASE64)) {
+    files.set(`assets/fonts/${name}`, asset(Buffer.from(base64, "base64"), `assets/fonts/${name}`));
+  }
+  files.set("OFL.txt", asset(FONT_LICENCE, "OFL.txt"));
+  return { index: asset(indexHtml, "index.html"), files };
+}
