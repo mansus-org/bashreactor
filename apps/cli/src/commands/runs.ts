@@ -56,7 +56,12 @@ export const runCommands: CommandSpec[] = [
         // The types come from the stored pipeline, so `--input lines=300` is the integer 300 and
         // not a string the engine has to guess at (SPEC 3.3).
         const detail =
-          pairs.length === 0 ? undefined : await ctx.client.json<PipelineVersion>("GET", `/v1/pipelines/${encodeURIComponent(target)}/${version}`);
+          pairs.length === 0
+            ? undefined
+            : await ctx.client.json<PipelineVersion>(
+                "GET",
+                `/v1/pipelines/${encodeURIComponent(target)}/${version}`,
+              );
         const inputs = readInputs(pairs, declaredTypes(detail?.parsed?.inputs), ctx.cwd);
         body = { pipeline: target, inputs };
         if (version !== "latest") {

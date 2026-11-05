@@ -133,10 +133,9 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
 
   const json = flags.has("json");
   const help = flags.has("help");
-  const url = flags.get("url");
-  const token = flags.get("token");
-  if (typeof url !== "string" && url !== undefined) throw usage(`"--url" wants one value`);
-  if (typeof token !== "string" && token !== undefined) throw usage(`"--token" wants one value`);
+  // Neither of these is repeatable, so a value is always one string.
+  const url = flags.get("url") as string | undefined;
+  const token = flags.get("token") as string | undefined;
 
   const head = positional[0];
   if (head === undefined) {
@@ -162,7 +161,10 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
     throw usage(`"${named}" is not a command (run \`bashreactor --help\` for the list)`);
   }
 
-  if (help) return { spec: HELP_COMMAND, args: [spec.group, spec.name].filter((part) => part !== ""), flags, json, url, token, help };
+  if (help) {
+    const topic = [spec.group, spec.name].filter((part) => part !== "");
+    return { spec: HELP_COMMAND, args: topic, flags, json, url, token, help };
+  }
 
   const declared = spec.args ?? [];
   const required = declared.filter((arg) => !arg.optional).length;
@@ -234,7 +236,12 @@ export function usageText(table: readonly CommandSpec[], topic?: string[]): stri
     list.push(spec);
     groups.set(key, list);
   }
-  const lines = ["bashreactor — blocks, pipelines and runs, from a shell or a script", "", "usage: bashreactor <command> [flags]", ""];
+  const lines = [
+    "bashreactor — blocks, pipelines and runs, from a shell or a script",
+    "",
+    "usage: bashreactor <command> [flags]",
+    "",
+  ];
   for (const [group, specs] of groups) {
     if (group !== "") lines.push(`${group}:`);
     for (const spec of specs) {
@@ -257,7 +264,12 @@ function groupHelp(name: string, specs: readonly CommandSpec[]): string {
 
 function commandHelp(spec: CommandSpec): string {
   const declared = (spec.args ?? []).map((arg) => (arg.optional ? `[${arg.name}]` : arg.name));
-  const lines = [`usage: bashreactor ${commandName(spec)}${declared.length ? ` ${declared.join(" ")}` : ""}`, "", `  ${spec.summary}`, ""];
+  const lines = [
+    `usage: bashreactor ${commandName(spec)}${declared.length ? ` ${declared.join(" ")}` : ""}`,
+    "",
+    `  ${spec.summary}`,
+    "",
+  ];
   const flags = [...(spec.flags ?? []), ...GLOBAL_FLAGS];
   if (flags.length > 0) {
     lines.push("flags:");
