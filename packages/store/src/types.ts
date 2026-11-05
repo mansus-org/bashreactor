@@ -1,11 +1,15 @@
 // The store's nouns, mirroring docs/SPEC.md. The on-disk layout of these values is owned by the
 // store (README.md), not by the block/pipeline parsers in @bashreactor/core.
+//
+// ValueType, RunStatus, StepStatus and AttemptStatus are core's, re-exported: one definition of
+// "what a value type is" for the whole repo, so a store row and a parsed pipeline can never drift.
+// Failure stays here. It is not a duplicate: core has no failure type, and the engine's own
+// FailureInfo narrows `code` to the spec's ErrorCode, while a stored failure keeps whatever code
+// the writer recorded (a store row outlives the version of core that produced it).
 
-export type ValueType = "string" | "integer" | "number" | "boolean" | "json" | "file";
+import type { AttemptStatus, RunStatus, StepStatus, ValueType } from "@bashreactor/core";
 
-export type RunStatus = "running" | "succeeded" | "failed" | "cancelled";
-export type StepStatus = "pending" | "running" | "waiting_retry" | "succeeded" | "failed" | "skipped" | "cancelled";
-export type AttemptStatus = "running" | "succeeded" | "failed" | "interrupted" | "cancelled";
+export type { AttemptStatus, RunStatus, StepStatus, ValueType };
 
 export interface Failure {
   code: string;
