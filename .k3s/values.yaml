@@ -1,10 +1,28 @@
 # Deploy settings for bashreactor.mansus.org on the mansus.org cluster.
 # All options: charts/app/values.yaml in nemoNoboru/k3s-hetzner-gitops.
+# Previews (bashreactor-pr-<N>.mansus.org) use the same values: their own empty volume.
 
 ingress:
   host: bashreactor.mansus.org
 
 port: 8080
+
+# $BASHREACTOR_HOME: runs/ and home/ for the engine, store/ for the store, stage/ for staging,
+# tokens.json for the tokens (SPEC 1.4). Resuming a run after a rollout depends on this surviving
+# the pod, so it is a volume and not an emptyDir.
+persistence:
+  enabled: true
+  size: 1Gi
+  mountPath: /data
+
+# The image runs as 10001 with no writable home; fsGroup makes the local-path volume writable by it.
+podSecurityContext:
+  fsGroup: 10001
+
+env:
+  # The image already defaults to this. Set here too, so the mount path and the directory the
+  # server writes to cannot drift apart when one of the two changes.
+  BASHREACTOR_HOME: /data
 
 healthCheck:
   path: /healthz
