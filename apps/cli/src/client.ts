@@ -52,7 +52,7 @@ export class ApiClient {
     return JSON.parse(text) as T;
   }
 
-  /** A route whose answer is bytes rather than a document. */
+  /** A route whose answer is bytes rather than a document, such as a block's content. */
   async bytes(method: string, path: string, options: RequestOptions = {}): Promise<Response> {
     return await this.send(method, path, options);
   }

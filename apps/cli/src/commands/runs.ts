@@ -3,7 +3,7 @@
 // unless the person asked to.
 
 import { parsePipeline } from "@bashreactor/core";
-import type { CommandSpec } from "../args.ts";
+import type { CommandSpec, Ctx } from "../args.ts";
 import { usage } from "../errors.ts";
 import { elapsed, localTime } from "../output.ts";
 import { publishRelativeBlocks, readPipelineFile } from "../local.ts";
@@ -39,6 +39,9 @@ export const runCommands: CommandSpec[] = [
       let label: string;
 
       if (isFileTarget(target)) {
+        if (ctx.flag("version") !== undefined) {
+          throw usage(`"--version" chooses a stored pipeline's version; "${target}" is a file`);
+        }
         const file = readPipelineFile(target);
         const prepared = await publishRelativeBlocks(ctx.client, file, (line) => ctx.printer.note(line));
         const inputs = readInputs(pairs, declaredTypes(quietlyParse(prepared.source)?.inputs), ctx.cwd);
@@ -121,7 +124,7 @@ export const runCommands: CommandSpec[] = [
     name: verb,
     summary: SUMMARY[verb],
     args: [{ name: "<run-id>" }],
-    run: async (ctx: Parameters<CommandSpec["run"]>[0]) => {
+    run: async (ctx: Ctx) => {
       const run = await ctx.client.json<RunRecord>("POST", `/v1/runs/${encodeURIComponent(ctx.args[0]!)}/${verb}`);
       ctx.printer.emit(run, (p) => {
         renderRun(p, run);
@@ -215,7 +218,7 @@ function exitForRun(status: RunStatus): number {
   return status === "failed" || status === "cancelled" ? 1 : 0;
 }
 
-async function waitForRun(ctx: Parameters<CommandSpec["run"]>[0], id: string): Promise<RunRecord> {
+async function waitForRun(ctx: Ctx, id: string): Promise<RunRecord> {
   const interval = ctx.int("interval", 1000);
   let run = await ctx.client.json<RunRecord>("GET", `/v1/runs/${encodeURIComponent(id)}`);
   while (run.status === "running") {
@@ -226,7 +229,7 @@ async function waitForRun(ctx: Parameters<CommandSpec["run"]>[0], id: string): P
 }
 
 async function getLog(
-  ctx: Parameters<CommandSpec["run"]>[0],
+  ctx: Ctx,
   id: string,
   step: string,
   attempt: number,
@@ -241,7 +244,7 @@ async function getLog(
 
 /** `--attempt` is there for the old ones; the interesting default is the attempt running now. */
 async function lastAttempt(
-  ctx: Parameters<CommandSpec["run"]>[0],
+  ctx: Ctx,
   id: string,
   step: string,
 ): Promise<number> {
@@ -278,7 +281,7 @@ function renderRun(p: Printer, run: RunRecord): void {
     p.line("inputs");
     p.fields(Object.entries(run.inputs).map(([key, value]) => [key, stringify(value)]));
   }
-  if (run.outputs !== null) {
+  if (run.outputs !== null && Object.keys(run.outputs).length > 0) {
     p.line("");
     p.line("outputs");
     p.fields(Object.entries(run.outputs).map(([key, value]) => [key, stringify(value)]));

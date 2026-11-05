@@ -179,7 +179,7 @@ steps:
     const good = await cli(["runs", "start", "hello-run", "--wait", "--interval", "100"], { url: server.url });
     expect(good.code).toBe(0);
     expect(good.stdout).toMatch(/status\s+succeeded/);
-    expect(good.stdout).toContain("outputs");
+    expect(good.stdout).toMatch(/greet\s+succeeded/);
 
     const bad = await cli(["runs", "start", "failing-run", "--wait", "--interval", "100", "--json"], {
       url: server.url,
@@ -187,6 +187,27 @@ steps:
     expect(bad.code).toBe(1);
     expect(parsed(bad).status).toBe("failed");
     expect(parsed(bad).steps.boom.failure.code).toBe("exit_nonzero");
+  });
+
+  test("a pipeline that declares outputs has them printed, and --version does not apply to a file", async () => {
+    server = await startServer();
+    await library();
+    await store(
+      "greeting-run",
+      `${helloPipeline("greeting-run")}outputs:\n  greeting: \${{ steps.greet.outputs.greeting }}\n`,
+    );
+
+    const started = await cli(["runs", "start", "greeting-run", "--input", "name=ada", "--wait", "--interval", "100"], {
+      url: server.url,
+    });
+    expect(started.code).toBe(0);
+    expect(started.stdout).toContain("outputs");
+    expect(started.stdout).toMatch(/greeting\s+hello ada/);
+
+    const path = write("hello-run.yaml", helloPipeline("hello-run"));
+    const confused = await cli(["runs", "start", path, "--version", "2"], { url: server.url });
+    expect(confused.code).toBe(2);
+    expect(parsed({ ...confused, stdout: confused.stderr }).message).toContain("is a file");
   });
 });
 
