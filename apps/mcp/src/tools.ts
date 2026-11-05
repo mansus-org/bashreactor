@@ -269,7 +269,8 @@ export const TOOLS: readonly ToolDef[] = [
       "not fit, is refused with the error object and creates no run. Never put a secret in an input: " +
       "inputs are recorded in run.json in clear text, and a step's secrets come from its `pass_env`.",
     access: "write",
-    annotations: { ...writeOp, openWorldHint: false },
+    // A block can reach anything on the network the host can, which is exactly what the hint is for.
+    annotations: { ...writeOp, openWorldHint: true },
     args: {
       pipeline: { type: "string", description: `Name of a stored pipeline to run. ${NAME_ARG}` },
       version: { type: "string", description: `Which version of that pipeline to run. ${VERSION_ARG}` },
