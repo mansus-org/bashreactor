@@ -6,7 +6,7 @@
   "packageManager": "bun@1.3.13",
   "workspaces": ["packages/*", "apps/*"],
   "scripts": {
-    "build": "bun build apps/api/src/main.ts --target=bun --outfile=dist/server.js",
+    "build": "bun build apps/web/src/server.ts --target=bun --outfile=dist/server.js",
     "check": "bun run lint && bun run typecheck && bun run test",
     "lint": "oxlint --deny-warnings",
     "serve": "bun apps/api/src/main.ts",

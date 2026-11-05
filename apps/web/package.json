@@ -3,10 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@bashreactor/core": "workspace:*" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@bashreactor/api": "workspace:*"
+  },
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc -p ."
+    "typecheck": "tsc -p . && tsc -p tsconfig.client.json"
   }
 }

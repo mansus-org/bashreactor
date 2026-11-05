@@ -51,7 +51,7 @@
       "name": "@bashreactor/web",
       "version": "0.0.0",
       "dependencies": {
-        "@bashreactor/core": "workspace:*",
+        "@bashreactor/api": "workspace:*",
       },
     },
     "packages/core": {

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Bashreactor</title>
+<link rel="icon" href="data:,">
+<link rel="preload" href="/app/assets/fonts/atkinson-next.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/app/assets/style.css">
+<script type="module" src="/app/assets/app.js"></script>
+</head>
+<body>
+<a class="skip" href="#view">Skip to content</a>
+<header class="chrome">
+  <a class="mark" href="/app/" data-link>bashreactor</a>
+  <nav class="nav" aria-label="Screens" hidden>
+    <ul class="nav__list">
+      <li><a class="nav__link" href="/app/pipeline" data-link>Pipeline</a></li>
+      <li><a class="nav__link" href="/app/runs" data-link>Runs</a></li>
+      <li><a class="nav__link" href="/app/blocks" data-link>Blocks</a></li>
+    </ul>
+  </nav>
+  <span class="chrome__note" id="who"></span>
+</header>
+<main id="view" tabindex="-1">
+  <p class="state">Loading.</p>
+  <noscript><p class="state">Bashreactor's screens are drawn by JavaScript. The REST API at <code>/v1</code> works without it.</p></noscript>
+</main>
+<footer class="foot">
+  <p id="foot-note">One API at <code>/v1</code>. The screens read it and store nothing else.</p>
+  <a href="/app/OFL.txt">Fonts and their licence</a>
+</footer>
+<p class="sr" id="announce" role="status"></p>
+</body>
+</html>
