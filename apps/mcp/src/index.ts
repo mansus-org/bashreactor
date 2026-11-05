@@ -1,5 +1,14 @@
-import { NotImplementedError } from "@bashreactor/core";
-
-export function createMcpServer(): never {
-  throw new NotImplementedError("the MCP server (BASHR-6)");
-}
+export { ApiClient } from "./api.ts";
+export type { ApiResult, ClientOptions, Identity, RequestOptions } from "./api.ts";
+export { resolveApiUrl, resolveConfig, resolvePath, resolvePort, resolveToken, resolveVersion } from "./config.ts";
+export type { McpConfig } from "./config.ts";
+export { errorBodyOf, errorObject, errorText, McpFailure, statusOf } from "./errors.ts";
+export type { ErrorObject } from "./errors.ts";
+export { checkArgs, inputSchema } from "./args.ts";
+export type { Args, ArgSpec, CheckedArgs } from "./args.ts";
+export { createMcpServer } from "./http.ts";
+export type { McpOptions, McpServer } from "./http.ts";
+export { buildMcpServer } from "./server.ts";
+export { INSTRUCTIONS } from "./instructions.ts";
+export { findTool, refusalFor, TOOLS, toolListing } from "./tools.ts";
+export type { Access, ToolAnnotations, ToolDef } from "./tools.ts";
