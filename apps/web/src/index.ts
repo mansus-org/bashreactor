@@ -29,24 +29,24 @@ const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; " +
   "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
+function send(asset: Asset, request: Request): Response {
+  const headers = new Headers({
+    "content-type": asset.ctype,
+    etag: asset.etag,
+    "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
+    "content-security-policy": CSP,
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+  });
+  if (request.headers.get("if-none-match") === asset.etag) return new Response(null, { status: 304, headers });
+  if (request.method === "HEAD") return new Response(null, { status: 200, headers });
+  return new Response(asset.data, { status: 200, headers });
+}
+
 export function mountApp(fallback: FetchHandler, options: MountOptions = {}): FetchHandler {
   const base = (options.path ?? "/app").replace(/\/+$/, "");
   const log = options.log ?? null;
   const assets = buildAssets();
-
-  function send(asset: Asset, request: Request): Response {
-    const headers = new Headers({
-      "content-type": asset.ctype,
-      etag: asset.etag,
-      "cache-control": asset.immutable ? "public, max-age=31536000, immutable" : "no-cache",
-      "content-security-policy": CSP,
-      "x-content-type-options": "nosniff",
-      "referrer-policy": "no-referrer",
-    });
-    if (request.headers.get("if-none-match") === asset.etag) return new Response(null, { status: 304, headers });
-    if (request.method === "HEAD") return new Response(null, { status: 200, headers });
-    return new Response(asset.data, { status: 200, headers });
-  }
 
   function serve(request: Request, path: string): Response {
     if (path === "") return send(assets.index, request);

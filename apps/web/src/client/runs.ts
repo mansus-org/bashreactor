@@ -99,6 +99,27 @@ function runRow(run: RunSummary): HTMLElement {
   );
 }
 
+function attemptsOf(run_: Run, step: string): number[] {
+  return (run_.steps[step]?.attempts ?? []).map((entry) => entry.n);
+}
+
+function pickStep(run_: Run): string {
+  const ids = Object.keys(run_.steps);
+  const live = ids.find((step) => run_.steps[step]!.status === "running");
+  const failed = ids.find((step) => run_.steps[step]!.status === "failed");
+  const last = ids.toReversed().find((step) => (run_.steps[step]?.attempts.length ?? 0) > 0);
+  return live ?? failed ?? last ?? ids[0] ?? "";
+}
+
+function stateChanged(before: Run, after: Run): string[] {
+  const changed: string[] = [];
+  for (const id of Object.keys(after.steps)) {
+    if (before.steps[id]?.status !== after.steps[id]!.status) changed.push(id);
+  }
+  if (before.status !== after.status) changed.push("run");
+  return changed;
+}
+
 // ---------- one run ----------
 
 async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Promise<void> {
@@ -192,18 +213,6 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   signal.addEventListener("abort", () => {
     if (timer !== undefined) window.clearTimeout(timer);
   });
-
-  function attemptsOf(run_: Run, step: string): number[] {
-    return (run_.steps[step]?.attempts ?? []).map((entry) => entry.n);
-  }
-
-  function pickStep(run_: Run): string {
-    const ids = Object.keys(run_.steps);
-    const live = ids.find((step) => run_.steps[step]!.status === "running");
-    const failed = ids.find((step) => run_.steps[step]!.status === "failed");
-    const last = [...ids].reverse().find((step) => (run_.steps[step]?.attempts.length ?? 0) > 0);
-    return live ?? failed ?? last ?? ids[0] ?? "";
-  }
 
   function stepNote(step: RunStep): string {
     const runSteps = run.steps;
@@ -316,7 +325,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     note: HTMLElement;
   }
   const rows: Record<string, Row> = {};
-  for (const id of Object.keys(run.steps)) {
+  for (const stepId of Object.keys(run.steps)) {
     const row: Row = {
       button: null as unknown as HTMLButtonElement,
       time: el("span", { class: "steprow__time" }),
@@ -328,25 +337,25 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       {
         class: "steprow",
         type: "button",
-        "data-step": id,
+        "data-step": stepId,
         "aria-selected": "false",
-        onclick: () => choose(id, true),
+        onclick: () => choose(stepId, true),
       },
-      el("span", { class: "steprow__id" }, id),
+      el("span", { class: "steprow__id" }, stepId),
       row.time,
       row.stamp,
       row.note,
     );
-    rows[id] = row;
+    rows[stepId] = row;
     stepList.append(el("li", {}, row.button));
   }
 
   function renderSteps(): void {
-    for (const [id, row] of Object.entries(rows)) {
-      const step = run.steps[id];
+    for (const [stepId, row] of Object.entries(rows)) {
+      const step = run.steps[stepId];
       if (step === undefined) continue;
       const last = lastAttempt(step);
-      row.button.setAttribute("aria-selected", String(id === selected));
+      row.button.setAttribute("aria-selected", String(stepId === selected));
       row.time.textContent = last !== null ? duration(attemptDuration(last, Date.now())) : "";
       row.stamp.replaceChildren(stateStamp(state(step.status)));
       row.note.textContent = stepNote(step);
@@ -458,17 +467,17 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     }
   });
 
-  function choose(id: string, byHand: boolean): void {
-    if (run.steps[id] === undefined) return;
-    selected = id;
-    const attempts = attemptsOf(run, id);
+  function choose(stepId: string, byHand: boolean): void {
+    if (run.steps[stepId] === undefined) return;
+    selected = stepId;
+    const attempts = attemptsOf(run, stepId);
     const newest = attempts.at(-1) ?? 0;
     if (newest !== attempt) {
       attempt = newest;
       log = emptyLog;
       shown = 0;
     }
-    if (byHand && run.steps[id]!.status !== "running" && follow) follow = false;
+    if (byHand && run.steps[stepId]!.status !== "running" && follow) follow = false;
     renderSteps();
     renderPanel();
     if (attempts.length > 0) void readLog(true);
@@ -539,15 +548,6 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     }
   }
 
-  function stateChanged(before: Run, after: Run): string[] {
-    const changed: string[] = [];
-    for (const id of Object.keys(after.steps)) {
-      if (before.steps[id]?.status !== after.steps[id]!.status) changed.push(id);
-    }
-    if (before.status !== after.status) changed.push("run");
-    return changed;
-  }
-
   async function tick(): Promise<void> {
     if (signal.aborted) return;
     let changed: string[] = [];
@@ -574,9 +574,9 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     renderHead();
     renderSteps();
     renderPanel();
-    for (const id of changed) {
-      flash(stepList.querySelector(`[data-step="${CSS.escape(id)}"]`));
-      if (id !== "run") announce(`${id} ${run.steps[id]?.status ?? ""}.`);
+    for (const stepId of changed) {
+      flash(stepList.querySelector(`[data-step="${CSS.escape(stepId)}"]`));
+      if (stepId !== "run") announce(`${stepId} ${run.steps[stepId]?.status ?? ""}.`);
     }
     if (changed.includes("run")) {
       flash(bigSign);

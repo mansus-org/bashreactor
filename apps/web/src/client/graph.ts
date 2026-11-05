@@ -23,6 +23,25 @@ export interface Graph {
   focus(id: string): void;
 }
 
+function port(direction: "in" | "out", item: { name: string; source?: { refs: unknown[] } }): HTMLElement {
+  const wired = direction === "out" || (item.source?.refs.length ?? 0) > 0;
+  return el(
+    "span",
+    { class: `port port--${direction}`, "data-dir": direction, "data-name": item.name },
+    el("span", { class: `port__mark${wired ? "" : " port__mark--value"}` }),
+    el("span", { class: "port__name" }, item.name),
+  );
+}
+
+function wirePath(svg: SVGSVGElement, d: string, edge: { from: string; to: string; kind: string }): void {
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("class", `wire${edge.kind === "needs" ? " wire--needs" : ""}`);
+  path.dataset.from = edge.from;
+  path.dataset.to = edge.to;
+  svg.append(path);
+}
+
 export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: string, from: "graph") => void }): Graph {
   let analysis: Analysis | null = null;
   let selected: string | null = null;
@@ -40,16 +59,6 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     const problems = analysis.problems.filter((problem) => problem.step === step.id).length;
     if (problems > 0) parts.push(`${problems} ${problems === 1 ? "problem" : "problems"}`);
     return parts.join(", ");
-  }
-
-  function port(direction: "in" | "out", item: { name: string; source?: { refs: unknown[] } }): HTMLElement {
-    const wired = direction === "out" || (item.source?.refs.length ?? 0) > 0;
-    return el(
-      "span",
-      { class: `port port--${direction}`, "data-dir": direction, "data-name": item.name },
-      el("span", { class: `port__mark${wired ? "" : " port__mark--value"}` }),
-      el("span", { class: "port__name" }, item.name),
-    );
   }
 
   function buildNode(step: Step): HTMLButtonElement {
@@ -107,15 +116,6 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       wire.classList.toggle("is-on", wire.dataset.from === selected || wire.dataset.to === selected);
     });
     setRovingTab();
-  }
-
-  function wirePath(svg: SVGSVGElement, d: string, edge: { from: string; to: string; kind: string }): void {
-    const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", d);
-    path.setAttribute("class", `wire${edge.kind === "needs" ? " wire--needs" : ""}`);
-    path.dataset.from = edge.from;
-    path.dataset.to = edge.to;
-    svg.append(path);
   }
 
   function layoutFlow(canvas: HTMLElement, svg: SVGSVGElement, available: number): void {

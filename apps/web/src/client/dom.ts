@@ -80,6 +80,11 @@ export function stateStamp(state: State): HTMLElement {
   return el("span", { class: "stamp" }, sign(state), state);
 }
 
+/** Two digits, for the durations that are read as a clock rather than counted. */
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
 /** Seconds to "4 m 07 s", the way a person reads a duration off a running job. */
 export function duration(total: number): string {
   const seconds = Math.max(0, Math.floor(total));
@@ -87,7 +92,6 @@ export function duration(total: number): string {
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
-  const pad = (n: number) => String(n).padStart(2, "0");
   if (d) return `${d} d ${h} h`;
   if (h) return `${h} h ${pad(m)} m`;
   if (m) return `${m} m ${pad(s)} s`;
@@ -96,7 +100,6 @@ export function duration(total: number): string {
 
 export function clock(total: number): string {
   const seconds = Math.max(0, Math.floor(total));
-  const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 }
 

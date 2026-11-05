@@ -78,6 +78,11 @@ const heading = () => [
   ),
 ];
 
+/** The name in the box is the block to look at. */
+function openNamed(name: string): void {
+  if (name !== "") navigate(`/blocks/${name}`);
+}
+
 export async function renderBlocks(view: HTMLElement, route: Route): Promise<void> {
   const list = el("ul", { class: "blocklist" });
   const nameInput = el("input", {
@@ -109,10 +114,6 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
   );
   const detail = el("section", { class: "detail", "aria-labelledby": "detail-title", tabindex: "-1" });
   view.replaceChildren(...heading(), el("div", { class: "lib" }, listPane, detail));
-
-  function openNamed(name: string): void {
-    if (name !== "") navigate(`/blocks/${name}`);
-  }
 
   function renderHistory(current: string | null): void {
     const names = history();
@@ -184,12 +185,13 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
 
 // ---------- one block ----------
 
+const names = (contract: Contract, kind: "inputs" | "outputs") => contract[kind].map((decl) => decl.name);
+const added = (a: string[], b: string[]) => a.filter((name) => !b.includes(name));
+
 function contractDiff(versions: LibraryVersion[], index: number): string | null {
   if (index === 0) return null;
   const now = parseBlock(versions[index]!.source);
   const before = parseBlock(versions[index - 1]!.source);
-  const names = (contract: Contract, kind: "inputs" | "outputs") => contract[kind].map((decl) => decl.name);
-  const added = (a: string[], b: string[]) => a.filter((name) => !b.includes(name));
   const parts: string[] = [];
   for (const name of added(names(now, "inputs"), names(before, "inputs"))) parts.push(`adds input ${name}`);
   for (const name of added(names(before, "inputs"), names(now, "inputs"))) parts.push(`removes input ${name}`);
@@ -282,7 +284,7 @@ function renderBlock(detail: HTMLElement, entry: LibraryEntry, version: LibraryV
       el(
         "ol",
         { class: "versions", reversed: true },
-        [...entry.versions].reverse().map((known, index) => {
+        entry.versions.toReversed().map((known, index) => {
           const change = contractDiff(entry.versions, entry.versions.length - 1 - index);
           return el(
             "li",

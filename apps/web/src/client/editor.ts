@@ -33,6 +33,58 @@ description: What this pipeline does.
 steps:
 `;
 
+/** The token in the box is a read-only token, so nothing here may be clicked. */
+const readOnly = () => !canWrite();
+
+/** One YAML line, with keys, `${{ refs }}` and comments picked out. */
+function paintLine(raw: string): HTMLElement {
+  const line = el("span", { class: "yaml__line" });
+  const commentAt = raw.search(/(^|\s)#/);
+  const code = commentAt === -1 ? raw : raw.slice(0, commentAt);
+  const comment = commentAt === -1 ? "" : raw.slice(commentAt);
+  const key = /^(\s*(?:-\s+)?)([\w.-]+)(:)(.*)$/.exec(code);
+  const rest = key !== null ? key[4]! : code;
+  if (key !== null) line.append(key[1]!, el("span", { class: "yaml__key" }, key[2]!), key[3]!);
+  let at = 0;
+  for (const match of rest.matchAll(/\$\{\{.*?\}\}/g)) {
+    line.append(rest.slice(at, match.index), el("span", { class: "yaml__ref" }, match[0]));
+    at = (match.index ?? 0) + match[0].length;
+  }
+  line.append(rest.slice(at));
+  if (comment !== "") line.append(el("span", { class: "yaml__comment" }, comment));
+  if (raw === "") line.append(" ");
+  return line;
+}
+
+function textField(options: {
+  id: string;
+  label: string;
+  value: string | number | null;
+  type?: string;
+  placeholder?: string;
+  onInput: (value: string) => void;
+}): HTMLElement {
+  return el(
+    "div",
+    { class: "field" },
+    el("label", { class: "label", for: options.id }, options.label),
+    el("input", {
+      id: options.id,
+      type: options.type ?? "text",
+      value: options.value === null || options.value === undefined ? "" : String(options.value),
+      placeholder: options.placeholder,
+      disabled: readOnly(),
+      spellcheck: "false",
+      oninput: (event) => options.onInput((event.target as HTMLInputElement).value.trim()),
+    }),
+  );
+}
+
+/** A field that looks like a number is sent as one, because that is what the contract asks for. */
+function coerce(raw: string): string | number {
+  return /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
+}
+
 export function renderPipeline(view: HTMLElement, route: Route): void {
   let text = BLANK;
   let analysis: Read = analyze(BLANK, {});
@@ -52,7 +104,6 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
   let flashTimer: number | undefined;
   let busy = false;
 
-  const readOnly = () => !canWrite();
 
   // ---------- skeleton ----------
 
@@ -306,7 +357,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
         const entry = library[name] ?? { name, versions: [] };
         if (!entry.versions.some((known) => known.version === version)) {
           const content = await api.blockContent(name, version);
-          entry.versions = [...entry.versions, { version, source: content.text }].sort((a, b) => a.version - b.version);
+          entry.versions = [...entry.versions, { version, source: content.text }].toSorted((a, b) => a.version - b.version);
         }
         library = { ...library, [name]: entry };
         void list;
@@ -327,25 +378,6 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
   }
 
   // ---------- the YAML pane ----------
-
-  function paintLine(raw: string): HTMLElement {
-    const line = el("span", { class: "yaml__line" });
-    const commentAt = raw.search(/(^|\s)#/);
-    const code = commentAt === -1 ? raw : raw.slice(0, commentAt);
-    const comment = commentAt === -1 ? "" : raw.slice(commentAt);
-    const key = /^(\s*(?:-\s+)?)([\w.-]+)(:)(.*)$/.exec(code);
-    const rest = key !== null ? key[4]! : code;
-    if (key !== null) line.append(key[1]!, el("span", { class: "yaml__key" }, key[2]!), key[3]!);
-    let at = 0;
-    for (const match of rest.matchAll(/\$\{\{.*?\}\}/g)) {
-      line.append(rest.slice(at, match.index), el("span", { class: "yaml__ref" }, match[0]));
-      at = (match.index ?? 0) + match[0].length;
-    }
-    line.append(rest.slice(at));
-    if (comment !== "") line.append(el("span", { class: "yaml__comment" }, comment));
-    if (raw === "") line.append(" ");
-    return line;
-  }
 
   function badLines(): Set<number> {
     const bad = new Set<number>();
@@ -464,34 +496,6 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
     addButton.focus();
   }
 
-  function coerce(raw: string): string | number {
-    return /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
-  }
-
-  function textField(options: {
-    id: string;
-    label: string;
-    value: string | number | null;
-    type?: string;
-    placeholder?: string;
-    onInput: (value: string) => void;
-  }): HTMLElement {
-    return el(
-      "div",
-      { class: "field" },
-      el("label", { class: "label", for: options.id }, options.label),
-      el("input", {
-        id: options.id,
-        type: options.type ?? "text",
-        value: options.value === null || options.value === undefined ? "" : String(options.value),
-        placeholder: options.placeholder,
-        disabled: readOnly(),
-        spellcheck: "false",
-        oninput: (event) => options.onInput((event.target as HTMLInputElement).value.trim()),
-      }),
-    );
-  }
-
   function inputRow(step: Step, input: StepInput): HTMLElement {
     const fieldId = `f-in-${input.name}`;
     const source = input.source;
@@ -563,7 +567,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
 
     const active = inspector.contains(document.activeElement) ? document.activeElement?.id ?? null : null;
     const usesOptions = Object.keys(library)
-      .sort()
+      .toSorted()
       .map((name) => libraryRef(name, latest(library[name]!).version));
     const usesSelect = el(
       "select",
@@ -720,7 +724,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       step: null,
       path: entry.issue.path,
     }));
-    const all = [...local.map((problem) => ({ ...problem, path: undefined as string | undefined })), ...remote].sort(
+    const all = [...local.map((problem) => ({ ...problem, path: undefined as string | undefined })), ...remote].toSorted(
       (a, b) => a.line - b.line,
     );
     problemsNote.textContent = validated
@@ -766,7 +770,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       openNameInput.value = name;
       versionSelect.hidden = false;
       versionSelect.replaceChildren(
-        ...[...versions].reverse().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
+        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
       );
       versionSelect.value = String(wanted);
       setText(record.yaml, { source: "load" });
@@ -817,7 +821,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       versions = list.versions.map((entry) => ({ version: entry.version, created_at: entry.created_at }));
       versionSelect.hidden = false;
       versionSelect.replaceChildren(
-        ...[...versions].reverse().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
+        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
       );
       versionSelect.value = String(record.version);
       openNameInput.value = name;
@@ -849,7 +853,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
   // ---------- dialogs ----------
 
   function openAddDialog(): void {
-    const names = Object.keys(library).sort();
+    const names = Object.keys(library).toSorted();
     if (names.length === 0) {
       announce("There is no block in the library yet. Publish one on the Blocks screen first.");
       status.textContent = "Add a step by typing it in the YAML, or publish a block on the Blocks screen.";

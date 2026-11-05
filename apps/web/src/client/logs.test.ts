@@ -1,8 +1,19 @@
 // The log cursor, tested as the function it is: chunks in, lines and offsets out.
+//
+// The functions come from the text the server serves rather than from `./logs.ts`, and that is a
+// bun fact rather than a style choice: bun caches modules by path and ignores the import attribute,
+// and `src/raw.js` has already loaded that path as a string by the time this file runs, so importing
+// it here hands back the string and no functions. The served module is what the browser runs, so it
+// is the better thing to test anyway.
 
 import { describe, expect, test } from "bun:test";
-import { emptyLog, feedLog, logLines } from "./logs.js";
-import type { LogChunk } from "./logs.js";
+import { buildAssets } from "../assets.ts";
+import type { LogChunk } from "./logs.ts";
+
+const served = new TextDecoder().decode(buildAssets().files.get("assets/logs.js")!.data);
+const { emptyLog, feedLog, logLines } = (await import(
+  `data:text/javascript;base64,${Buffer.from(served).toString("base64")}`
+)) as typeof import("./logs.ts");
 
 const chunk = (offset: number, next: number, text: string, truncated = false): LogChunk => ({
   offset,
@@ -29,8 +40,8 @@ describe("feedLog", () => {
       const bytes = new TextEncoder().encode(text).length;
       log = feedLog(log, chunk(log.offset, log.offset + bytes, text));
     }
-    expect(log.offset).toBe(10);
-    expect(logLines(log).map((line) => line.offset)).toEqual([0, 2, 4, 8]);
+    expect(log.offset).toBe(11);
+    expect(logLines(log).map((line) => line.offset)).toEqual([0, 2, 5, 9]);
   });
 
   test("counts bytes, not characters, so a block that prints an em dash moves the cursor by three", () => {

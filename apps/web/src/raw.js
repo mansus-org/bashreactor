@@ -4,6 +4,15 @@
 // thing Bun does and TypeScript has no type for it: every import here would read as "module has no
 // default export". So the imports live here, next to raw.d.ts, which says what they really give back.
 
+// The same reason, for the linter: it resolves `./client/app.ts` to the module and reports that it
+// has no default export, which is true of the module and irrelevant to what bun hands back here.
+/* eslint-disable import/default */
+
+// One trap, for whoever adds a test here: bun's module cache keys on the resolved path and ignores
+// the import attribute, so a file read as text here *is* the file a test imports as a module, and
+// whichever loaded first wins. A test that wants a browser module's functions must take them from
+// the transpiled text the server serves, under a specifier of its own — see client/logs.test.ts.
+
 import indexHtml from "./client/index.html" with { type: "text" };
 import styleCss from "./client/style.css" with { type: "text" };
 import appSource from "./client/app.ts" with { type: "text" };

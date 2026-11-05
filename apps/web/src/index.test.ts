@@ -138,8 +138,8 @@ describe("the mount", () => {
         expect(source).not.toContain("interface ");
         expect(source.length).toBeGreaterThan(0);
       }
-      const app_ = await (await app.call("GET", "/app/assets/app.js")).text();
-      expect(app_).toContain('from "./editor.js"');
+      const appJs = await (await app.call("GET", "/app/assets/app.js")).text();
+      expect(appJs).toContain('from "./editor.js"');
 
       const css = await app.call("GET", "/app/assets/style.css");
       expect(css.status).toBe(200);
@@ -161,7 +161,7 @@ describe("the mount", () => {
         ["anybody.woff2", "anybody.woff2"],
         ["atkinson-next.woff2", "atkinson-next.woff2"],
         ["atkinson-mono.woff2", "atkinson-mono.woff2"],
-      ]) {
+      ] as const) {
         const response = await app.call("GET", `/app/assets/fonts/${name}`);
         expect(response.status).toBe(200);
         expect(response.headers.get("content-type")).toBe("font/woff2");
