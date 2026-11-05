@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADMIN_TOKEN } from "./helpers.ts";
@@ -13,10 +13,19 @@ async function serve(env: Record<string, string>): Promise<{ port: string; stop(
     stdout: "pipe",
     stderr: "pipe",
   });
+  // The degraded path logs its reason before it says its port, so read until the line arrives
+  // instead of trusting the first chunk to be it.
   const reader = proc.stdout.getReader();
-  const { value } = await reader.read();
-  const port = /listening on :(\d+)/.exec(new TextDecoder().decode(value))?.[1];
-  if (port === undefined) throw new Error(`the server did not say its port: ${new TextDecoder().decode(value)}`);
+  const decoder = new TextDecoder();
+  let seen = "";
+  let port: string | undefined;
+  while (port === undefined) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    seen += decoder.decode(value, { stream: true });
+    port = /listening on :(\d+)/.exec(seen)?.[1];
+  }
+  if (port === undefined) throw new Error(`the server did not say its port: ${seen}`);
   reader.releaseLock();
   return {
     port,
@@ -44,6 +53,32 @@ describe("the server process", () => {
     } finally {
       await server.stop();
       rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a data directory it cannot write comes up degraded and says so", async () => {
+    // What the image hit: uid 10001 had no home, so the store's first mkdir threw and the container
+    // refused connections with nothing to read but a stack trace. A preview URL has to answer.
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-degraded-"));
+    const blocked = join(root, "not-a-directory");
+    writeFileSync(blocked, "");
+    const server = await serve({
+      BASHREACTOR_HOME: join(blocked, "home"),
+      BASHREACTOR_VERSION: "ci-test",
+    });
+    try {
+      const health = await fetch(`http://127.0.0.1:${server.port}/healthz`);
+      expect(health.status).toBe(200);
+      const body = (await health.json()) as { status: string; version: string; problem: string };
+      expect(body.status).toBe("degraded");
+      // The version has to survive even here, because the deploy greps for it.
+      expect(body.version).toBe("ci-test");
+      expect(body.problem.length).toBeGreaterThan(0);
+
+      expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(503);
+    } finally {
+      await server.stop();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
