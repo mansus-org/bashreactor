@@ -138,7 +138,8 @@ store.readArtifact(runId, stepId, attempt, name): Uint8Array
 store.listArtifacts(runId, stepId?): Artifact[]
 ```
 
-The value types mirror the spec and are exported from `src/types.ts`; the full record shapes
+The value and status types (`ValueType`, `RunStatus`, `StepStatus`, `AttemptStatus`) are `@bashreactor/core`'s,
+re-exported from `src/types.ts` so importing them from the store still works; the full record shapes
 (`BlockVersion`, `PipelineRecord`, `Run`, `Step`, `Attempt`, `Artifact`, `RunSummary`, `LogChunk`)
 are documented by their TypeScript definitions in that file.
 

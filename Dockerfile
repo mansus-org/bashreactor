@@ -24,6 +24,13 @@ WORKDIR /app
 # needs root.
 RUN apk add --no-cache bash curl jq uv
 COPY --from=build /app/dist/server.js ./server.js
+# The process runs as a uid with no entry in /etc/passwd, so it has no home to fall back on and
+# $BASHREACTOR_HOME resolves under /, which 10001 cannot write: the store's first mkdir threw here
+# and the container died before it ever listened. Give it a directory it owns, and make that its home
+# so anything else that asks for one lands somewhere writable. A deploy mounts its volume here.
+RUN mkdir -p /data && chown 10001:10001 /data
+ENV BASHREACTOR_HOME=/data
+ENV HOME=/data
 # Declared after the build stage so a new version only touches this metadata, not the cached build.
 ARG VERSION
 ENV BASHREACTOR_VERSION=${VERSION}

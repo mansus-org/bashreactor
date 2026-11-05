@@ -106,6 +106,27 @@ example `90s`, `1h30m`, `2d`. A day is 86400 seconds. The units must appear in t
 All engine state lives under `$BASHREACTOR_HOME`, default `~/.bashreactor`. In production this MUST
 be a persistent volume, because resuming after a restart depends on it.
 
+A container image MUST create that directory, hand it to the uid the image runs as, and set
+`$BASHREACTOR_HOME` to it. A uid with no entry in `/etc/passwd` has no home to fall back on, and the
+default then resolves to a path it cannot create.
+
+*Rejected: starting anyway without a writable data directory.* Every route would fail on its first
+write. The server degrades instead, [section 1.5](#15-health).
+
+### 1.5 Health
+
+`GET /healthz` is unauthenticated and answers 200 with `{"status":"ok","version":"<version>"}`, the
+version being `$BASHREACTOR_VERSION` where that is set.
+
+A server that could not build itself — a data directory it cannot write, a store that will not open —
+MUST still listen: `/healthz` then answers 200 with
+`{"status":"degraded","version":"<version>","problem":"<message>"}` and every other route answers 503
+with the [section 5](#5-errors) error object. The probe is the only window a preview deployment gets
+into a container that will not come up, and a refused connection tells nobody anything.
+
+*Rejected: a failing status on a degraded `/healthz`.* The reason is in the body, and a probe that
+hides its body is not worth having.
+
 ---
 
 ## 2. Block format
