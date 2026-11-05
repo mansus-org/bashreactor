@@ -26,7 +26,7 @@ export function createMcpServer(config: McpConfig, options: McpOptions = {}): Mc
   const log = options.log ?? ((line: string) => console.log(line));
   const fetchFn = options.fetch;
 
-  async function dispatch(request: Request, url: URL, who: { name: string }): Promise<Response> {
+  async function dispatch(request: Request, url: URL, who: { name: string; tool: string }): Promise<Response> {
     if (request.method === "GET" && url.pathname === "/healthz") {
       return Response.json({
         status: "ok",
@@ -70,7 +70,11 @@ export function createMcpServer(config: McpConfig, options: McpOptions = {}): Mc
     const identity = await client.whoami();
     who.name = `${identity.name}:${identity.scope}`;
 
-    const server = buildMcpServer(config, identity, client);
+    const server = buildMcpServer(config, identity, client, (name, isError) => {
+      // Which tool the request turned into, so one log line says what an agent did and whether it
+      // came back with an error. The `!` is the difference between the two.
+      who.tool = isError ? `${name}!` : name;
+    });
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -88,14 +92,15 @@ export function createMcpServer(config: McpConfig, options: McpOptions = {}): Mc
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const started = Date.now();
-    const who = { name: "-" };
+    const who = { name: "-", tool: "" };
     let response: Response;
     try {
       response = await dispatch(request, url, who);
     } catch (error) {
       response = errorResponse(error);
     }
-    log(`${request.method} ${url.pathname} ${response.status} ${Date.now() - started}ms ${who.name}`);
+    const call = who.tool === "" ? "" : ` ${who.tool}`;
+    log(`${request.method} ${url.pathname} ${response.status} ${Date.now() - started}ms ${who.name}${call}`);
     return response;
   }
 

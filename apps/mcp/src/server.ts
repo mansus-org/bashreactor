@@ -15,7 +15,13 @@ import { errorBodyOf, errorText, type ErrorObject } from "./errors.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { findTool, refusalFor, TOOLS, toolListing } from "./tools.ts";
 
-export function buildMcpServer(config: McpConfig, identity: Identity, client: ApiClient): Server {
+export function buildMcpServer(
+  config: McpConfig,
+  identity: Identity,
+  client: ApiClient,
+  /** Told which tool ran and whether it failed, so the caller can log it. */
+  called?: (name: string, isError: boolean) => void,
+): Server {
   const server = new Server(
     { name: "bashreactor", version: config.version },
     { instructions: INSTRUCTIONS, capabilities: { tools: {} } },
@@ -35,18 +41,25 @@ export function buildMcpServer(config: McpConfig, identity: Identity, client: Ap
     // The scope check is the tool's own, so a read token sees the tool and is told what it lacks
     // rather than finding it quietly missing from tools/list.
     const refusal = refusalFor(tool, identity);
-    if (refusal !== null) return toolError(refusal);
+    if (refusal !== null) {
+      called?.(name, true);
+      return toolError(refusal);
+    }
 
     let args;
     try {
       args = checkArgs(name, request.params.arguments, tool.args);
     } catch (error) {
+      called?.(name, true);
       return toolError(errorBodyOf(error));
     }
 
     try {
-      return { content: [{ type: "text" as const, text: render(await tool.run(client, args)) }] };
+      const result = { content: [{ type: "text" as const, text: render(await tool.run(client, args)) }] };
+      called?.(name, false);
+      return result;
     } catch (error) {
+      called?.(name, true);
       return toolError(errorBodyOf(error));
     }
   });

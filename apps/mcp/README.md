@@ -29,6 +29,16 @@ bashreactor mcp listening on :8090/mcp, fronting http://127.0.0.1:8080
 `{"status":"ok","version":"…","api":"<BASHREACTOR_URL>","token":"configured"|"caller-only"}`. It
 says nothing about whether the API is up: this server has no state of its own to be degraded by.
 
+Every request logs one line, the same shape the API logs in:
+
+```text
+POST /mcp 200 14ms reader:read get_run
+POST /mcp 200 3ms reader:read start_run!
+```
+
+Who the caller is, what tool the request turned into, and `!` when the tool came back with an
+error. A token is never in a log line.
+
 ## Transport
 
 Streamable HTTP at `/mcp`, **stateless**: one POST in, one JSON answer out, no `Mcp-Session-Id`, no

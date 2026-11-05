@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { INSTRUCTIONS } from "../src/instructions.ts";
-import { TOOLS } from "../src/index.ts";
+import { createMcpServer, TOOLS } from "../src/index.ts";
+import { resolveConfig } from "../src/config.ts";
 import type { Session, TestEnv } from "./helpers.ts";
-import { startEnv } from "./helpers.ts";
+import { connect, startEnv } from "./helpers.ts";
 
 let env: TestEnv;
 let session: Session;
@@ -112,5 +113,29 @@ describe("the endpoint", () => {
     const response = await env.raw("DELETE");
     expect(response.status).toBe(405);
     expect(((await response.json()) as { code: string }).code).toBe("not_implemented");
+  });
+
+  test("one log line per request names the caller and the tool it turned into", async () => {
+    const lines: string[] = [];
+    const mcp = createMcpServer(
+      resolveConfig({ BASHREACTOR_URL: env.apiUrl, BASHREACTOR_TOKEN: env.admin }, "test"),
+      { log: (line) => lines.push(line) },
+    );
+    const server = Bun.serve({ port: 0, fetch: (request) => mcp.fetch(request) });
+    try {
+      const reader = await connect(`http://127.0.0.1:${server.port}/mcp`, env.reader);
+      await reader.call("whoami");
+      await reader.call("start_run", { pipeline: "hello-pipeline" });
+      await reader.close();
+    } finally {
+      server.stop();
+    }
+
+    // One line per HTTP request — the connect's initialize and notification, its stream, and the two
+    // calls — and the two calls are the ones that say what the caller did.
+    expect(lines.filter((line) => line.includes("whoami"))).toHaveLength(1);
+    // The `!` is a tool that came back with an error, which is the whole log's point.
+    expect(lines.filter((line) => line.includes("start_run!"))).toHaveLength(1);
+    expect(lines.every((line) => /^(POST|GET) \/mcp \d{3} \d+ms (\S+)( \S+)?$/.test(line))).toBe(true);
   });
 });
