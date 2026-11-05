@@ -25,6 +25,13 @@ route is 503: an unset token is not a reason for a pod to fail its probe.
 `GET /healthz` is unauthenticated and answers `{"status":"ok","version":"…"}`. That, and `GET /`
 answering 501, is the contract the CI image job probes; both still hold.
 
+If the API could not be built at all — a `$BASHREACTOR_HOME` the uid cannot write, a store that will
+not open — the server still listens: `/healthz` answers 200 with
+`{"status":"degraded","version":"…","problem":"<why>"}` and every other route is 503. A container that
+refuses connections is useless to look at, and the probe is all a preview URL gives you (SPEC 1.5).
+The image makes that path hard to hit by creating `/data`, owning it by the uid it runs as, and
+setting `BASHREACTOR_HOME` to it.
+
 ## Auth
 
 Send `Authorization: Bearer <token>`. A request that needs more than its token has is refused before
@@ -58,7 +65,7 @@ answer differently:
 | 422 | every definition and starting code (`pipeline_yaml_invalid`, `pipeline_schema_invalid`, `block_header_malformed`, `block_schema_invalid`, `unknown_*`, `missing_input`, `type_mismatch`, `expression_invalid`, `dependency_cycle`, `file_input_not_found`, `env_missing`) and a request body that does not fit |
 | 500 | `internal_error`, `store_migration_failed`, `store_closed` |
 | 501 | `not_implemented`, for a route this API does not have |
-| 503 | `runtime_missing` (a block runtime binary is missing, or no admin token is configured), `store_locked` |
+| 503 | `runtime_missing` (a block runtime binary is missing, no admin token is configured, or the API never started), `store_locked` |
 
 Two rules that the code table alone cannot say:
 
@@ -79,7 +86,7 @@ API's codes, not the spec's: SPEC section 5 has none for them. They are the open
 
 | Method | Path | Access | Does |
 | --- | --- | --- | --- |
-| `GET` | `/healthz` | none | `{"status":"ok","version"}` for the deploy probe |
+| `GET` | `/healthz` | none | `{"status":"ok","version"}` for the deploy probe, `{"status":"degraded",…}` if the API never started |
 | `GET` | `/v1/whoami` | read | who the token is |
 | `GET` | `/v1/tokens` | admin | the agent tokens, without their secrets |
 | `POST` | `/v1/tokens` | admin | create one; the secret appears here and nowhere else |
@@ -208,8 +215,9 @@ the run directory is re-emitted.
 
 `bun test` in this package. Every route is called through the HTTP entry point with a `Request`, and
 `test/server.test.ts` runs `main.ts` as a real process over a real socket, the way the CI image job
-does. The run tests build an engine whose `PATH` has every binary SPEC 2.6 demands, so they do not
-depend on what happens to be installed.
+does. `test/startup.test.ts` pins the other half of that contract: a server whose API could not be
+built still binds the socket and says why at `/healthz`. The run tests build an engine whose `PATH`
+has every binary SPEC 2.6 demands, so they do not depend on what happens to be installed.
 
 ## Open items
 
