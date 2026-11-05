@@ -1,0 +1,7 @@
+name: slow
+description: A single long step, used to test cancel.
+steps:
+  slow:
+    uses: ./slow.sh
+    timeout: 60s
+    kill_grace: 1s

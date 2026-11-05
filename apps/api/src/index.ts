@@ -18,7 +18,7 @@ export function resolvePort(env: Record<string, string | undefined>): number {
   if (raw === undefined || raw === "") return DEFAULT_PORT;
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
-    throw new BashreactorError("invalid_config", `PORT must be an integer from 0 to 65535, got "${raw}"`);
+    throw new BashreactorError("runtime_missing", `PORT must be an integer from 0 to 65535, got "${raw}"`);
   }
   return port;
 }

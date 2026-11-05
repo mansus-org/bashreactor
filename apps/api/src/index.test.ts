@@ -23,7 +23,8 @@ describe("createHandler", () => {
     expect(response.status).toBe(501);
     expect(response.headers.get("content-type")).toStartWith("application/json");
     expect(await response.json()).toEqual({
-      error: { code: "not_implemented", message: `${method} ${path} is not implemented yet` },
+      code: "not_implemented",
+      message: `${method} ${path} is not implemented yet`,
     });
   });
 });
@@ -39,7 +40,7 @@ describe("resolvePort", () => {
   });
 
   test.each(["abc", "-1", "65536", "80.5"])("rejects %p", (PORT) => {
-    expect(() => resolvePort({ PORT })).toThrow(expect.objectContaining({ code: "invalid_config" }));
+    expect(() => resolvePort({ PORT })).toThrow(expect.objectContaining({ code: "runtime_missing" }));
   });
 });
 

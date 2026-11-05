@@ -1,81 +1,259 @@
 import { describe, expect, test } from "bun:test";
-import type { Pipeline, PipelineStep } from "./types.ts";
-import { validateBlock, validatePipeline } from "./validate.ts";
+import { readFileSync } from "node:fs";
+import { validateBlockSource, validatePipelineSource } from "./validate.ts";
+import type { BlockResolver } from "./validate.ts";
 
-const step = (id: string, needs: string[] = [], rest: Partial<PipelineStep> = {}): PipelineStep => ({
-  id,
-  block: "some-block",
-  needs,
-  retries: 0,
-  ...rest,
-});
+const examples = new URL("../../../docs/examples/", import.meta.url);
+const read = (name: string) => readFileSync(new URL(name, examples), "utf8");
 
-const pipeline = (...steps: PipelineStep[]): Pipeline => ({ name: "demo", steps });
-const messages = (p: Pipeline) => validatePipeline(p).map((issue) => `${issue.path}: ${issue.message}`);
+function resolver(blocks: Record<string, string>): BlockResolver {
+  return {
+    resolve: (uses) => (blocks[uses] ? { ok: true, source: blocks[uses]! } : { ok: false }),
+  };
+}
 
-describe("validateBlock", () => {
-  test("accepts a block with distinct params", () => {
-    const block = { name: "fetch", inputs: [{ name: "url" }], outputs: [{ name: "path" }, { name: "size" }] };
-    expect(validateBlock(block)).toEqual([]);
+const noOutputBlock = `#!/usr/bin/env bash
+# ---
+# name: sink
+# ---
+`;
+
+const intOutBlock = `#!/usr/bin/env bash
+# ---
+# name: ints
+# outputs:
+#   total:
+#     type: integer
+# ---
+`;
+
+const jsonOutBlock = `#!/usr/bin/env bash
+# ---
+# name: jsons
+# outputs:
+#   top:
+#     type: json
+# ---
+`;
+
+void jsonOutBlock;
+
+const strInBlock = `#!/usr/bin/env bash
+# ---
+# name: echoer
+# inputs:
+#   x:
+#     type: string
+# outputs:
+#   out:
+#     type: string
+# ---
+`;
+
+const boolInBlock = `#!/usr/bin/env bash
+# ---
+# name: gate
+# inputs:
+#   n:
+#     type: boolean
+# ---
+`;
+
+describe("validateBlockSource", () => {
+  test("accepts a valid block", () => {
+    expect(validateBlockSource(noOutputBlock)).toEqual([]);
   });
 
-  test("an input and an output may share a name", () => {
-    expect(validateBlock({ name: "copy", inputs: [{ name: "path" }], outputs: [{ name: "path" }] })).toEqual([]);
+  test("reports every broken rule in one header", () => {
+    const bad = `#!/usr/bin/env bash
+# ---
+# name: 1bad
+# inputs:
+#   A:
+#     type: string
+#     extra: 1
+# ---
+`;
+    const codes = validateBlockSource(bad).map((issue) => `${issue.path}:${issue.code}`);
+    expect(codes).toContain("name:block_schema_invalid");
+    expect(codes).toContain("inputs.A:block_schema_invalid");
+    expect(codes).toContain("inputs.A.extra:block_schema_invalid");
   });
 
-  test("reports empty and duplicate names with their path", () => {
-    const block = { name: " ", inputs: [{ name: "a" }, { name: "a" }], outputs: [{ name: "" }] };
-    expect(validateBlock(block)).toEqual([
-      { path: "name", message: "must not be empty" },
-      { path: "inputs[1].name", message: 'duplicate name "a"' },
-      { path: "outputs[0].name", message: "must not be empty" },
+  test("reports a malformed header as one error", () => {
+    expect(validateBlockSource("not a block")).toEqual([
+      expect.objectContaining({ code: "block_header_malformed" }),
     ]);
   });
 });
 
-describe("validatePipeline", () => {
-  test("accepts a diamond", () => {
-    const p = pipeline(step("a"), step("b", ["a"]), step("c", ["a"]), step("d", ["b", "c"]));
-    expect(validatePipeline(p)).toEqual([]);
+describe("validatePipelineSource", () => {
+  test("the worked example validates clean", () => {
+    const issues = validatePipelineSource(read("word-report.yaml"), resolver({
+      "./generate-corpus.sh": read("generate-corpus.sh"),
+      "./check-corpus.sh": read("check-corpus.sh"),
+      "./count-words.sh": read("count-words.sh"),
+      "./render-report.sh": read("render-report.sh"),
+    }));
+    expect(issues).toEqual([]);
   });
 
-  test("rejects a pipeline with no steps", () => {
-    expect(messages(pipeline())).toEqual(["steps: must not be empty"]);
+  test("a YAML-level problem is one pipeline_yaml_invalid", () => {
+    const issues = validatePipelineSource("name: a\nname: b\nsteps:\n  s:\n    uses: ./x.sh\n", resolver({}));
+    expect(issues.map((issue) => issue.code)).toEqual(["pipeline_yaml_invalid"]);
   });
 
-  test("rejects duplicate step ids", () => {
-    expect(messages(pipeline(step("a"), step("a")))).toEqual(['steps[1].id: duplicate id "a"']);
+  test("reports several independent schema rules at once", () => {
+    const source = [
+      "name: a",
+      "bogus: 1",
+      "steps:",
+      "  s:",
+      "    uses: ./x.sh",
+      "    timeout: 0s",
+      "    retry:",
+      "      max_attempts: 0",
+      "",
+    ].join("\n");
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": noOutputBlock }));
+    const byPath = new Map(issues.map((issue) => [issue.path, issue.code]));
+    expect(byPath.get("bogus")).toBe("pipeline_schema_invalid");
+    expect(byPath.get("steps.s.timeout")).toBe("pipeline_schema_invalid");
+    expect(byPath.get("steps.s.retry.max_attempts")).toBe("pipeline_schema_invalid");
   });
 
-  test("rejects needs that point nowhere", () => {
-    expect(messages(pipeline(step("a", ["ghost"])))).toEqual(['steps[0].needs[0]: unknown step "ghost"']);
+  test("needs naming an undeclared step is unknown_step with the index", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./x.sh\n    needs: [ghost]\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": noOutputBlock }));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "unknown_step", path: "steps.s.needs.0" }),
+    ]);
   });
 
-  test("reports a cycle with the path around it", () => {
-    const p = pipeline(step("a", ["c"]), step("b", ["a"]), step("c", ["b"]));
-    expect(messages(p)).toEqual(["steps: dependency cycle: a -> c -> b -> a"]);
+  test("an expression naming an undeclared step is unknown_step", () => {
+    const source = 'name: a\nsteps:\n  s:\n    uses: ./x.sh\n    with:\n      x: ${{ steps.ghost.outputs.out }}\n';
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": strInBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "unknown_step", path: "steps.s.with.x" }));
+  });
+
+  test("an expression naming an undeclared input is unknown_input", () => {
+    const source = 'name: a\nsteps:\n  s:\n    uses: ./x.sh\n    with:\n      x: ${{ inputs.ghost }}\n';
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": strInBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "unknown_input", path: "steps.s.with.x" }));
+  });
+
+  test("an expression naming an undeclared output is unknown_output", () => {
+    const source = [
+      "name: a",
+      "steps:",
+      "  a:",
+      "    uses: ./a.sh",
+      "    with:",
+      "      x: ${{ steps.b.outputs.nope }}",
+      "  b:",
+      "    uses: ./b.sh",
+      "",
+    ].join("\n");
+    const issues = validatePipelineSource(source, resolver({ "./a.sh": strInBlock, "./b.sh": intOutBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "unknown_output", path: "steps.a.with.x" }));
+  });
+
+  test("a with key that is not a block input is unknown_input", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./x.sh\n    with:\n      nope: 1\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": strInBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "unknown_input", path: "steps.s.with.nope" }));
+  });
+
+  test("a required input absent from with is missing_input", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./x.sh\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": strInBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "missing_input", path: "steps.s.with.x" }));
+  });
+
+  test("a whole expression with the wrong type is type_mismatch", () => {
+    const source = [
+      "name: a",
+      "steps:",
+      "  a:",
+      "    uses: ./a.sh",
+      "    with:",
+      "      n: ${{ steps.b.outputs.total }}",
+      "  b:",
+      "    uses: ./b.sh",
+      "",
+    ].join("\n");
+    const issues = validatePipelineSource(source, resolver({ "./a.sh": boolInBlock, "./b.sh": intOutBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "type_mismatch", path: "steps.a.with.n" }));
+  });
+
+  test("a template binding to a non-string input is type_mismatch", () => {
+    const source = [
+      "name: a",
+      "inputs:",
+      "  title:",
+      "    type: string",
+      "steps:",
+      "  s:",
+      "    uses: ./x.sh",
+      "    with:",
+      '      n: "${{ inputs.title }}!"',
+      "",
+    ].join("\n");
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": boolInBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "type_mismatch", path: "steps.s.with.n" }));
+  });
+
+  test("a dependency cycle is one error per component", () => {
+    const source = "name: a\nsteps:\n  a:\n    uses: ./x.sh\n    needs: [b]\n  b:\n    uses: ./x.sh\n    needs: [a]\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": noOutputBlock }));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "dependency_cycle", path: "steps.a.needs" }),
+    ]);
   });
 
   test("a step that needs itself is a cycle", () => {
-    expect(messages(pipeline(step("a", ["a"])))).toEqual(["steps: dependency cycle: a -> a"]);
-  });
-
-  test("a step downstream of a cycle is not itself reported as part of it", () => {
-    const p = pipeline(step("a", ["b"]), step("b", ["a"]), step("downstream", ["a"]));
-    expect(messages(p)).toEqual(["steps: dependency cycle: a -> b -> a"]);
-  });
-
-  test.each([-1, 1.5, Number.NaN])("rejects %p retries", (retries) => {
-    expect(messages(pipeline(step("a", [], { retries })))).toEqual(["steps[0].retries: must be a non-negative integer"]);
-  });
-
-  test.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])("rejects a %p second timeout", (timeoutSeconds) => {
-    expect(messages(pipeline(step("a", [], { timeoutSeconds })))).toEqual([
-      "steps[0].timeoutSeconds: must be a positive number",
+    const source = "name: a\nsteps:\n  a:\n    uses: ./x.sh\n    needs: [a]\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": noOutputBlock }));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "dependency_cycle", path: "steps.a.needs" }),
     ]);
   });
 
-  test("a step without a timeout is fine: jobs run for hours", () => {
-    expect(validatePipeline(pipeline(step("a"), step("b", [], { timeoutSeconds: 3600 })))).toEqual([]);
+  test("a pipeline output that is not a whole step expression is expression_invalid", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./x.sh\noutputs:\n  out: 5\n";
+    const issues = validatePipelineSource(source, resolver({ "./x.sh": noOutputBlock }));
+    expect(issues).toContainEqual(expect.objectContaining({ code: "expression_invalid", path: "outputs.out" }));
+  });
+
+  test("a step whose block cannot be resolved is block_not_found", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./missing.sh\n";
+    const issues = validatePipelineSource(source, resolver({}));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "block_not_found", path: "steps.s.uses" }),
+    ]);
+  });
+
+  test("a block with a broken header reports at the referencing key", () => {
+    const source = "name: a\nsteps:\n  s:\n    uses: ./bad.sh\n";
+    const issues = validatePipelineSource(source, resolver({ "./bad.sh": "#!/usr/bin/env bash\n# ---\n# name: 1bad\n# ---\n" }));
+    expect(issues).toEqual([
+      expect.objectContaining({ code: "block_schema_invalid", path: "steps.s.uses" }),
+    ]);
+  });
+
+  test("integer to number and scalar to string whole bindings are allowed", () => {
+    const source = [
+      "name: a",
+      "steps:",
+      "  a:",
+      "    uses: ./a.sh",
+      "    with:",
+      "      x: ${{ steps.b.outputs.total }}",
+      "  b:",
+      "    uses: ./b.sh",
+      "",
+    ].join("\n");
+    const issues = validatePipelineSource(source, resolver({ "./a.sh": strInBlock, "./b.sh": intOutBlock }));
+    expect(issues).toEqual([]);
   });
 });
