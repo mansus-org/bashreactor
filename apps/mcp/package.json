@@ -4,8 +4,16 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@bashreactor/core": "workspace:*" },
+  "main": "./src/main.ts",
+  "dependencies": {
+    "@bashreactor/core": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.32.2"
+  },
+  "devDependencies": {
+    "@bashreactor/api": "workspace:*"
+  },
   "scripts": {
+    "start": "bun src/main.ts",
     "test": "bun test",
     "typecheck": "tsc -p ."
   }
