@@ -49,6 +49,10 @@ data the API will return and not against a parallel schema.
 - **Controls are real controls:** steps are buttons, the graph is walkable with arrow keys, dialogs
   are native `<dialog>`, checkboxes are drawn 1-bit with a 44 px hit area, and every link and button
   is a 44 px target.
+- **Off, not grey:** a disabled field keeps ink for its value, because Chrome would paint that value
+  its own `darkgray` and put a third ink on the page; it stays dashed and sits on a sparse dither
+  (2 px squares on an 8 px step, the denser ghost step where there is no text to read), and the
+  label next to it says why in one line of help text.
 - **Elevation and motion:** only dialogs and the alarm get the offset shadow, because they need an
   answer now. The one motion is an e-ink flash when something changes; nothing loops, and it is off
   under `prefers-reduced-motion`.

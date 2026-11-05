@@ -501,7 +501,16 @@
                         edit(BR.model.editStep(text, step.id, "needs", next.length ? next : undefined), null);
                       },
                     }),
-                    el("span", {}, other.id, implied ? " (by a reference)" : cycles ? " (would make a cycle)" : ""),
+                    el(
+                      "span",
+                      {},
+                      other.id,
+                      implied
+                        ? el("span", { class: "help" }, "Already implied by a reference.")
+                        : cycles
+                          ? el("span", { class: "help" }, "Would make a cycle.")
+                          : null,
+                    ),
                   );
                 }),
               ),

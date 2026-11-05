@@ -32,6 +32,9 @@
   --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='2' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E") left bottom repeat-x;
   --dots-top: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='2' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E") left top repeat-x;
   --sparse: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E");
+  /* One step fainter than --sparse, for a field that is switched off: 2 px squares on an 8 px step,
+     so a value can still be read on it. */
+  --sparse-off: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E");
   --arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' shape-rendering='crispEdges'%3E%3Cpath fill='%23141414' d='M0 0h14v2H0zM2 2h10v2H2zM4 4h6v2H4zM6 6h2v2H6z'/%3E%3C/svg%3E");
   --yaml-line: 24px;
   color-scheme: light;
@@ -192,9 +195,23 @@ input[type="checkbox"]:checked::after {
   border-left: 3px solid var(--paper); border-bottom: 3px solid var(--paper);
   transform: translate(-50%, -62%) rotate(-45deg);
 }
+/* Off, not grey. Chrome paints a disabled control's value with its own darkgray, which would put a
+   third ink on the page, so the value keeps ink and "off" is carried by the dashed rule and a
+   dither behind it. */
+input:disabled, select:disabled, textarea:disabled {
+  color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
+  opacity: 1;
+}
+input:not([type="checkbox"]):disabled, select:disabled, textarea:disabled {
+  border-style: dashed;
+  background: var(--paper) var(--sparse-off);
+}
+select:disabled { background: var(--arrow) right 12px center no-repeat, var(--sparse-off) var(--paper); }
 input[type="checkbox"]:disabled { cursor: not-allowed; }
 input[type="checkbox"]:disabled::before { border-style: dashed; }
-select:disabled, input:not([type="checkbox"]):disabled { border-style: dashed; }
+/* The box holds no text to read, so it takes the same dense step the ghost of a broken graph uses. */
+input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper) var(--sparse); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -211,6 +228,8 @@ select:disabled, input:not([type="checkbox"]):disabled { border-style: dashed; }
 .btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 
 .check { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 1rem; cursor: pointer; }
+/* A tick that cannot be moved says why, in the help text used everywhere else. */
+.check .help { display: block; }
 .field { display: grid; align-content: start; min-width: 0; }
 .fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .fieldset legend { padding: 0; }
