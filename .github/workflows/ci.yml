@@ -23,8 +23,10 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
-      - run: bun run test
+      # Before the tests, so a bundle that will not build is reported as a build failure and not as a
+      # container that silently refuses to connect.
       - run: bun run build
+      - run: bun run test
 
   # deploy.yml only runs on main and on PRs and pushes straight to the registry, so this is the one place
   # a branch learns that the image it would ship actually starts and answers.
