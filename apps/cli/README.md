@@ -1,0 +1,352 @@
+# Bashreactor CLI (BASHR-7)
+
+One binary, `bashreactor`, that does everything the REST API does, from a shell, for a person or a
+script. It talks to a deployment **over HTTP with a bearer token** and never opens the store or the
+engine in-process: the API is the surface that enforces scopes and the only thing that knows where a
+remote deployment keeps its runs.
+
+```bash
+bun apps/cli/src/bin.ts <command>      # in this repo
+```
+
+The package declares `bin: { bashreactor: ./src/bin.ts }`, so whatever installs it gets the name;
+the entry point is TypeScript and needs `bun` to run it.
+
+## Connection
+
+A flag beats the environment beats a file, and `whoami` prints which of the three won.
+
+| Setting | Flag | Environment | File |
+| --- | --- | --- | --- |
+| API URL | `--url` | `BASHREACTOR_URL` | `"url"` in `$BASHREACTOR_HOME/cli.json` |
+| Token | `--token` | `BASHREACTOR_TOKEN` | `"token"` in the same file |
+
+`$BASHREACTOR_HOME` defaults to `~/.bashreactor`, the one data directory of SPEC 1.4, so one
+variable points the CLI, the API and the engine at the same place. The file is two settings and
+nothing else; anything else in it is a usage error rather than a silently ignored key:
+
+```json
+{ "url": "https://bashreactor.example", "token": "br_…" }
+```
+
+Prefer the environment for a token: a flag shows up in `ps`. `whoami` never prints the whole token,
+only enough of it to recognise:
+
+```
+$ bashreactor whoami
+url    http://127.0.0.1:8080  (from BASHREACTOR_URL)
+token  br_044c…d292  (from BASHREACTOR_TOKEN)
+name   admin
+scope  admin
+admin  yes
+```
+
+## Commands
+
+Every route in [`apps/api/README.md`](../api/README.md) is a command, and one command is one route.
+`read`, `write` and `admin` are the access the API asks for; the CLI does not guess, it sends the
+token and passes back whatever the API says.
+
+| Command | Route | Access |
+| --- | --- | --- |
+| `health` | `GET /healthz` | none |
+| `whoami` | `GET /v1/whoami` | read |
+| `blocks ls <name>` | `GET /v1/blocks/:name` | read |
+| `blocks get <name>` | `GET /v1/blocks/:name/:version` | read |
+| `blocks content <name>` | `GET /v1/blocks/:name/:version/content` | read |
+| `blocks add <name> <file>` | `POST /v1/blocks/:name/versions` | write |
+| `pipelines ls <name>` | `GET /v1/pipelines/:name` | read |
+| `pipelines get <name>` | `GET /v1/pipelines/:name/:version` | read |
+| `pipelines validate <file>` | `POST /v1/pipelines/validate` | read |
+| `pipelines add <name> <file>` | `POST /v1/pipelines/:name/versions` | write |
+| `runs ls` | `GET /v1/runs` | read |
+| `runs start <pipeline\|file.yaml>` | `POST /v1/runs` | write |
+| `runs get <id>` | `GET /v1/runs/:id` | read |
+| `runs cancel <id>` | `POST /v1/runs/:id/cancel` | write |
+| `runs retry <id>` | `POST /v1/runs/:id/retry` | write |
+| `runs resume <id>` | `POST /v1/runs/:id/resume` | write |
+| `runs logs <id> <step>` | `GET /v1/runs/:id/logs/:step/:attempt` | read |
+| `tokens ls` | `GET /v1/tokens` | admin |
+| `tokens add <name> --scope read\|write` | `POST /v1/tokens` | admin |
+| `tokens revoke <id>` | `DELETE /v1/tokens/:id` | admin |
+
+There is no command for a route that does not exist: no block or pipeline collection, no artifacts,
+no run index over the store. Those are the API's open items, and a command that always answered
+empty would be worse than no command.
+
+## Flags
+
+Global, on every command, before or after the command name:
+
+| Flag | Does |
+| --- | --- |
+| `--json` | print the API's own JSON and nothing else on stdout |
+| `--url <url>` | the API to talk to |
+| `--token <token>` | the bearer token |
+| `--help`, `-h` | the command table, or the one for a command |
+
+Per command:
+
+| Flag | On | Does |
+| --- | --- | --- |
+| `--version <n\|latest>` | `blocks get`, `blocks content`, `pipelines get`, `runs start` | which version; the default is `latest` |
+| `--input <name>=<value>` | `runs start` | a run input, repeatable; read with the text form of SPEC 1.2 against the type the pipeline declares |
+| `--wait` | `runs start` | poll until the run is final, and exit with its status |
+| `--attempt <n>` | `runs logs` | which attempt to read; the default is the step's last one |
+| `--offset <n>` | `runs logs` | the byte offset to start at; the default is 0 |
+| `--follow` | `runs logs` | keep reading until the step is final |
+| `--interval <ms>` | `runs logs --follow`, `runs start --wait` | how long between polls; the default is 1000 |
+| `--scope read\|write` | `tokens add` | what the token may do |
+
+## Two output modes, chosen once
+
+The default is for a person: aligned columns, no colour, no spinner, dates in local time, and a run
+id that is never shortened, because it is the thing you copy into the next command.
+
+```
+$ bashreactor runs ls
+RUN                        PIPELINE     STATUS     CREATED              FINISHED             TOOK
+20261105T152616Z-4458ce1b  word-report  succeeded  2026-11-05 16:26:16  2026-11-05 16:26:17  2s
+```
+
+`--json` prints the API's own JSON, verbatim, one object or an array, one line, so `jq` works and
+nothing is reformatted:
+
+```
+$ bashreactor runs get 20261105T152616Z-4458ce1b --json | jq -c '.status, .outputs'
+"succeeded"
+{"report":"steps/report/attempts/1/outputs/report","total_words":1950}
+```
+
+The mode is picked at the top of a command and a command cannot print both: `Printer.emit(value, human)`
+either hands back the value or runs the human rendering, never both. Two routes are not JSON on the
+wire and say so:
+
+- `blocks content` writes the block's bytes to stdout, byte for byte. Under `--json` it prints
+  `{name, version, sha256, content}`, with `version` resolved to a number even when you asked for
+  `latest`.
+- `runs logs --follow --json` prints one JSON object per chunk, newline-delimited, each with its own
+  `offset` and `next_offset`.
+
+Notes about what a command did on your behalf (publishing a block, the next log offset) go to
+stderr in both modes, so stdout stays the answer.
+
+## Errors and exit codes
+
+One function formats a failure, so no command can drift. A failure is docs/SPEC.md section 5's error
+object — `code`, `message`, and `path`/`file` when present — on stderr and nothing else. Under
+`--json` that object is the whole of stdout, so a script reads a failure and a success the same way.
+
+```
+$ bashreactor runs start word-report --input lines=abc   # the command line was wrong
+{"code":"type_mismatch","message":"inputs.lines: not an integer","path":"inputs.lines"}
+$ echo $?
+2
+$ bashreactor runs get 20261104T101500Z-3fa9c2d1         # the API said no
+{"code":"run_not_found","message":"run \"20261104T101500Z-3fa9c2d1\" does not exist"}
+$ echo $?
+1
+```
+
+| Code | When |
+| --- | --- |
+| 0 | it ran |
+| 1 | the API refused: its own code and message, passed through untouched. Also a run that ended `failed` or `cancelled` when you asked to wait for it or follow it, an invalid pipeline from `pipelines validate`, and a degraded `/healthz` |
+| 2 | the command line was wrong: unknown command or flag, missing argument, a file that is not there, an `--input` value that does not fit the declared type, no URL or token configured, a config file that is not readable |
+
+A wrong token and a wrong argument are visibly different: the first is the API's `unauthenticated`
+at exit 1, the second is `invalid_argument` at exit 2 with nothing sent.
+
+The CLI adds two codes of its own, both already used elsewhere in the repo: `invalid_argument` (the
+store's, for an argument that cannot be right) and `runtime_missing` (the spec's, for a server that
+is not there rather than one that refused). Everything else — `unauthenticated`, `forbidden`,
+`pipeline_not_found`, `internal_error` — is the API's list and is passed through unchanged.
+
+## Logs
+
+A log is per attempt and is followed by byte offset (SPEC 4.8), which is what the API exposes and
+what this CLI uses. A read prints the bytes from the offset and tells you the offset to come back
+with:
+
+```bash
+bashreactor runs logs 20261105T152616Z-4458ce1b generate --attempt 1 --offset 47
+```
+
+```
+pt 1: stopping after 120 lines, asking for a retry
+next offset 98
+```
+
+`--follow` polls by offset until the step reaches a final status, then exits with the run's own
+status: 0 for `succeeded` (and for a step that finished while the run carries on), 1 for `failed` or
+`cancelled`. There is no websocket: the offset is the cursor, and a follower that dies loses nothing.
+
+## Long runs
+
+`runs start` returns as soon as the API answers 201, prints the run id and how to follow it, and
+leaves. A six-hour block does not get to hold your terminal.
+
+```
+$ bashreactor runs start word-report --input lines=300
+run       20261105T152616Z-4458ce1b
+pipeline  word-report
+status    running
+…
+follow it: bashreactor runs logs 20261105T152616Z-4458ce1b generate --follow
+```
+
+If you did want to wait, `--wait` polls until the run is final and its exit code is the run's
+status, which is what a CI step wants.
+
+## A pipeline file on your disk
+
+SPEC 3.4 resolves `uses: ./count-words.sh` against the directory holding the pipeline file, and the
+API stages the YAML it is given into a directory of its own (apps/api/README.md, "Staging"), so a
+relative reference from your laptop points at nothing there. The API has no route that takes a
+directory, so `runs start`, `pipelines validate` and `pipelines add` close the gap with the two
+routes that do exist: they publish each block beside the file into the library and rewrite the
+reference to the `name@version` the library answered with. Only the `uses:` line changes; every
+other byte of the file, comments included, is sent as it was.
+
+The consequence is worth stating: what gets stored or started is the rewritten document, so a run
+records `count-words@2` rather than `./count-words.sh`. The command says what it published, on
+stderr:
+
+```
+$ bashreactor pipelines validate docs/examples/word-report.yaml
+published docs/examples/generate-corpus.sh as generate-corpus@1
+published docs/examples/check-corpus.sh as check-corpus@1
+published docs/examples/count-words.sh as count-words@1
+published docs/examples/render-report.sh as render-report@1
+valid  docs/examples/word-report.yaml
+```
+
+A pipeline that already uses library references is sent untouched. A `uses:` whose file is not there
+is left alone, so the answer is the engine's own `block_not_found` and not a message invented here.
+
+## Worked example
+
+The pipeline of [`docs/examples/`](../../docs/examples/README.md), from a clean deployment. The
+server is the one from `apps/api` (`bun apps/api/src/main.ts`), and the CLI is told where it is and
+who it is:
+
+```bash
+export BASHREACTOR_URL=http://127.0.0.1:8080
+export BASHREACTOR_TOKEN=$BASHREACTOR_ADMIN_TOKEN
+
+bashreactor pipelines validate docs/examples/word-report.yaml
+# valid  docs/examples/word-report.yaml        (after publishing the four blocks, on stderr)
+
+bashreactor runs start docs/examples/word-report.yaml --input lines=300 --input seed=11 --input title=Other
+```
+
+```
+run       20261105T152616Z-4458ce1b
+pipeline  word-report
+status    running
+created   2026-11-05 16:26:16
+finished  -
+took      -
+
+STEP      STATUS   ATTEMPTS  NEEDS                 FAILURE
+generate  pending  0         -                     -
+check     pending  0         generate              -
+count     pending  0         generate              -
+report    pending  0         generate,check,count  -
+
+inputs
+lines  300
+seed   11
+title  Other
+
+started docs/examples/word-report.yaml
+follow it: bashreactor runs logs 20261105T152616Z-4458ce1b generate --follow
+```
+
+Follow the first step. Attempt 1 stops at line 120 and asks for a retry (SPEC 2.8, exit 75), so the
+step is not final until attempt 2 has carried on from the work directory; `--follow` keeps reading
+until it is:
+
+```bash
+bashreactor runs logs 20261105T152616Z-4458ce1b generate --follow
+```
+
+```
+attempt 1: 0 of 300 lines already written
+attempt 1: stopping after 120 lines, asking for a retry
+next offset 98
+run 20261105T152616Z-4458ce1b running
+```
+
+The run is still going, because `generate` is only one of four steps. Follow the last one, and when
+it is final the run is final, so the exit code is the run's:
+
+```bash
+bashreactor runs logs 20261105T152616Z-4458ce1b report --follow; echo $?
+```
+
+```
+render-report: 157 bytes
+next offset 25
+run 20261105T152616Z-4458ce1b succeeded
+0
+```
+
+And the whole thing, for a person or for `jq`:
+
+```bash
+bashreactor runs get 20261105T152616Z-4458ce1b
+```
+
+```
+run       20261105T152616Z-4458ce1b
+pipeline  word-report
+status    succeeded
+created   2026-11-05 16:26:16
+finished  2026-11-05 16:26:17
+took      2s
+
+STEP      STATUS     ATTEMPTS  NEEDS                 FAILURE
+generate  succeeded  2         -                     -
+check     succeeded  1         generate              -
+count     succeeded  1         generate              -
+report    succeeded  1         generate,check,count  -
+
+inputs
+lines  300
+seed   11
+title  Other
+
+outputs
+report       steps/report/attempts/1/outputs/report
+total_words  1950
+```
+
+```bash
+bashreactor runs get 20261105T152616Z-4458ce1b --json | jq -c '.outputs'
+# {"report":"steps/report/attempts/1/outputs/report","total_words":1950}
+```
+
+## Tests
+
+`bun test` in this package. Every test runs `apps/cli/src/bin.ts` as a real subprocess against a
+real API over a real socket, started the way `apps/api/test/server.test.ts` starts it, and asserts
+on stdout, stderr and the exit code. The environment of every run is built from nothing, so a
+developer's own `BASHREACTOR_URL` or `~/.bashreactor/cli.json` cannot decide what a test sees.
+
+The server is started as a subprocess rather than imported, because importing `@bashreactor/api`
+from this package would put the API, the engine and the store on the CLI's import graph — the one
+thing this task must not do.
+
+## Open items
+
+- **A pipeline directory needs one route.** `POST /v1/pipelines` that took the file and its blocks
+  would let the CLI stop publishing and rewriting (see "A pipeline file on your disk"). The engine
+  taking a block resolver, which apps/api already lists, is the same gap from the other side.
+- **No `bashreactor config` command.** The config file is read, never written: `tokens add` prints a
+  token and leaves it to you to put it in the file. Writing it needs a decision about a file that
+  holds a secret (its mode, and where it goes when `BASHREACTOR_HOME` is a volume).
+- **`--follow` is a poll.** The offset cursor makes it correct and it costs one request per interval;
+  a websocket would need the API to have one first.
+- **The CLI has no `version` command.** `--version` already means "which block version", and a CLI
+  that overloaded it for both would be its own bug report.
