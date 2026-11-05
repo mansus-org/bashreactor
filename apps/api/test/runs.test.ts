@@ -123,6 +123,16 @@ describe("reading runs", () => {
   test("a run that does not exist is 404", async () => {
     expect((await server.call("GET", "/v1/runs/20260101T000000Z-00000000")).status).toBe(404);
   });
+
+  test("an id that is not a run id is 404 and never reaches the filesystem", async () => {
+    // The engine joins a run id straight into a path, so the shape from SPEC 4.2 is the guard. A
+    // literal ".." is folded away by the URL itself; an encoded one arrives as one segment.
+    for (const id of ["..%2F..%2Fhome", "%2E%2E%2Fetc%2Fpasswd", "20261104T101500Z-ZZZZZZZZ", "run;1"]) {
+      expect((await server.call("GET", `/v1/runs/${id}`)).status).toBe(404);
+      expect((await server.call("POST", `/v1/runs/${id}/cancel`)).status).toBe(404);
+      expect((await server.call("GET", `/v1/runs/${id}/logs/greet/1`)).status).toBe(404);
+    }
+  });
 });
 
 describe("following a log by offset", () => {

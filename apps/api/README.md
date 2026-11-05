@@ -102,6 +102,11 @@ API's codes, not the spec's: SPEC section 5 has none for them. They are the open
 
 Anything else, including a known path with a method it does not take, is 501 `not_implemented`.
 
+An id in a path is checked before it is used: a run id must match SPEC 4.2's shape
+(`20261104T101500Z-3fa9c2d1`) and a block or pipeline name must match SPEC 1.1's, because the engine
+and the store join both straight into a path. A name that cannot be one is 404 for a run and 422 for
+a block or pipeline, whose name is part of the document being created.
+
 ### Examples
 
 ```bash

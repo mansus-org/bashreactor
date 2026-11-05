@@ -198,18 +198,18 @@ export function createApi(deps: ApiDependencies): Api {
   route("GET", "/v1/runs/:id", "read", async ({ params }) => json(200, await requiredRun(params.id!)));
 
   route("POST", "/v1/runs/:id/cancel", "write", async ({ params }) => {
-    const id = params.id!;
+    const id = runId(params.id!);
     await engine.cancel(id);
     return json(202, await requiredRun(id));
   });
 
   route("POST", "/v1/runs/:id/retry", "write", ({ params }) => {
-    const id = params.id!;
+    const id = runId(params.id!);
     return accepted(engine.retry(id), () => acceptedRun(id));
   });
 
   route("POST", "/v1/runs/:id/resume", "write", async ({ params }) => {
-    const id = params.id!;
+    const id = runId(params.id!);
     // SPEC 4.7: resume is for a run whose status is still `running`. The engine's drive loop is
     // harmless on a finished run, so the route says so rather than pretending to restart it.
     const record = await requiredRun(id);
@@ -220,7 +220,7 @@ export function createApi(deps: ApiDependencies): Api {
   });
 
   route("GET", "/v1/runs/:id/logs/:step/:attempt", "read", async ({ params, url }) => {
-    const id = params.id!;
+    const id = runId(params.id!);
     const stepId = params.step!;
     const attempt = parseIntegerParam("attempt", params.attempt!, 1);
     const offset = parseIntegerParam("offset", url.searchParams.get("offset") ?? "0", 0);
@@ -317,7 +317,7 @@ export function createApi(deps: ApiDependencies): Api {
   }
 
   async function requiredRun(id: string): Promise<RunRecord> {
-    const record = await engine.getRun(id);
+    const record = await engine.getRun(runId(id));
     if (record === null) throw new ApiError("run_not_found", `run "${id}" does not exist`);
     return record;
   }
@@ -382,6 +382,15 @@ function pipelineRecord(record: PipelineRecord, withBody = true) {
     created_at: record.createdAt,
   };
   return withBody ? { ...meta, yaml: record.yaml, parsed: record.parsed } : meta;
+}
+
+// SPEC 4.2 fixes what a run id looks like, and the engine joins one straight into a path. Checking
+// the shape here is what keeps a URL from naming a directory outside the run directory.
+const RUN_ID_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
+
+function runId(value: string): string {
+  if (!RUN_ID_RE.test(value)) throw new ApiError("run_not_found", `"${value}" is not a run id`);
+  return value;
 }
 
 function blockName(value: string): string {
