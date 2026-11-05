@@ -20,9 +20,31 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      # SPEC 2.6 makes uv part of the runtime contract, and GitHub's ubuntu runners do not ship it.
+      - uses: astral-sh/setup-uv@v10
+        with:
+          # Blocks pin their Python dependencies inline (SPEC 2.7), so there is no lockfile in this
+          # repo for the action to key a cache on. Say so rather than let it miss every run.
+          enable-cache: false
       - run: bun install --frozen-lockfile
       - run: bun run lint
       - run: bun run typecheck
+      # An engine checks this exact list at startup and refuses to start without it (SPEC 2.6), so a
+      # runner image that drops one makes every engine test fail for a reason the log should name.
+      # `cat`, `mv` and `wc` stand in for coreutils, the same way the engine's check does.
+      - name: The runtimes a block may use are on PATH
+        run: |
+          missing=()
+          for tool in bash uv bun awk curl grep gzip jq sed tar cat mv wc; do
+            command -v "$tool" > /dev/null || missing+=("$tool")
+          done
+          if (( ${#missing[@]} )); then
+            echo "runtime_missing: missing on PATH: ${missing[*]}" >&2
+            exit 1
+          fi
+          bash --version | head -1
+          uv --version
+          bun --version
       - run: bun run test
       - run: bun run build
 
@@ -45,3 +67,10 @@ jobs:
           test "$status" = 501
 
           test "$(docker exec app id -u)" = 10001
+
+          # The image is what production runs, and an engine inside it refuses to start unless all of
+          # these resolve on PATH (SPEC 2.6). Busybox covers awk, grep, gzip, sed, tar and coreutils;
+          # bash, curl, jq and uv have to come from the runtime stage.
+          docker exec app sh -c 'for t in bash uv bun awk curl grep gzip jq sed tar cat mv wc; do command -v "$t" > /dev/null || { echo "runtime_missing: missing on PATH: $t"; exit 1; }; done'
+          # Resolving on PATH is not enough: a binary that cannot link is on PATH and useless.
+          docker exec app sh -c 'uv --version && jq --version && bun --version'
