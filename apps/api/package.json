@@ -4,7 +4,11 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@bashreactor/core": "workspace:*" },
+  "dependencies": {
+    "@bashreactor/core": "workspace:*",
+    "@bashreactor/engine": "workspace:*",
+    "@bashreactor/store": "workspace:*"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc -p ."
