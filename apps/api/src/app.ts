@@ -148,14 +148,14 @@ export function createApi(deps: ApiDependencies): Api {
 
     const issues = stagedValidation(yaml);
     if (issues.length > 0) throw firstIssueAsError(issues, `${name}.yaml`);
-    const declared = parsePipeline(yaml).name;
-    if (declared !== name) {
-      throw new ApiError("pipeline_schema_invalid", `the file declares "${declared}", not "${name}"`, {
+    const pipeline = parsePipeline(yaml);
+    if (pipeline.name !== name) {
+      throw new ApiError("pipeline_schema_invalid", `the file declares "${pipeline.name}", not "${name}"`, {
         path: "name",
         file: `${name}.yaml`,
       });
     }
-    return json(201, pipelineRecord(store.savePipeline({ name, yaml, parsed: parsePipeline(yaml) })));
+    return json(201, pipelineRecord(store.savePipeline({ name, yaml, parsed: pipeline })));
   });
 
   // --- runs ----------------------------------------------------------------
