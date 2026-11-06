@@ -55,6 +55,8 @@ const site = Bun.serve({
     if (pathname === "/v1/embeddings") {
       embedCalls += 1;
       authHeaders.push(request.headers.get("authorization"));
+      // What a CDN in front of a real gateway does to a bare urllib.
+      if (request.headers.get("user-agent")?.startsWith("Python-urllib")) return new Response("blocked", { status: 403 });
       if (embedCalls === failEmbedCall) return new Response("boom", { status: 500 });
       const body = (await request.json()) as { model: string; input: string[] };
       embeddedTexts.push(...body.input);

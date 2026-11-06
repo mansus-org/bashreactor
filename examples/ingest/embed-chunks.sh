@@ -82,7 +82,8 @@ def cache_path(chunk):
 
 
 def embed(texts):
-    headers = {"content-type": "application/json"}
+    # Gateways behind a CDN refuse urllib's default agent with a 403, so say who is asking.
+    headers = {"content-type": "application/json", "user-agent": "bashreactor-ingest/1.0"}
     if key:
         headers["authorization"] = f"Bearer {key}"
     request = urllib.request.Request(endpoint, data=json.dumps({"model": model, "input": texts}).encode(), headers=headers)

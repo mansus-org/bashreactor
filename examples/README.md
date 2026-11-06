@@ -674,3 +674,8 @@ deleting its directory; nothing else is keeping an index of them.
 - Artifacts over HTTP. There is no route for them: nothing publishes run files into the store yet, so a
   route would answer empty. Step 6 reads them off the disk instead, which is where they are.
 - A list of every block or pipeline, on any surface. See step 3.
+
+## A pipeline of your own: ingesting URLs
+
+[`ingest/`](ingest/README.md) is a second example that does real work: it reads web pages, chunks and
+embeds them, and writes a JSONL file for whatever consumes embeddings next.
