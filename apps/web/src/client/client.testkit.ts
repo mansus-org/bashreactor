@@ -171,8 +171,16 @@ export class FakeElement {
     return name === "class" ? this.className : (this.attrs.get(name) ?? null);
   }
 
-  addEventListener(): void {
-    // Handlers are wired but never fired here: these tests paint a screen, they do not click it.
+  private listeners = new Map<string, ((event: unknown) => void)[]>();
+  open = false;
+
+  addEventListener(type: string, handler: (event: unknown) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler]);
+  }
+
+  /** What the browser does when a person types, ticks or submits: run the handlers wired for it. */
+  fire(type: string, event: Record<string, unknown> = {}): void {
+    for (const handler of this.listeners.get(type) ?? []) handler({ target: this, preventDefault(): void {}, ...event });
   }
 
   append(...nodes: (FakeElement | string)[]): void {
@@ -231,7 +239,13 @@ export class FakeElement {
 
   focus(): void {}
 
-  showModal(): void {}
+  showModal(): void {
+    this.open = true;
+  }
+
+  close(): void {
+    this.open = false;
+  }
 
   // The measured box, from the inline styles the layout just set. A node is absolutely positioned
   // inside the canvas; anything else sits at a fixed offset inside its parent, which is enough for
