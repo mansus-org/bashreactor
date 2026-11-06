@@ -6,8 +6,8 @@
 import { api, ApiError, canWrite } from "./api.js";
 import { announce, duration, el, errorBox, fill, flash, sign, stateLine, stateStamp, when } from "./dom.js";
 import type { State } from "./dom.js";
-import { emptyLog, feedLog, logLines } from "./logs.js";
-import type { LogState } from "./logs.js";
+import { MAX_DRAWN_LINES, clipLine, emptyLog, feedLog, logLines } from "./logs.js";
+import type { LogLine, LogState } from "./logs.js";
 import type { Route } from "./app.js";
 import { navigate } from "./app.js";
 import type { Attempt, LogChunk, Run, RunStep, RunSummary } from "./api.js";
@@ -122,6 +122,16 @@ function runRow(run: RunSummary): HTMLElement {
   );
 }
 
+function lineNode(line: LogLine): HTMLElement {
+  const clipped = clipLine(line.text);
+  return el(
+    "li",
+    { class: "log__line" },
+    el("span", { class: "log__offset" }, String(line.offset)),
+    el("span", { class: "log__text" }, clipped === "" ? " " : clipped),
+  );
+}
+
 function attemptsOf(run_: Run, step: string): number[] {
   return (run_.steps[step]?.attempts ?? []).map((entry) => entry.n);
 }
@@ -169,7 +179,15 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   let paused = false;
   let busy = false;
   let programmaticScroll = false;
+  // Finished lines of `log` that have been handled by renderLog, and how many of those were not drawn.
   let shown = 0;
+  let notDrawn = 0;
+  // The node showing the unfinished last line, which has to be replaced when more of that line arrives.
+  let partialNode: HTMLElement | null = null;
+  // Bumped when the log is pointed somewhere else, so a read loop still in flight lets go of it.
+  let readGeneration = 0;
+  let reading: Promise<void> | null = null;
+  let readingKey = "";
   let timer: number | undefined;
 
   const title = el("h1", { class: "title" });
@@ -186,11 +204,12 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   const followButton = el("button", { class: "btn", type: "button", "aria-pressed": "true", onclick: toggleFollow }, "Follow");
   const pauseButton = el("button", { class: "btn", type: "button", onclick: togglePause }, "Pause");
   const logStatus = el("p", { class: "logpanel__status", id: "log-status" });
+  const logNote = el("p", { class: "logpanel__meta", id: "log-note", hidden: true });
   const logLinesNode = el("ol", { class: "log__lines" });
   // role=log would read every line aloud; the step's state change is announced on its own instead.
   const logBox = el(
     "div",
-    { class: "log", tabindex: "0", "aria-label": "Log output. Arrow keys scroll it.", "aria-live": "off", "aria-describedby": "log-status" },
+    { class: "log", tabindex: "0", "aria-label": "Log output. Arrow keys scroll it.", "aria-live": "off", "aria-describedby": "log-status log-note" },
     logLinesNode,
   );
 
@@ -228,6 +247,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       panelMeta,
       attemptPicker,
       panelOutputs,
+      logNote,
       logBox,
     )),
     cancelDialog,
@@ -433,16 +453,13 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     if (attempts.length === 0) logStatus.textContent = "Not started.";
     else if (paused) logStatus.textContent = `Paused. Last read at byte ${log.offset}.`;
     else if (run.status === "running" && step.status === "running") logStatus.textContent = `Reading from byte ${log.offset}.`;
-    else if (log.truncated) logStatus.textContent = "The server cut its answer at 1 MB; what came after is not shown.";
+    else if (log.truncated) logStatus.textContent = `Read to byte ${log.offset}; more of the log is waiting.`;
     else logStatus.textContent = `Read to byte ${log.offset}.`;
   }
 
   function renderLog(reset: boolean): void {
     const lines = logLines(log);
-    if (reset) {
-      logLinesNode.replaceChildren();
-      shown = 0;
-    }
+    if (reset) shown = 0;
     if (lines.length === 0) {
       const step = run.steps[selected];
       const message =
@@ -454,21 +471,44 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
               ? `${selected} was cancelled before it printed anything.`
               : "Waiting for the first line.";
       logLinesNode.replaceChildren(el("li", { class: "log__empty" }, message));
+      logNote.hidden = true;
       shown = 0;
+      notDrawn = 0;
+      partialNode = null;
       return;
     }
-    if (shown === 0) logLinesNode.replaceChildren();
-    for (const line of lines.slice(shown)) {
-      logLinesNode.append(
-        el(
-          "li",
-          { class: "log__line" },
-          el("span", { class: "log__offset" }, String(line.offset)),
-          el("span", { class: "log__text" }, line.text === "" ? " " : line.text),
-        ),
-      );
+    if (shown === 0) {
+      logLinesNode.replaceChildren();
+      notDrawn = 0;
+      partialNode = null;
     }
-    shown = lines.length;
+    // The unfinished line is drawn again each time, because more of it may have arrived.
+    partialNode?.remove();
+    partialNode = null;
+
+    // A log of many megabytes must not become hundreds of thousands of nodes: only the last
+    // MAX_DRAWN_LINES are kept, and the note above the pane says how many are not.
+    const fresh = log.lines.slice(shown);
+    const drawn = fresh.slice(-MAX_DRAWN_LINES);
+    notDrawn += fresh.length - drawn.length;
+    for (const line of drawn) logLinesNode.append(lineNode(line));
+    shown = log.lines.length;
+    if (log.partial !== "") {
+      partialNode = lineNode({ offset: log.partialOffset, text: log.partial });
+      logLinesNode.append(partialNode);
+    }
+    while (logLinesNode.childElementCount > MAX_DRAWN_LINES) {
+      logLinesNode.firstElementChild?.remove();
+      notDrawn += 1;
+    }
+
+    const first = log.lines[notDrawn];
+    logNote.hidden = notDrawn === 0;
+    if (notDrawn > 0) {
+      logNote.textContent =
+        `Drawing the last ${MAX_DRAWN_LINES} lines. The first ${notDrawn} lines, bytes 0 to ${first?.offset ?? log.partialOffset}, are not drawn; ` +
+        `read them with bashreactor runs logs ${run.id} ${selected}.`;
+    }
     if (follow) scrollToEnd();
     else if (reset) logBox.scrollTop = 0;
   }
@@ -523,15 +563,44 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     renderPanel();
   }
 
-  async function readLog(reset: boolean): Promise<void> {
-    if (paused || attempt === 0) return;
+  // One read is one capped chunk, so the pane reads on while the server says there is more: a finished
+  // run stops polling, and its tail would otherwise never arrive. Only one loop runs at a time, because
+  // two readers from the same offset would hand feedLog chunks that are not where it left off.
+  function readLog(reset: boolean): Promise<void> {
+    if (paused || attempt === 0) return Promise.resolve();
+    const key = `${selected}/${attempt}`;
+    // A loop reading another attempt's log has nothing to give this one.
+    if (reset || key !== readingKey) {
+      readGeneration += 1;
+      reading = null;
+    } else if (reading !== null) {
+      return reading;
+    }
+    const mine = readGeneration;
+    readingKey = key;
+    const loop = readUntilEnd(reset, mine, key).finally(() => {
+      if (reading === loop) reading = null;
+    });
+    reading = loop;
+    return loop;
+  }
+
+  async function readUntilEnd(reset: boolean, generation: number, key: string): Promise<void> {
+    let first = reset;
     try {
-      const chunk: LogChunk = await api.log(run.id, selected, attempt, reset ? 0 : log.offset);
-      if (signal.aborted) return;
-      log = feedLog(reset ? emptyLog : log, chunk);
-      renderLog(reset);
+      for (;;) {
+        const chunk: LogChunk = await api.log(run.id, selected, attempt, first ? 0 : log.offset);
+        if (signal.aborted || generation !== readGeneration || key !== `${selected}/${attempt}`) return;
+        log = feedLog(first ? emptyLog : log, chunk);
+        renderLog(first);
+        first = false;
+        if (!chunk.truncated || paused) break;
+        // Let the browser paint and take input between megabytes.
+        await new Promise((done) => setTimeout(done, 0));
+      }
+      renderPanel();
     } catch (error) {
-      if (signal.aborted) return;
+      if (signal.aborted || generation !== readGeneration) return;
       // A log that is not there is an honest empty pane, not a stack of banners.
       if (error instanceof ApiError && (error.code === "attempt_not_found" || error.code === "step_not_found")) {
         log = emptyLog;

@@ -65,3 +65,14 @@ export function feedLog(state: LogState, chunk: LogChunk): LogState {
 export function logLines(state: LogState): LogLine[] {
   return state.partial === "" ? state.lines : [...state.lines, { offset: state.partialOffset, text: state.partial }];
 }
+
+/** How many lines the pane keeps drawn; a log of megabytes is read in full but not all of it is painted. */
+export const MAX_DRAWN_LINES = 2000;
+/** How much of one line is painted. A single 3 MB line would freeze layout as surely as 100 000 lines. */
+export const MAX_LINE_CHARS = 10_000;
+
+/** The part of a line that is drawn, ending in a plain statement of how much is not. */
+export function clipLine(text: string): string {
+  if (text.length <= MAX_LINE_CHARS) return text;
+  return `${text.slice(0, MAX_LINE_CHARS)} [… ${text.length - MAX_LINE_CHARS} more characters not drawn]`;
+}
