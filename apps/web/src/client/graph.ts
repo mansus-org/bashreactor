@@ -42,6 +42,17 @@ function wirePath(svg: SVGSVGElement, d: string, edge: { from: string; to: strin
   svg.append(path);
 }
 
+// A port only exists once the block's contract has been read, and the contract is the API's, so the
+// first paint of a stored pipeline has wires whose ends are ports nothing has named yet. The
+// reference is still real and the wire still has to show, so it meets the step's own edge instead —
+// which is where a `needs` wire meets it anyway.
+function nodeEdge(node: HTMLElement, side: "in" | "out"): { x: number; y: number } {
+  return {
+    x: side === "out" ? Math.round(node.offsetLeft + node.offsetWidth) : node.offsetLeft,
+    y: node.offsetTop + 22,
+  };
+}
+
 export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: string, from: "graph") => void }): Graph {
   let analysis: Analysis | null = null;
   let selected: string | null = null;
@@ -158,6 +169,11 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       const r = element.getBoundingClientRect();
       return { x: Math.round(r.left + r.width / 2 - box.left), y: Math.round(r.top + r.height / 2 - box.top) };
     };
+    // Where each end of a wire sits: on its port when the contract has named one, on the step otherwise.
+    const portAt = (node: HTMLElement, selector: string, side: "in" | "out") => {
+      const mark = node.querySelector(selector);
+      return mark !== null ? centre(mark) : nodeEdge(node, side);
+    };
     // Wires that share a source output share a track, which reads as one line branching.
     const tracks: Record<string, string[]> = {};
     const trackIn = (gap: string, key: string) => {
@@ -184,12 +200,12 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       const toLayer = model.byId[edge.to]!.layer;
       const a =
         edge.kind === "data"
-          ? centre(fromNode.querySelector(`.port--out[data-name="${CSS.escape(edge.out ?? "")}"] .port__mark`)!)
-          : { x: Math.round(fromNode.offsetLeft + fromNode.offsetWidth), y: fromNode.offsetTop + 22 };
+          ? portAt(fromNode, `.port--out[data-name="${CSS.escape(edge.out ?? "")}"] .port__mark`, "out")
+          : nodeEdge(fromNode, "out");
       const b =
         edge.kind === "data"
-          ? centre(toNode.querySelector(`.port--in[data-name="${CSS.escape(edge.in ?? "")}"] .port__mark`)!)
-          : { x: Math.round(toNode.offsetLeft), y: toNode.offsetTop + 22 };
+          ? portAt(toNode, `.port--in[data-name="${CSS.escape(edge.in ?? "")}"] .port__mark`, "in")
+          : nodeEdge(toNode, "in");
       const mid = trackX(fromLayer, key);
       if (toLayer - fromLayer === 1) {
         wirePath(svg, `M${a.x} ${a.y}H${mid}V${b.y}H${b.x}`, edge);
@@ -243,17 +259,23 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       const r = element.getBoundingClientRect();
       return Math.round(r.top + r.height / 2 - box.top);
     };
+    // Same as in the flow layout, one axis: the lane a wire runs down is set by its endpoints, not by
+    // where they attach, so a wire without ports keeps the same lane.
+    const portY = (node: HTMLElement, selector: string) => {
+      const mark = node.querySelector(selector);
+      return mark !== null ? centreY(mark) : node.offsetTop + 22;
+    };
     for (const edge of model.edges) {
       const key = `${edge.from}:${edge.out ?? edge.to}`;
       const fromNode = canvas.querySelector<HTMLElement>(`[data-step="${CSS.escape(edge.from)}"]`)!;
       const toNode = canvas.querySelector<HTMLElement>(`[data-step="${CSS.escape(edge.to)}"]`)!;
       const fromY =
         edge.kind === "data"
-          ? centreY(fromNode.querySelector(`.port--out[data-name="${CSS.escape(edge.out ?? "")}"] .port__mark`)!)
+          ? portY(fromNode, `.port--out[data-name="${CSS.escape(edge.out ?? "")}"] .port__mark`)
           : fromNode.offsetTop + 22;
       const toY =
         edge.kind === "data"
-          ? centreY(toNode.querySelector(`.port--in[data-name="${CSS.escape(edge.in ?? "")}"] .port__mark`)!)
+          ? portY(toNode, `.port--in[data-name="${CSS.escape(edge.in ?? "")}"] .port__mark`)
           : toNode.offsetTop + 22;
       const x = LANE + laneOf[key]! * LANE;
       wirePath(svg, `M${left} ${fromY}H${x}V${toY}H${left}`, edge);
