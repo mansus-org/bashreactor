@@ -310,6 +310,34 @@ class FakeStorage {
   }
 }
 
+/** What a test needs to see: that a graph stopped watching its stage when its screen went away. */
+export interface ObservedStage {
+  targets: number;
+  disconnected: boolean;
+}
+
+const stages: ObservedStage[] = [];
+
+export const observedStages = (): ObservedStage[] => stages;
+
+class FakeResizeObserver {
+  private readonly record: ObservedStage = { targets: 0, disconnected: false };
+
+  constructor() {
+    stages.push(this.record);
+  }
+
+  observe(target: unknown): void {
+    if (target !== undefined) this.record.targets += 1;
+  }
+
+  unobserve(): void {}
+
+  disconnect(): void {
+    this.record.disconnected = true;
+  }
+}
+
 export interface InstalledDom {
   document: FakeDocument;
   /** The browser globals this put in place, so a test can put them back. */
@@ -358,11 +386,7 @@ export function installDom(options: { href?: string } = {}): InstalledDom {
   install("sessionStorage", new FakeStorage());
   install("getComputedStyle", () => ({ lineHeight: "24px" }));
   install("CSS", { escape: escapeSelector });
-  install("ResizeObserver", class {
-    observe(): void {}
-    unobserve(): void {}
-    disconnect(): void {}
-  });
+  install("ResizeObserver", FakeResizeObserver);
 
   return { document: doc, names };
 }

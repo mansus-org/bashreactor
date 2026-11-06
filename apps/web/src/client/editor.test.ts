@@ -6,10 +6,11 @@
 // serves. The DOM is the stand-in in client.testkit.ts; the API is a `fetch` that answers the same
 // routes with the shapes apps/api answers, and records the paths it was asked for.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { blockSource, decls, installDom, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
+import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
+import type { Route } from "./app.ts";
 
 const dom = installDom({ href: "http://x/app/pipeline/word-report" });
 const served = serveModules(["app", "api", "dom", "yaml", "model", "graph", "editor", "runs", "blocks", "logs"]);
@@ -86,6 +87,29 @@ const json = (data: unknown, status = 200): Response =>
 const calls: string[] = [];
 let storedYaml = PINNED;
 
+/** A held door, for the tests that need an answer to arrive after the reader has already left. */
+class Gate {
+  readonly held: Promise<void>;
+  release!: () => void;
+
+  constructor() {
+    this.held = new Promise<void>((resolve) => {
+      this.release = resolve;
+    });
+  }
+}
+
+/** A gate nobody is holding: the answer goes straight through. */
+function openGate(): Gate {
+  const opened = new Gate();
+  opened.release();
+  return opened;
+}
+
+let blockGate = openGate();
+let pipelineGate = openGate();
+let refusePipeline = false;
+
 /** The routes the editor uses, answered the way apps/api answers them. */
 async function answer(href: string): Promise<Response> {
   const path = new URL(href).pathname;
@@ -94,6 +118,8 @@ async function answer(href: string): Promise<Response> {
   if (parts[0] !== "v1") return json({ code: "not_found", message: `no route ${path}` }, 404);
 
   if (parts[1] === "pipelines" && parts[2] === "word-report") {
+    await pipelineGate.held;
+    if (refusePipeline) return json({ code: "pipeline_not_found", message: `pipeline "word-report" has no versions` }, 404);
     if (parts.length === 3) return json({ name: "word-report", latest: 2, versions: [meta("word-report", 1), meta("word-report", 2)] });
     return json({ ...meta("word-report", parts[3] === "latest" ? 2 : Number(parts[3])), yaml: storedYaml, parsed: {} });
   }
@@ -105,6 +131,7 @@ async function answer(href: string): Promise<Response> {
     if (parts.length === 3) return json({ name: parts[2], latest, versions: Object.keys(versions).map((v) => meta(parts[2]!, Number(v))) });
     const version = parts[3] === "latest" ? latest : Number(parts[3]);
     if (parts[4] === "content") {
+      await blockGate.held;
       const source = versions[version];
       if (source === undefined) return json({ code: "block_not_found", message: `no version ${version}` }, 404);
       return new Response(source, { headers: { "content-type": "text/plain; charset=utf-8", "x-block-sha256": "x" } });
@@ -124,12 +151,26 @@ const settle = async (): Promise<void> => {
   for (let i = 0; i < 30; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-async function open(yaml: string): Promise<FakeElement> {
+const route: Route = { path: "/pipeline/word-report", parts: ["pipeline", "word-report"], query: new URLSearchParams() };
+
+/** What the router does between two screens: paint the next one into the same `view`. */
+function navigateAway(view: FakeElement, title: string): void {
+  view.replaceChildren(dom.document.createElement("p"));
+  dom.document.title = title;
+}
+
+beforeEach(() => {
+  blockGate = openGate();
+  pipelineGate = openGate();
+  refusePipeline = false;
+});
+
+async function open(yaml: string, signal: AbortSignal = new AbortController().signal): Promise<FakeElement> {
   storedYaml = yaml;
   calls.length = 0;
   session.identity = { name: "test", scope: "admin", admin: true };
   const view = dom.document.createElement("div");
-  renderPipeline(view as unknown as HTMLElement, { path: "/pipeline/word-report", parts: ["pipeline", "word-report"], query: new URLSearchParams() });
+  renderPipeline(view as unknown as HTMLElement, route, signal);
   await settle();
   return view;
 }
@@ -188,5 +229,53 @@ describe("opening a stored pipeline", () => {
     expect(view.querySelectorAll(".node").length).toBe(1);
     expect(view.querySelectorAll(".node__problem").length).toBe(1);
     expect(button(view, "Save version")?.disabled).toBe(true);
+  });
+});
+
+// The router aborts the signal it hands a screen the moment the reader moves on, and the next screen
+// is painted into the same `view`. Anything the pipeline screen answers with after that belongs to
+// nobody: it would overwrite the title and land its error card on a screen that is not its own.
+
+describe("leaving the pipeline screen", () => {
+  test("drops a library answer that arrives after the reader has gone", async () => {
+    const controller = new AbortController();
+    blockGate = new Gate();
+    const view = await open(PINNED, controller.signal);
+    expect(view.querySelectorAll(".port--out").length).toBe(0);
+
+    controller.abort();
+    navigateAway(view, "Runs — Bashreactor");
+    blockGate.release();
+    await settle();
+
+    expect(dom.document.title).toBe("Runs — Bashreactor");
+    expect(view.querySelectorAll(".node").length).toBe(0);
+    expect(view.querySelectorAll(".state--error").length).toBe(0);
+  });
+
+  test("drops an open that fails after the reader has gone", async () => {
+    const controller = new AbortController();
+    pipelineGate = new Gate();
+    const view = await open(PINNED, controller.signal);
+
+    controller.abort();
+    navigateAway(view, "Runs — Bashreactor");
+    refusePipeline = true;
+    pipelineGate.release();
+    await settle();
+
+    expect(dom.document.title).toBe("Runs — Bashreactor");
+    expect(view.querySelectorAll(".state--error").length).toBe(0);
+  });
+
+  test("stops watching the stage when the screen goes away", async () => {
+    const controller = new AbortController();
+    const observers = observedStages().length;
+    await open(PINNED, controller.signal);
+    expect(observedStages()[observers]).toEqual({ targets: 1, disconnected: false });
+
+    controller.abort();
+
+    expect(observedStages()[observers]?.disconnected).toBe(true);
   });
 });

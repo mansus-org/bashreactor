@@ -86,7 +86,7 @@ function coerce(raw: string): string | number {
   return /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : raw;
 }
 
-export function renderPipeline(view: HTMLElement, route: Route): void {
+export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSignal): void {
   let text = BLANK;
   let analysis: Read = analyze(BLANK, {});
   let lastGood: Analysis | null = null;
@@ -104,6 +104,11 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
   let flashed: Record<string, string> = {};
   let flashTimer: number | undefined;
   let busy = false;
+
+  // The router aborts this signal the moment the reader moves on, and everything that comes back
+  // afterwards has to be dropped: this screen writes the document title, and `view` belongs to
+  // whoever is on screen now.
+  const gone = (): boolean => signal.aborted;
 
 
   // ---------- skeleton ----------
@@ -175,6 +180,10 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
   const addDialog = el("dialog", { class: "dialog", "aria-labelledby": "add-title" });
 
   const graph: Graph = createGraph(stage, { onSelect: (id) => select(id, "graph") });
+  signal.addEventListener("abort", () => {
+    window.clearTimeout(flashTimer);
+    graph.destroy();
+  });
 
   view.replaceChildren(
     el(
@@ -363,13 +372,16 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       try {
         const list = await api.blocks(name);
         const version = versionText === "" ? list.latest : Number(versionText);
+        if (gone()) return;
         const entry = library[name] ?? { name, versions: [] };
         if (!entry.versions.some((known) => known.version === version)) {
           const content = await api.blockContent(name, version);
+          if (gone()) return;
           entry.versions = [...entry.versions, { version, source: content.text }].toSorted((a, b) => a.version - b.version);
         }
         library = { ...library, [name]: entry };
       } catch (error) {
+        if (gone()) return;
         // A block the library does not have stays unfetched: the analysis already says so, and a
         // retry on the next keystroke would be the same answer.
         if (error instanceof ApiError && error.status === 404) continue;
@@ -382,7 +394,13 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
         if (analysis.ok) lastGood = analysis;
       }
     }
-    render("library");
+    if (gone()) return;
+    try {
+      render("library");
+    } catch (error) {
+      // Repainting is this screen's own work, and a rejected promise nobody awaits is not a message.
+      view.prepend(errorBox({ code: "internal_error", message: error instanceof Error ? error.message : String(error) }));
+    }
   }
 
   // ---------- the YAML pane ----------
@@ -767,8 +785,10 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
     status.textContent = `Opening ${name}.`;
     try {
       const list = await api.pipelines(name);
+      if (gone()) return;
       const wanted = version === "latest" ? list.latest : version;
       const record = await api.pipelineVersion(name, wanted);
+      if (gone()) return;
       openName = name;
       openVersion = wanted;
       versions = list.versions.map((entry) => ({ version: entry.version, created_at: entry.created_at }));
@@ -784,6 +804,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       setText(record.yaml, { source: "load" });
       announce(`${name} version ${wanted} opened.`);
     } catch (error) {
+      if (gone()) return;
       versionSelect.hidden = true;
       view.prepend(
         errorBox(error instanceof ApiError ? error : { code: "internal_error", message: String(error) }, el("a", { class: "btn", href: "/app/", "data-link": "" }, "The entry page")),
@@ -800,16 +821,18 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
     status.textContent = "Asking the API.";
     try {
       const report = await api.validate(text);
+      if (gone()) return;
       issues = report.issues.map((issue) => ({ issue, line: lineOfPath(issue.path ?? "") }));
       validated = true;
       render("validate");
       status.textContent = report.valid ? "The API says this document is valid." : `The API found ${report.issues.length} ${report.issues.length === 1 ? "issue" : "issues"}.`;
       announce(report.valid ? "Valid." : `The API found ${report.issues.length} problems.`);
     } catch (error) {
+      if (gone()) return;
       status.textContent = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
     } finally {
       busy = false;
-      render("validate");
+      if (!gone()) render("validate");
     }
   }
 
@@ -822,10 +845,12 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
     status.textContent = `Storing ${name}.`;
     try {
       const record = await api.savePipeline(name, text);
+      if (gone()) return;
       openName = name;
       openVersion = record.version;
       saved = true;
       const list = await api.pipelines(name);
+      if (gone()) return;
       versions = list.versions.map((entry) => ({ version: entry.version, created_at: entry.created_at }));
       versionSelect.hidden = false;
       versionSelect.replaceChildren(
@@ -837,6 +862,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       announce(`${name} stored as version ${record.version}.`);
       navigate(`/pipeline/${name}/${record.version}`, { replace: true });
     } catch (error) {
+      if (gone()) return;
       // A pipeline that does not validate is a 422 with its first issue, which is the same object the
       // problems pane lists: show it where it belongs rather than in a banner that says "failed".
       if (error instanceof ApiError && error.status === 422) {
@@ -848,7 +874,7 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
       }
     } finally {
       busy = false;
-      render("save");
+      if (!gone()) render("save");
     }
   }
 
@@ -1002,9 +1028,11 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
     try {
       const body = saved && openName !== null ? { pipeline: openName, version: openVersion === "latest" ? undefined : openVersion, inputs } : { yaml: text, inputs };
       const run = await api.startRun(body);
+      if (gone()) return;
       announce(`Run ${run.id} started.`);
       navigate(`/runs/${run.id}`);
     } catch (error) {
+      if (gone()) return;
       busy = false;
       status.textContent = "";
       startDialog.replaceChildren(

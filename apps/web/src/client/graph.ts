@@ -22,6 +22,8 @@ export interface Graph {
   select(id: string | null): void;
   flash(ids: string[]): void;
   focus(id: string): void;
+  /** Stop watching the stage. The screen that made this graph owns that duty when it goes away. */
+  destroy(): void;
 }
 
 function port(direction: "in" | "out", item: { name: string; source?: { refs: unknown[] } }): HTMLElement {
@@ -351,9 +353,10 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     if (target2 !== null) target2.focus();
   });
 
-  new ResizeObserver(() => {
+  const observer = new ResizeObserver(() => {
     if (stage.clientWidth !== width) draw();
-  }).observe(stage);
+  });
+  observer.observe(stage);
 
   return {
     update(next) {
@@ -371,6 +374,9 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     },
     focus(id) {
       stage.querySelector<HTMLElement>(`[data-step="${CSS.escape(id)}"]`)?.focus();
+    },
+    destroy() {
+      observer.disconnect();
     },
   };
 }
