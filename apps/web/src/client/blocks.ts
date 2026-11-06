@@ -113,7 +113,8 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
     list,
   );
   const detail = el("section", { class: "detail", "aria-labelledby": "detail-title", tabindex: "-1" });
-  view.replaceChildren(...heading(), el("div", { class: "lib" }, listPane, detail));
+  const lib = el("div", { class: "lib" }, listPane, detail);
+  view.replaceChildren(...heading(), lib);
 
   function renderHistory(current: string | null): void {
     const names = history();
@@ -135,6 +136,13 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
   }
 
   const target = route.parts[1];
+
+  // At 980 px and below the two panes take turns instead of sitting side by side, and whose turn it
+  // is is the route's business, not a click's: `/blocks` is the list, anything under it is the block
+  // or the writer that path opened. Read off the route, the class is put back by every render — after
+  // a publish, a version, a sign-in — where a click handler would be gone by the next one.
+  lib.classList.toggle("lib--open", target !== undefined);
+
   if (target === undefined) {
     renderHistory(null);
     detail.replaceChildren(
@@ -175,11 +183,23 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
       detail.replaceChildren(
         el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "No such block"),
         el("p", {}, `The library has nothing called ${name}.`),
-        el("a", { class: "btn", href: "/app/blocks/new", "data-link": "" }, "Write it here"),
+        el(
+          "div",
+          { class: "row" },
+          el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
+          el("a", { class: "btn", href: "/app/blocks/new", "data-link": "" }, "Write it here"),
+        ),
       );
       return;
     }
-    detail.replaceChildren(errorBox(error instanceof ApiError ? error : { code: "internal_error", message: String(error) }));
+    // A refusal is shown in the detail pane, so at phone width it has to be able to get back to the
+    // list the same way an open block can; the error card carries the API's own words untouched.
+    detail.replaceChildren(
+      errorBox(
+        error instanceof ApiError ? error : { code: "internal_error", message: String(error) },
+        el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
+      ),
+    );
   }
 }
 
