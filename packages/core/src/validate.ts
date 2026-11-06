@@ -61,7 +61,8 @@ const RETRY_KEYS = new Set(["max_attempts", "delay", "backoff", "max_delay"]);
 // namespace, not about one spelling of it.
 const RESERVED_ENV_PREFIXES = ["BR_", "INPUT_", "OUTPUT_", "BASHREACTOR_"];
 // What the server reads off its own environment that the prefix does not cover. `PORT` is not a
-// secret, but it is the server's configuration and no step has a right to it.
+// secret, but it is the server's configuration and no step has a right to it. Like the names in
+// RESERVED_ENV_NAMES it is matched exactly, case included.
 const RESERVED_ENV_NAMES_EXTRA = ["PORT"];
 
 // --- public entry points -------------------------------------------------
@@ -632,7 +633,7 @@ function isReservedEnvName(name: string): boolean {
   const upper = name.toUpperCase();
   return (
     RESERVED_ENV_NAMES.includes(name)
-    || RESERVED_ENV_NAMES_EXTRA.includes(upper)
+    || RESERVED_ENV_NAMES_EXTRA.includes(name)
     || RESERVED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))
   );
 }
