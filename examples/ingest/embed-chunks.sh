@@ -15,6 +15,10 @@
 #   model:
 #     type: string
 #     description: The model to ask for.
+#   prefix:
+#     type: string
+#     description: Text put in front of each chunk in the request only (e5 models want passage:). Not stored.
+#     default: ""
 #   batch:
 #     type: integer
 #     description: How many chunks per request.
@@ -34,12 +38,9 @@
 #     description: How many chunks are in embeddings.
 # ---
 
-# The key comes from the engine's environment through pass_env and goes nowhere but the
-# Authorization header: not into a log line, not into a file, not into an error message.
-if [[ -z "${EMBEDDINGS_API_KEY+x}" ]]; then
-  echo "embed-chunks: EMBEDDINGS_API_KEY is not set. Set it (empty if the endpoint needs no key) in the environment of the server that runs this pipeline."
-  exit 78
-fi
+# EMBEDDINGS_API_KEY is optional and comes from the engine's environment (only a pipeline that lists
+# it in pass_env gets it). It goes nowhere but the Authorization header: not into a log line, not into
+# a file, not into an error message.
 
 uv run --quiet --no-project --script - <<'PY'
 # /// script
@@ -56,7 +57,8 @@ import urllib.request
 endpoint = os.environ["INPUT_ENDPOINT"]
 model = os.environ["INPUT_MODEL"]
 batch = int(os.environ["INPUT_BATCH"])
-key = os.environ["EMBEDDINGS_API_KEY"]
+key = os.environ.get("EMBEDDINGS_API_KEY", "")
+prefix = os.environ.get("INPUT_PREFIX", "")
 if batch < 1:
     print(f"embed-chunks: batch must be at least 1, got {batch}")
     raise SystemExit(78)
@@ -72,12 +74,12 @@ if not chunks:
     raise SystemExit(78)
 
 # The work directory is kept across attempts and engine restarts, so an embedding already paid for is
-# never paid for twice (SPEC 4.1). The model is part of the name: another model's vector is not a hit.
+# never paid for twice (SPEC 4.1). The model and the prefix are part of the name: another model's, or another prefix's, vector is not a hit.
 os.makedirs("cache", exist_ok=True)
 
 
 def cache_path(chunk):
-    digest = hashlib.sha256(f"{model}\0{chunk['id']}\0{chunk['text']}".encode()).hexdigest()[:32]
+    digest = hashlib.sha256(f"{model}\0{prefix}\0{chunk['id']}\0{chunk['text']}".encode()).hexdigest()[:32]
     return f"cache/{digest}.json"
 
 
@@ -95,7 +97,10 @@ def embed(texts):
         if error.code in {408, 425, 429} or error.code >= 500:
             print(f"embed-chunks: {route} answered {error.code}, asking to be retried")
             raise SystemExit(75)
-        print(f"embed-chunks: {route} answered {error.code}, which a retry cannot fix (check the key, the model name and the route)")
+        if error.code in {401, 403}:
+            print(f"embed-chunks: {route} answered {error.code}: it wants a key this run did not send or accepts a different one (add pass_env: [EMBEDDINGS_API_KEY] to the embed step and set it on the server)")
+            raise SystemExit(78)
+        print(f"embed-chunks: {route} answered {error.code}, which a retry cannot fix. A chunk longer than the route's token limit is the usual cause: lower chunk_words (Spanish and Portuguese run about 1.5 tokens per word). Otherwise check the model name and the route")
         raise SystemExit(78)
     except (urllib.error.URLError, TimeoutError, ConnectionError, ValueError) as error:
         print(f"embed-chunks: {route} failed ({type(error).__name__}), asking to be retried")
@@ -113,7 +118,7 @@ print(f"embed-chunks: {len(chunks)} chunks, {len(todo)} not yet embedded, model 
 
 for start in range(0, len(todo), batch):
     group = todo[start : start + batch]
-    vectors = embed([chunk["text"] for chunk in group])
+    vectors = embed([prefix + chunk["text"] for chunk in group])
     if len(vectors) != len(group):
         print(f"embed-chunks: asked for {len(group)} vectors, got {len(vectors)}")
         raise SystemExit(75)
@@ -145,6 +150,7 @@ with open(os.environ["INPUT_STATUSES"], encoding="utf-8") as handle:
 manifest = {
     "format": 1,
     "model": model,
+    "prefix": prefix,
     "dim": dim,
     "chunks": len(chunks),
     "urls_ok": sum(1 for s in statuses if s["status"] == "ok"),

@@ -18,11 +18,11 @@ You need `bun`, `uv`, `bash` 5, `curl`, `jq` (SPEC 2.6), and a Python 3.10 or ne
 The blocks use the standard library only, so on Alpine uv fetches a musl Python on first use and no
 wheel is involved.
 
-The key is read from the **server's** environment, never from an input, because inputs are written to
-`run.json`. Start the server with it set, then start a run from another shell:
+The default route is the self-hosted embeddings service in the cluster. It is private and takes no key,
+so it only answers from inside the cluster. Start the server there, then start a run from another
+shell:
 
 ```bash
-export EMBEDDINGS_API_KEY=...            # empty is fine for a route that needs no key
 bash examples/serve.sh                   # prints the URL and token it listens with
 
 export BASHREACTOR_URL=http://127.0.0.1:8080 BASHREACTOR_TOKEN=br_demo_admin
@@ -33,8 +33,21 @@ bun apps/cli/src/bin.ts runs start examples/ingest/ingest-urls.yaml --wait \
 The files are in the run directory, under `steps/embed/attempts/<n>/outputs/`, and `runs get <id>`
 prints their paths as the run's `embeddings` and `manifest` outputs.
 
-If the variable is unset the server refuses the run before it creates anything: `env_missing`, naming
-`EMBEDDINGS_API_KEY`. The block checks too and exits 78, in case it is started some other way.
+**A keyed route.** Point `endpoint` and `model` at it, set `prefix` to what that model wants (empty
+for none), add `pass_env: [EMBEDDINGS_API_KEY]` to the `embed` step in `ingest-urls.yaml`, and start
+the server with `EMBEDDINGS_API_KEY` set. The key is read from the **server's** environment, never
+from an input, because inputs are written to `run.json`. With `pass_env` listed and the variable
+unset, the server refuses the run with `env_missing`. Without a key the block sends no
+`Authorization` header, and a 401 or 403 from the route exits 78.
+
+**Prefix and search.** e5 models are trained with a role prefix: `passage: ` on documents and
+`query: ` on searches. The pipeline sends `prefix` in front of each chunk to the route, but the stored
+`text` does not have it. Whoever searches the file must embed the question with the matching prefix
+(`query: ` for `passage: `); the manifest records the one that was used.
+
+**Chunk size.** The default route takes 512 tokens per input. At 120 words a chunk, Spanish and
+Portuguese (about 1.5 tokens per word) come to about 180 tokens, well inside it. If a chunk goes over,
+the route answers 4xx and `embed` exits 78 telling you to lower `chunk_words`.
 
 ## Inputs
 
@@ -43,8 +56,9 @@ If the variable is unset the server refuses the run before it creates anything: 
 | `urls` | required | One URL per line. Blank lines and lines starting with `#` are ignored; repeats are dropped. A `string` is capped at 64 KiB by SPEC 1.2, which is several hundred URLs. |
 | `chunk_words` | `120` | Words per chunk. |
 | `overlap` | `24` | How many of a chunk's last words open the next one. Must be below `chunk_words`. |
-| `endpoint` | `https://litellm.cloudpunk.org/v1/embeddings` | Any OpenAI-compatible embeddings route. |
-| `model` | `text-embedding-3-small` | 1536 dimensions. |
+| `endpoint` | `http://embeddings.embeddings.svc.cluster.local:8080/v1/embeddings` | Any OpenAI-compatible embeddings route. |
+| `model` | `multilingual-e5-small` | 384 dimensions. |
+| `prefix` | `passage: ` | Put before each chunk in the request only, never stored. Empty works, for a model that takes none. |
 | `batch` | `16` | Chunks per request. |
 
 ## What each page becomes
@@ -64,7 +78,8 @@ If the variable is unset the server refuses the run before it creates anything: 
 | A timeout, a refused connection, 408/425/429, any 5xx | `fetch` reads the rest, then exits 75. The retry fetches only the URLs that are not cached yet. 3 attempts. |
 | Every URL failed | `fetch` exits 78, and its log has one line per URL with the reason. |
 | The embeddings route answers 429 or 5xx, or is unreachable | `embed` exits 75. The retry embeds only the chunks it has no vector for. |
-| The route answers another 4xx (bad key, unknown model) | `embed` exits 78 with the status. The response body is never printed. |
+| The route answers 401 or 403 | `embed` exits 78: it needs a key (see above). The response body is never printed. |
+| The route answers another 4xx (a chunk over the token limit, an unknown model) | `embed` exits 78 with the status and tells you to lower `chunk_words`. |
 
 If a URL keeps failing on the network through all 3 attempts, `fetch` fails and the run stops; the
 URLs read so far are in its work directory, and `runs retry` picks up from them.
@@ -75,7 +90,7 @@ Two files. **`embeddings`** is the data: JSON Lines, UTF-8, one object per chunk
 URLs were given and then chunk order.
 
 ```json
-{"id":"https://www.rfc-editor.org/rfc/rfc2119.txt#0","url":"https://www.rfc-editor.org/rfc/rfc2119.txt","index":0,"text":"Network Working Group S. Bradner ...","model":"text-embedding-3-small","dim":1536,"embedding":[0.0184,0.0702,0.0673,"... 1533 more numbers"]}
+{"id":"https://www.rfc-editor.org/rfc/rfc2119.txt#0","url":"https://www.rfc-editor.org/rfc/rfc2119.txt","index":0,"text":"Network Working Group S. Bradner ...","model":"multilingual-e5-small","dim":384,"embedding":[0.0184,0.0702,0.0673,"... 381 more numbers"]}
 ```
 
 | Field | Type | |
@@ -83,7 +98,7 @@ URLs were given and then chunk order.
 | `id` | string | `<url>#<index>`. The same URL, text and chunk settings give the same id, so upsert on it. |
 | `url` | string | The URL as it was given, not the one after redirects. |
 | `index` | integer | Position of the chunk in its page, from 0. |
-| `text` | string | The chunk, words joined by single spaces. This is what was embedded. |
+| `text` | string | The chunk, words joined by single spaces. What was embedded is this with the manifest's `prefix` in front. |
 | `model` | string | The model that made `embedding`. |
 | `dim` | integer | `embedding.length`. |
 | `embedding` | array of numbers | The vector, as the route returned it. Not normalised: normalise, or use cosine. |
@@ -97,8 +112,9 @@ scanning the data:
 ```json
 {
   "format": 1,
-  "model": "text-embedding-3-small",
-  "dim": 1536,
+  "model": "multilingual-e5-small",
+  "prefix": "passage: ",
+  "dim": 384,
   "chunks": 29,
   "urls_ok": 2,
   "urls_failed": 1,
@@ -126,10 +142,10 @@ that only reads `run.json`.
 
 `ingest.test.ts` runs the real engine against a fake site and a fake embeddings route on localhost, so
 it needs no network and no key. It covers two good URLs and one 404, resuming after an embedding
-failure (each chunk is paid for once), a missing key, an empty key, and a run where every URL fails.
-It also checks that the key text appears in no file of the run directory, and that the nearest chunk
-to a question comes from the page about it.
+failure (each chunk is paid for once), no key meaning no `Authorization` header, an empty prefix, a 401 and a 400 from the route, and a run
+where every URL fails. It also checks that the route receives the prefix while the stored text does
+not have it, and that the nearest chunk to a question comes from the page about it.
 
 ## Not done here
 
-The production pod has no key. How it gets one is a deployment decision, outside this directory.
+Nothing searches the file here, so nothing here embeds a `query: ` yet.

@@ -16,11 +16,15 @@ inputs:
   endpoint:
     type: string
     description: The OpenAI-compatible embeddings route.
-    default: https://litellm.cloudpunk.org/v1/embeddings
+    default: http://embeddings.embeddings.svc.cluster.local:8080/v1/embeddings
   model:
     type: string
     description: The embedding model to ask that route for.
-    default: text-embedding-3-small
+    default: multilingual-e5-small
+  prefix:
+    type: string
+    description: "Put in front of each chunk in the embeddings request only; the stored text has none. e5 models want \"passage: \" here and \"query: \" on searches. Empty for a model that takes none."
+    default: "passage: "
   batch:
     type: integer
     description: How many chunks go in one embeddings request.
@@ -55,9 +59,10 @@ steps:
       statuses: ${{ steps.fetch.outputs.statuses }}
       endpoint: ${{ inputs.endpoint }}
       model: ${{ inputs.model }}
+      prefix: ${{ inputs.prefix }}
       batch: ${{ inputs.batch }}
-    # The key is read from the server's environment and is never an input, which run.json records.
-    pass_env: [EMBEDDINGS_API_KEY]
+    # The self-hosted route needs no key. For a keyed route add `pass_env: [EMBEDDINGS_API_KEY]` here:
+    # the key is read from the server's environment and is never an input, which run.json records.
     timeout: 30m
     retry:
       max_attempts: 3
