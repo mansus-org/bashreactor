@@ -240,7 +240,7 @@ export class Engine {
   async shutdown(): Promise<void> {
     if (this.stopping) this.hurried = true;
     this.stopping = true;
-    await Promise.allSettled([...this.drives]);
+    await Promise.allSettled(this.drives);
   }
 
   async cancel(runId: string): Promise<void> {
