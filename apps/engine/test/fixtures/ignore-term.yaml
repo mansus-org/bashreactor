@@ -1,0 +1,10 @@
+name: ignore-term
+description: One step that ignores SIGTERM, with a short grace.
+steps:
+  stubborn:
+    uses: ./ignore-term.sh
+    timeout: 60s
+    kill_grace: 1s
+  after:
+    uses: ./ignore-term.sh
+    needs: [stubborn]

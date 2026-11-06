@@ -1,0 +1,10 @@
+name: trap-term
+description: One step that saves progress on SIGTERM.
+steps:
+  work:
+    uses: ./trap-term.sh
+    timeout: 60s
+    kill_grace: 5s
+    retry:
+      max_attempts: 3
+      delay: 1s

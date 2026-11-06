@@ -1,0 +1,7 @@
+name: ignore-term-long
+description: One step that ignores SIGTERM and has a grace long enough to tell a second signal from the first.
+steps:
+  stubborn:
+    uses: ./ignore-term.sh
+    timeout: 120s
+    kill_grace: 30s

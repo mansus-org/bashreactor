@@ -1,14 +1,15 @@
 import manifest from "../package.json";
 import { resolveConfig, resolveVersion } from "./config.ts";
 import { resumeRunningRuns } from "./resume.ts";
-import { startServer } from "./startup.ts";
+import { startServer, stopOnSignals } from "./startup.ts";
 
 // A config the environment did not give us stays fatal, because there is nothing sane to fall back
 // to: without a port there is no socket to bind, and the message the process dies with names the
 // variable. Everything past this line is the filesystem and the engine, and those degrade instead.
 const config = resolveConfig(process.env, resolveVersion(process.env, manifest.version));
 
-const { server, api } = startServer({ config });
+const startup = startServer({ config });
+const { api } = startup;
 
 if (api !== null) {
   if (config.adminHash === null) {
@@ -22,12 +23,6 @@ if (api !== null) {
   });
 }
 
-// A container's PID 1 gets no default signal handling, so without this every rollout would wait out
-// the pod's whole termination grace period before being killed. Runs left `running` are picked up by
+// SPEC 4.7: SIGTERM and SIGINT stop the engine's runs gracefully; runs left `running` are picked up by
 // the next process, which is what the resume above is for.
-process.on("SIGTERM", () => {
-  void server.stop().then(() => {
-    api?.close();
-    process.exit(0);
-  });
-});
+stopOnSignals(startup);
