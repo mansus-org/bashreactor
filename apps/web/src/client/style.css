@@ -514,6 +514,10 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 .blockrow__meta { font-size: 0.875rem; font-weight: 700; }
 
 .detail { display: grid; gap: clamp(20px, 3vw, 32px); min-width: 0; }
+/* A grid item's automatic minimum size is its min-content, and a `pre` with `white-space: pre` is as
+   wide as its longest line: at phone width the source pane pushed the whole page past the screen and
+   scrolled nothing. The items have to be allowed to shrink for the pane to fit and the pre to scroll. */
+.detail > * { min-width: 0; }
 .detail:focus { outline: none; }
 .detail__head { display: grid; gap: 8px; }
 .detail__title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
