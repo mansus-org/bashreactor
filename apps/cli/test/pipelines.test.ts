@@ -43,6 +43,26 @@ steps:
       nothing: 1
 `;
 
+// SPEC 3.1: quoting and flow style are the same YAML value, so every one of these is the same
+// reference as `uses: ./hello.sh` and has to resolve the same way.
+const DOUBLE_QUOTED = `name: quoted-pipeline
+# a comment the file keeps
+steps:
+  greet:
+    uses: "./hello.sh"
+`;
+
+const SINGLE_QUOTED = `name: quoted-pipeline
+steps:
+  greet:
+    uses: './hello.sh'
+`;
+
+const FLOW = `name: flow-pipeline
+steps:
+  a: { uses: ./hello.sh }
+`;
+
 describe("pipelines", () => {
   test("validate publishes the blocks beside the file and reports the verdict", async () => {
     server = await startServer();
@@ -81,6 +101,68 @@ describe("pipelines", () => {
     const report = parsed(json);
     expect(report.valid).toBe(false);
     expect(report.issues.map((issue: { code: string }) => issue.code)).toContain("block_not_found");
+  });
+
+  test("a quoted or flow-style path reference is published like any other", async () => {
+    server = await startServer();
+    for (const [name, yaml] of [
+      ["double", DOUBLE_QUOTED],
+      ["single", SINGLE_QUOTED],
+      ["flow", FLOW],
+    ] as const) {
+      const path = pipelineDir(name, yaml, { "hello.sh": HELLO_BLOCK });
+      const result = await cli(["pipelines", "validate", path], { url: server.url });
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toBe(`valid  ${path}`);
+      expect(result.stderr).toContain("published");
+      expect(result.stderr).toContain("hello@1");
+    }
+  });
+
+  test("the rewrite keeps the file's own bytes and points only the reference at the library", async () => {
+    server = await startServer();
+    const path = pipelineDir("quoted", DOUBLE_QUOTED, { "hello.sh": HELLO_BLOCK });
+
+    const added = await cli(["pipelines", "add", "quoted-pipeline", path], { url: server.url });
+    expect(added.code).toBe(0);
+
+    const got = await cli(["pipelines", "get", "quoted-pipeline"], { url: server.url });
+    expect(got.stdout).toContain("# a comment the file keeps");
+    expect(got.stdout).toContain('uses: hello@1');
+    expect(got.stdout).not.toContain('"./hello.sh"');
+  });
+
+  test("a library reference resolves in a flow mapping and in quotes, with nothing published", async () => {
+    server = await startServer();
+    const block = pipelineDir("hello", HELLO_BLOCK, {});
+    expect((await cli(["blocks", "add", "hello", block], { url: server.url })).code).toBe(0);
+
+    for (const yaml of [
+      `name: flow-lib\nsteps:\n  a: { uses: hello@1 }\n`,
+      `name: quoted-lib\nsteps:\n  a:\n    uses: "hello@1"\n`,
+    ]) {
+      const path = pipelineDir("lib", yaml, {});
+      const result = await cli(["pipelines", "validate", path], { url: server.url });
+      expect(result.code).toBe(0);
+      expect(result.stdout.trim()).toBe(`valid  ${path}`);
+      // Nothing beside the file, so nothing to publish.
+      expect(result.stderr).not.toContain("published");
+    }
+  });
+
+  test("a block that is really missing is block_not_found, in the API's own words", async () => {
+    server = await startServer();
+    const path = pipelineDir("missing", `name: gone\nsteps:\n  a:\n    uses: "./nope.sh"\n`, {});
+
+    const result = await cli(["pipelines", "validate", path, "--json"], { url: server.url });
+    expect(result.code).toBe(1);
+    expect(parsed(result).issues).toEqual([
+      {
+        code: "block_not_found",
+        path: "steps.a.uses",
+        message: 'block "./nope.sh" was not found',
+      },
+    ]);
   });
 
   test("add stores a version, and ls and get read it back", async () => {
