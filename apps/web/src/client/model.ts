@@ -9,6 +9,8 @@
 
 import { formatScalar, isMap, parse } from "./yaml.js";
 import type { Json, Loc, YamlError } from "./yaml.js";
+import { deletePath, isFlowAt, setPath } from "./yaml-edit.js";
+export { editBlocked } from "./yaml-edit.js";
 
 export interface LibraryVersion {
   version: number;
@@ -128,11 +130,24 @@ export type Read = Analysis | FailedAnalysis;
 
 const REF = /\$\{\{\s*(.+?)\s*\}\}/g;
 const TOP_KEYS = ["name", "description", "max_parallel", "inputs", "steps", "outputs"];
-const STEP_KEYS = ["name", "uses", "needs", "with", "timeout", "retry"];
-const RETRY_KEYS = ["max_attempts", "delay"];
-const DURATION = /^\d+(s|m|h|d)$/;
+const STEP_KEYS = ["name", "uses", "needs", "with", "pass_env", "timeout", "kill_grace", "retry"];
+const RETRY_KEYS = ["max_attempts", "delay", "backoff", "max_delay"];
+// SPEC 1.3: 90s, 1h30m and 2d are all durations, in that order of units, and the empty string is not.
+const DURATION = /^(?=.)([0-9]+d)?([0-9]+h)?([0-9]+m)?([0-9]+s)?$/;
 const LIBRARY_REF = /^([a-z][a-z0-9-]{0,63})@([1-9][0-9]*)$/;
 const PATH_REF = /^\.\/([a-z][a-z0-9-]{0,63})\.sh$/;
+
+/**
+ * A default that is a map or a list, with a `toString` that reads as the JSON it is. The screens print
+ * a default with `String(...)`, and without this a json input's `{"b": 2}` shows as "[object Object]".
+ * The method is not enumerable, so the value still compares and serialises as the data it is.
+ */
+export function readable(value: Json): Json {
+  if (typeof value === "object" && value !== null) {
+    Object.defineProperty(value, "toString", { value: () => JSON.stringify(value), enumerable: false });
+  }
+  return value;
+}
 
 function problem(code: string, line: number, message: string, step: string | null = null): Problem {
   return { code, line, message, step };
@@ -212,7 +227,11 @@ export function parseBlock(source: string): Contract {
     out.problems.push(problem("block_header_malformed", parsed.error.line + start, parsed.error.message));
     return out;
   }
-  const front = isMap(parsed.value) ? parsed.value : {};
+  if (!isMap(parsed.value)) {
+    out.problems.push(problem("block_header_malformed", start + 1, "The front matter must be a mapping of name, description, inputs and outputs."));
+    return out;
+  }
+  const front = parsed.value;
   out.name = front.name !== undefined && front.name !== null ? String(front.name) : null;
   out.description = front.description !== undefined ? String(front.description) : "";
   out.runtime = detectRuntime(lines.slice(close + 1).join("\n"));
@@ -232,7 +251,7 @@ export function parseBlock(source: string): Contract {
         type: decl.type !== undefined ? String(decl.type) : "unknown",
         description: decl.description !== undefined ? String(decl.description) : "",
         required: !hasDefault,
-        default: hasDefault ? (decl.default as Json) ?? null : null,
+        default: hasDefault ? readable((decl.default as Json) ?? null) : null,
       };
     });
   out.inputs = declared(front.inputs, "inputs");
@@ -495,7 +514,7 @@ export function analyze(text: string, library: Library): Read {
         type: raw.type !== undefined ? String(raw.type) : "string",
         description: raw.description !== undefined ? String(raw.description) : "",
         required: !hasDefault,
-        default: hasDefault ? (raw.default as Json) ?? null : null,
+        default: hasDefault ? readable((raw.default as Json) ?? null) : null,
       };
     }),
     outputs,
@@ -518,66 +537,17 @@ export function stepAtLine(analysis: Read, line: number): string | null {
 
 // ---------- edits: text in, text out ----------
 
-function formatValue(value: Json): string {
-  return Array.isArray(value) ? `[${value.map((item) => formatScalar(item)).join(", ")}]` : formatScalar(value);
-}
-
-/**
- * Sets or deletes one key and leaves every other line byte for byte what the person typed, so a
- * graph edit never eats a comment. Each step re-parses, because each one moves the lines.
- */
-export function setPath(text: string, path: string[], value: Json | undefined): string {
-  const parsed = parse(text);
-  if (!parsed.ok) return text;
-  const key = path.join(".");
-  const parentPath = path.slice(0, -1);
-  const parentKey = parentPath.join(".");
-  const lines = text.split("\n");
-  const here = parsed.locs[key];
-
-  if (value === undefined) {
-    if (here === undefined) return text;
-    lines.splice(here.start - 1, here.end - here.start + 1);
-    const next = lines.join("\n");
-    // A key that lost its last child would read back as null, which is a different document.
-    if (parentPath.length > 0) {
-      const after = parse(next);
-      if (after.ok) {
-        const parentValue = parentPath.reduce<Json>((current, part) => {
-          return isMap(current) ? (current[part] as Json) ?? null : null;
-        }, after.value);
-        if (parentValue === null) return setPath(next, parentPath, undefined);
-      }
-    }
-    return next;
-  }
-
-  const leaf = path[path.length - 1]!;
-  if (here !== undefined) {
-    const indent = /^[ ]*/.exec(lines[here.start - 1]!)![0]!;
-    lines.splice(here.start - 1, here.end - here.start + 1, `${indent}${leaf}: ${formatValue(value)}`);
-    return lines.join("\n");
-  }
-
-  const parent = parentPath.length > 0 ? parsed.locs[parentKey] : undefined;
-  if (parentPath.length > 0 && parent === undefined) {
-    return setPath(setPath(text, parentPath, null), path, value);
-  }
-  if (parentPath.length === 0) {
-    while (lines.length > 0 && lines[lines.length - 1]!.trim() === "") lines.pop();
-    lines.push("", value === null ? `${leaf}:` : `${leaf}: ${formatValue(value)}`, "");
-    return lines.join("\n");
-  }
-  const indent = `${/^[ ]*/.exec(lines[parent!.start - 1]!)![0]!}  `;
-  lines.splice(parent!.end, 0, value === null ? `${indent}${leaf}:` : `${indent}${leaf}: ${formatValue(value)}`);
-  return lines.join("\n");
-}
+export { setPath };
 
 export function editStep(text: string, id: string, key: string, value: Json | undefined): string {
   return setPath(text, ["steps", id, ...key.split(".")], value);
 }
 
 export function addStep(text: string, analysis: Analysis, id: string, step: { uses: string; title?: string }): string {
+  // A steps map written as `{ a: {...} }` takes its new step inside the braces; there are no lines to add.
+  if (isFlowAt(text, ["steps"])) {
+    return setPath(text, ["steps", id], step.title ? { name: step.title, uses: step.uses } : { uses: step.uses });
+  }
   const lines = text.split("\n");
   const body = [`  ${id}:`];
   if (step.title) body.push(`    name: ${formatScalar(step.title)}`);
@@ -612,14 +582,7 @@ export function removeStep(text: string, analysis: Analysis, id: string): string
       next = editStep(next, step.id, "needs", left.length > 0 ? left : undefined);
     }
   }
-  const reparsed = parse(next);
-  const range = reparsed.ok ? reparsed.locs[`steps.${id}`] : undefined;
-  if (range === undefined) return next;
-  const lines = next.split("\n");
-  const hasBlankBefore = range.start >= 2 && lines[range.start - 2]!.trim() === "";
-  const from = hasBlankBefore ? range.start - 2 : range.start - 1;
-  lines.splice(from, range.end - from);
-  return lines.join("\n");
+  return deletePath(next, ["steps", id], true);
 }
 
 /** Every step whose path reference the library could answer with a version. */

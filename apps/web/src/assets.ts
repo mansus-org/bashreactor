@@ -22,6 +22,7 @@ import {
   modelSource,
   runsSource,
   styleCss,
+  yamlEditSource,
   yamlLibSource,
   yamlSource,
 } from "./raw.js";
@@ -48,6 +49,7 @@ const CLIENT_MODULES: Record<string, string> = {
   api: apiSource,
   dom: domSource,
   yaml: yamlSource,
+  "yaml-edit": yamlEditSource,
   model: modelSource,
   graph: graphSource,
   editor: editorSource,

@@ -6,6 +6,7 @@ export declare const appSource: string;
 export declare const apiSource: string;
 export declare const domSource: string;
 export declare const yamlSource: string;
+export declare const yamlEditSource: string;
 export declare const modelSource: string;
 export declare const graphSource: string;
 export declare const editorSource: string;

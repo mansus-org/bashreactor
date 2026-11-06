@@ -54,18 +54,30 @@ export function contentEnd(text: string, end: number): number {
   return Math.max(at, 0);
 }
 
+export function keyName(pair: { key: unknown }): string {
+  const key = pair.key as { value?: unknown } | null;
+  return isScalar(key) ? String(key.value) : String(key);
+}
+
+/** The lines a pair occupies: its key's line to the last line with content in its value. */
+export function pairLoc(pair: { key: unknown; value: unknown }, text: string, starts: number[]): Loc | null {
+  const key = pair.key as Ranged | null;
+  if (key?.range == null) return null;
+  const value = pair.value as Ranged | null;
+  const start = lineAt(starts, key.range[0]);
+  // An empty value (`key:`) has a zero-width range sitting just after the colon: its end is the key's.
+  const stop = value?.range != null && value.range[1] > value.range[0] ? value.range[1] : key.range[1];
+  return { start, end: Math.max(start, lineAt(starts, contentEnd(text, stop))) };
+}
+
 function collect(map: { items: unknown[] }, prefix: string, text: string, starts: number[], out: Record<string, Loc>): void {
   for (const item of map.items as { key: unknown; value: unknown }[]) {
-    const key = item.key as (Ranged & { value?: unknown }) | null;
-    if (key === null || key === undefined || key.range === null || key.range === undefined) continue;
-    const name = isScalar(key) ? String(key.value) : String(key);
+    const loc = pairLoc(item, text, starts);
+    if (loc === null) continue;
+    const name = keyName(item);
     const path = prefix === "" ? name : `${prefix}.${name}`;
-    const value = item.value as Ranged | null;
-    const start = lineAt(starts, key.range[0]);
-    // An empty value (`key:`) has a zero-width range sitting just after the colon: its end is the key's.
-    const stop = value?.range != null && value.range[1] > value.range[0] ? value.range[1] : key.range[1];
-    out[path] = { start, end: Math.max(start, lineAt(starts, contentEnd(text, stop))) };
-    if (isYamlMap(value)) collect(value, path, text, starts, out);
+    out[path] = loc;
+    if (isYamlMap(item.value)) collect(item.value, path, text, starts, out);
   }
 }
 

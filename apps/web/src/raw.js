@@ -22,6 +22,7 @@ import appSource from "./client/app.ts" with { type: "text" };
 import apiSource from "./client/api.ts" with { type: "text" };
 import domSource from "./client/dom.ts" with { type: "text" };
 import yamlSource from "./client/yaml.ts" with { type: "text" };
+import yamlEditSource from "./client/yaml-edit.ts" with { type: "text" };
 import modelSource from "./client/model.ts" with { type: "text" };
 import graphSource from "./client/graph.ts" with { type: "text" };
 import editorSource from "./client/editor.ts" with { type: "text" };
@@ -39,6 +40,7 @@ export {
   apiSource,
   domSource,
   yamlSource,
+  yamlEditSource,
   modelSource,
   graphSource,
   editorSource,
