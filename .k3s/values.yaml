@@ -23,6 +23,15 @@ env:
   # The image already defaults to this. Set here too, so the mount path and the directory the
   # server writes to cannot drift apart when one of the two changes.
   BASHREACTOR_HOME: /data
+  # The sha256 of the admin token, never the token. Optional because previews run in another
+  # namespace and cannot decrypt this secret: they start with the API off instead of failing.
+  BASHREACTOR_ADMIN_TOKEN_SHA256:
+    secretKeyRef: { name: bashreactor-secrets, key: BASHREACTOR_ADMIN_TOKEN_SHA256, optional: true }
+
+sealedSecrets:
+  - name: bashreactor-secrets
+    encryptedData:
+      BASHREACTOR_ADMIN_TOKEN_SHA256: AgBWt3tXSsT6+NmQIZMqxNGVhpFvcCjojFotpznu8N8kpRPqUuiZxOYFOTgXLbDge86cZH2eAxnHckRyitQEhoo5EK8cx7GW6f9Xi68dSxg7VIgtTzTpoNsor9M5HEn6RMLjHd/yNR/+sWZFUyyIE9Venti54p2uVKfbdR41DQ1bW4cR0ts91wt0x7nt6bhpBmhjhtc+GsZWqLClBZhNNOEUpfmGyiPHQ5X5zJgtw8jNiG1qrvuCQFmiqoRlkqT/jJao0eCfszM6wf0MF9z7QEGW+2WL5WAMHzrB+v70e2MIoSo0cKbk6g11amJ7TqnObomOqZf7PWdX4qSgw6KQXilhPFTWDNzs2hUepXgJxul3XVZ4mqCh4/P1BdLwHkvqKyLkd9UWD8vAU+3u8HAOYlmZ8xYz+f+ZWqhWrHHqS3bdkrDg6S0NfHm/WXVJVV0THLyNUdONrm9wb8rQoOpX+c5N83LFDRd8H//wI14h6n9ikwreoF3pqM2c6WlxqE3YofkT41wbR7NEgT595N3f9afJegP+Ed4HXfpowiE0HMIDo+rZctXtD8SV0LUS5ojBQmpgjiKoZzp4rZZWteAI4q2JoFJTBcf6uuvxYiYpPrGeB8SeknMtl5YsuM/ZbchQR8sCO5MUSW+QRtx5v7QXHdCJYaTp1EshIze63kZYjf0V+FvSm/HRDvSj102QU0ThdyZzAYTOVrBjHs7dvYtbOzwkZn3Mi8XhpPPCLtIz2KPX85J5WrqEHCOv1rxQ5V+0mbiqoNOc8iLZ6iEh7dEJvCm8
 
 healthCheck:
   path: /healthz
