@@ -419,10 +419,21 @@ export function uninstallDom(installed: InstalledDom): void {
 export function serveModules(names: string[]): string {
   const files = buildAssets().files;
   const dir = mkdtempSync(join(tmpdir(), "bashreactor-client-"));
-  for (const name of names) {
+  const transpiler = new Bun.Transpiler({ loader: "js" });
+  // A module's own imports come along, as they would for a browser, so a test lists the modules it
+  // uses and not everything those use.
+  const queue = [...names];
+  const written = new Set<string>();
+  for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+    if (written.has(name)) continue;
+    written.add(name);
     const asset = files.get(`assets/${name}.js`);
     if (asset === undefined) throw new Error(`the asset table has no assets/${name}.js`);
     writeFileSync(join(dir, `${name}.js`), asset.data);
+    for (const entry of transpiler.scanImports(new TextDecoder().decode(asset.data))) {
+      const next = /^\.\/([\w-]+)\.js$/.exec(entry.path);
+      if (next !== null) queue.push(next[1]!);
+    }
   }
   return dir;
 }

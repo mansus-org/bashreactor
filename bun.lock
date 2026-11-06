@@ -52,6 +52,8 @@
       "version": "0.0.0",
       "dependencies": {
         "@bashreactor/api": "workspace:*",
+        "@bashreactor/core": "workspace:*",
+        "yaml": "^2.8.0",
       },
     },
     "packages/core": {
