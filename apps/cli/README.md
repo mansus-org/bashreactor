@@ -205,8 +205,10 @@ API stages the YAML it is given into a directory of its own (apps/api/README.md,
 relative reference from your laptop points at nothing there. The API has no route that takes a
 directory, so `runs start`, `pipelines validate` and `pipelines add` close the gap with the two
 routes that do exist: they publish each block beside the file into the library and rewrite the
-reference to the `name@version` the library answered with. Only the `uses:` line changes; every
-other byte of the file, comments included, is sent as it was.
+reference to the `name@version` the library answered with. The references are found by parsing the
+file, not by matching lines, so `uses: "./x.sh"` and `a: { uses: ./x.sh }` are as good as the bare
+form (SPEC 3.1). Only the scalar after `uses:` is replaced; every other byte of the file, comments,
+blank lines and the quoting of every other value included, is sent as it was.
 
 The consequence is worth stating: what gets stored or started is the rewritten document, so a run
 records `count-words@2` rather than `./count-words.sh`. The command says what it published, on
