@@ -7,7 +7,7 @@
 // contracts yet and so no ports to anchor on, and the repaint after the library answers.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { blockSource, decls, installDom, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Library } from "./model.ts";
@@ -116,6 +116,9 @@ const LIBRARY: Library = {
   },
 };
 
+/** The demo pipeline, because it is the one a person actually opens and it has a shape worth drawing. */
+const WORD_REPORT = readFileSync(join(import.meta.dir, "../../../../docs/examples/word-report.yaml"), "utf8");
+
 /** One paint, the way `setText(..., { source: "load" })` does it: analyse, then hand it to the graph. */
 function paint(text: string, library: Library, width: number) {
   const analysis = analyze(text, library);
@@ -137,10 +140,33 @@ function wires(stage: FakeElement): { from: string; to: string; d: string }[] {
   }));
 }
 
-/** A wire that was drawn: a move and a run of horizontal and vertical legs, all whole pixels.
- *  Negative coordinates are allowed, because the layering defect (BASHR-14) still sends some off
- *  the left of the canvas; that ticket is where the check for them belongs. */
-const DRAWN = /^M-?\d+ -?\d+(?:[HV]-?\d+)+$/;
+/** A wire that was drawn: a move and a run of horizontal and vertical legs, all whole pixels, and
+ *  none of them off to the left of the canvas — nothing has any business drawing there. */
+const DRAWN = /^M\d+ \d+(?:[HV]\d+)+$/;
+
+/** Every x a wire was drawn at that falls outside the canvas it was drawn on. */
+function offCanvas(stage: FakeElement): string[] {
+  const canvas = stage.querySelector(".canvas");
+  if (canvas === null) return ["no canvas was drawn"];
+  const width = canvas.offsetWidth;
+  const out: string[] = [];
+  for (const wire of stage.querySelectorAll(".wire")) {
+    const d = wire.getAttribute("d") ?? "";
+    for (const [, command, value] of d.matchAll(/([MHV])(-?\d+)(?: -?\d+)?/g)) {
+      if (command === "V") continue;
+      const x = Number(value);
+      if (x < 0 || x > width) out.push(`${wire.getAttribute("data-from")} to ${wire.getAttribute("data-to")} at x=${x} on a ${width}px canvas: ${d}`);
+    }
+  }
+  return out;
+}
+
+/** The columns of a document that parses, which every document in this file does. */
+function layers(text: string, library: Library = {}): string[][] {
+  const read = analyze(text, library);
+  if (!read.ok) throw new Error(`the test document does not parse: ${JSON.stringify(read.problems)}`);
+  return read.layers;
+}
 
 /** The one paint every case has to survive: steps drawn, one wire per edge, every wire a real path. */
 function expectDrawn(stage: FakeElement, analysis: ReturnType<typeof analyze>): void {
@@ -233,5 +259,21 @@ describe("drawing a graph", () => {
     expect(analysis.steps.length).toBe(6);
     expect(analysis.edges.length).toBe(5);
     expectDrawn(stage, analysis);
+  });
+
+  // A step goes one column to the right of everything it waits for, so a chain is as many columns as
+  // it is long and a wire never has to skip a column. Steps that do not wait on each other still
+  // share a column, which is the whole point of drawing them side by side.
+  test("gives every step a column after the steps it waits for", () => {
+    expect(layers(WORD_REPORT)).toEqual([["generate"], ["check", "count"], ["report"]]);
+    expect(layers(DIAMOND)).toEqual([["a"], ["b", "c"], ["d"]]);
+    expect(layers(CHAIN).length).toBe(6);
+    expect(layers(YAML, LIBRARY)).toEqual([["generate"], ["check"]]);
+  });
+
+  // The widths the layering defect used to send wires off the left of the canvas.
+  test.each([224, 300, 360, 399, 480, 960])("keeps every wire on the canvas at %ipx", (width) => {
+    const { stage } = paint(WORD_REPORT, {}, width);
+    expect(offCanvas(stage)).toEqual([]);
   });
 });
