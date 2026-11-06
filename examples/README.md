@@ -175,16 +175,30 @@ bashreactor runs logs 20261105T183113Z-f73c5e7c generate --follow
 ```
 
 ```
+==> attempt 1 <==
 attempt 1: 0 of 200 lines already written
 attempt 1: stopping after 120 lines, asking for a retry
-next offset 98
+==> attempt 2 <==
+attempt 2: 120 of 200 lines already written
+attempt 2: corpus finished
+next offset 71
 run 20261105T183113Z-f73c5e7c succeeded
 ```
 
 That is the first hard case. `generate` was told `interrupt_at: 120`, so attempt 1 wrote 120 lines into
 its work directory and exited 75, which is `EX_TEMPFAIL` and means *retry me* (SPEC 2.8). The step is
-not final until the retry finishes, so `--follow` keeps reading until it is, and then exits with the
-run's own status.
+not final until the retry finishes, so `--follow` kept reading until it was.
+
+A step's log is its attempts' logs in order (SPEC 4.8), which is what `--follow` gives you: attempt 1
+read to its last byte, then the next attempt from byte 0. The lines the reader adds — the
+`==> attempt N <==` marker at each boundary, `next offset` and `run ...` — are notes on stderr, so
+`--follow > corpus.txt` still writes nothing but what the block wrote, and `next offset` is the byte
+cursor *within the last attempt*. `--attempt 1` reads one attempt on its own and prints no markers.
+
+Following a step that has not started yet is a wait, not an error: a step whose dependency is still
+running has no attempt, and `--follow` polls until it has one, or until the step or the run goes
+final. And if the step you are following fails while the run is still going, `--follow` exits 1 and
+names the step, because the run has not decided anything yet.
 
 ### Wait for it and read the results
 
@@ -634,10 +648,12 @@ not the same. `bashreactor whoami` prints which URL and token won and where each
 beats the environment beats `$BASHREACTOR_HOME/cli.json`. If you have a `cli.json` from an older
 server, the environment wins, so this bites in the other direction only when the variables are unset.
 
-**`attempt_not_found` from `runs logs` right after `runs start`.** The engine had not created attempt 1
-yet. It is a race only a script can win, and `examples/demo.sh` waits for the attempt to exist before
-it follows one. A person typing the next command is slower than the engine is, and `--wait` avoids it
-altogether.
+**`attempt_not_found` from `runs logs` right after `runs start`.** The step had not started yet, and a
+single read needs an attempt to read: the engine creates `attempts/1/` when the step starts (SPEC
+4.4), so a step whose dependency is still running has none. `--follow` is the answer — it waits for
+the step to have an attempt and keeps reading until the step or the run is final. `--wait` avoids it
+altogether. `--attempt 2` before a retry has started still answers this, and should: that attempt does
+not exist yet.
 
 **`block_not_found` when starting a pipeline through `curl`.** The API resolves `uses` against its own
 staging directory, not your disk, and has no route that takes a directory of blocks. Publish the
