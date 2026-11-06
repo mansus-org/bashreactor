@@ -573,9 +573,12 @@ Every attempt has a timeout, so nothing can hang forever. A job longer than a da
 *Rejected: a timeout that spans all attempts.* The last attempt's budget would depend on how the
 earlier ones went.
 
-Names in `pass_env` MUST match `^[A-Za-z_][A-Za-z0-9_]*$`. They MUST NOT start with `BR_`, `INPUT_` or
-`OUTPUT_`, and MUST NOT be `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `PYTHONUNBUFFERED` or
-`NO_COLOR`. A name that is not set in the engine's environment fails with `env_missing`. This is
+Names in `pass_env` MUST match `^[A-Za-z_][A-Za-z0-9_]*$`. They MUST NOT start with `BR_`, `INPUT_`,
+`OUTPUT_` or `BASHREACTOR_` (those four prefixes are compared case-insensitively), and MUST NOT be
+`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `TZ`, `PYTHONUNBUFFERED`, `NO_COLOR` or `PORT`. The
+`BASHREACTOR_` prefix is the server's own namespace, and `PORT` is its own configuration: whatever
+the server reads out of its environment, admin and scoped tokens included, is never inheritable by a
+step. A name that is not set in the engine's environment fails with `env_missing`. This is
 checked before the run is created, so a missing token does not surface hours in, and again before each
 attempt, because the engine may have restarted with a different environment. Only names are ever
 recorded, never values.

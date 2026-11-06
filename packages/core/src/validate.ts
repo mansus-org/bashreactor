@@ -55,6 +55,15 @@ const PIPELINE_TOP_KEYS = new Set(["name", "description", "max_parallel", "input
 const STEP_KEYS = new Set(["name", "uses", "needs", "with", "pass_env", "timeout", "kill_grace", "retry"]);
 const RETRY_KEYS = new Set(["max_attempts", "delay", "backoff", "max_delay"]);
 
+// Section 3.4, the `pass_env` rule. `BASHREACTOR_` is the server's own namespace, and the engine
+// inherits the API process's environment, so a step naming one of these was handed the admin token
+// and printed it back in its log. The prefix is matched case-insensitively: the rule is about the
+// namespace, not about one spelling of it.
+const RESERVED_ENV_PREFIXES = ["BR_", "INPUT_", "OUTPUT_", "BASHREACTOR_"];
+// What the server reads off its own environment that the prefix does not cover. `PORT` is not a
+// secret, but it is the server's configuration and no step has a right to it.
+const RESERVED_ENV_NAMES_EXTRA = ["PORT"];
+
 // --- public entry points -------------------------------------------------
 
 export function validateBlockSource(source: string): ValidationIssue[] {
@@ -617,6 +626,17 @@ function needsField(entries: MapEntry[], key: string, path: string, doc: Documen
   return result;
 }
 
+// One rule for every reserved name, so the CLI, the API and the MCP server all print the same
+// `pipeline_schema_invalid` for it.
+function isReservedEnvName(name: string): boolean {
+  const upper = name.toUpperCase();
+  return (
+    RESERVED_ENV_NAMES.includes(name)
+    || RESERVED_ENV_NAMES_EXTRA.includes(upper)
+    || RESERVED_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix))
+  );
+}
+
 function passEnvField(entries: MapEntry[], key: string, path: string, doc: Document, issues: ValidationIssue[]): string[] {
   const result: string[] = [];
   const entry = findEntry(entries, key);
@@ -632,11 +652,7 @@ function passEnvField(entries: MapEntry[], key: string, path: string, doc: Docum
       return;
     }
     const value = sv.value;
-    const reserved = RESERVED_ENV_NAMES.includes(value)
-      || value.startsWith("BR_")
-      || value.startsWith("INPUT_")
-      || value.startsWith("OUTPUT_");
-    if (!ENV_NAME_RE.test(value) || reserved) {
+    if (!ENV_NAME_RE.test(value) || isReservedEnvName(value)) {
       issues.push({ code: "pipeline_schema_invalid", path: `${path}.${index}`, message: `${key} entry is not a passable environment variable name` });
       return;
     }

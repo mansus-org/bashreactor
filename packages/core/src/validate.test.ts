@@ -257,3 +257,72 @@ describe("validatePipelineSource", () => {
     expect(issues).toEqual([]);
   });
 });
+
+// Section 3.4: `pass_env` copies out of the engine's environment, which is the server's own. Nothing
+// the server keeps there may reach a step, or a pipeline could read the token it was run with.
+describe("pass_env names", () => {
+  const run = (names: string[]) =>
+    validatePipelineSource(
+      [
+        "name: a",
+        "steps:",
+        "  s:",
+        "    uses: ./x.sh",
+        `    pass_env: [${names.map((name) => `"${name}"`).join(", ")}]`,
+        "",
+      ].join("\n"),
+      resolver({ "./x.sh": noOutputBlock }),
+    );
+
+  test("a server secret is pipeline_schema_invalid at its own index", () => {
+    expect(run(["BASHREACTOR_ADMIN_TOKEN"])).toEqual([
+      expect.objectContaining({
+        code: "pipeline_schema_invalid",
+        path: "steps.s.pass_env.0",
+        message: "pass_env entry is not a passable environment variable name",
+      }),
+    ]);
+  });
+
+  test("every name the server reads off its own environment is refused", () => {
+    const names = [
+      "BASHREACTOR_ADMIN_TOKEN",
+      "BASHREACTOR_ADMIN_TOKEN_SHA256",
+      "BASHREACTOR_TOKEN",
+      "BASHREACTOR_URL",
+      "BASHREACTOR_HOME",
+      "BASHREACTOR_VERSION",
+      "BASHREACTOR_MCP_PORT",
+      "BASHREACTOR_MCP_PATH",
+      "PORT",
+    ];
+    expect(run(names).map((issue) => issue.path)).toEqual(names.map((_, i) => `steps.s.pass_env.${i}`));
+  });
+
+  test("the BASHREACTOR_ prefix is refused in any case", () => {
+    expect(run(["bashreactor_admin_token", "Bashreactor_Token", "BASHREACTOR_WHATEVER"])).toHaveLength(3);
+  });
+
+  test("an ordinary name is still passable", () => {
+    // `path` on purpose: only the prefixes are matched case-insensitively, and a lowercase name
+    // cannot shadow the engine's own `PATH` in a block's environment.
+    expect(run(["SSL_CERT_FILE", "AWS_SECRET_ACCESS_KEY", "path"])).toEqual([]);
+  });
+
+  test("the names reserved before are reserved still", () => {
+    const names = [
+      "PATH",
+      "HOME",
+      "TMPDIR",
+      "LANG",
+      "LC_ALL",
+      "TZ",
+      "PYTHONUNBUFFERED",
+      "NO_COLOR",
+      "BR_RUN_ID",
+      "INPUT_X",
+      "OUTPUT_X",
+    ];
+    expect(run(names)).toHaveLength(names.length);
+  });
+});
