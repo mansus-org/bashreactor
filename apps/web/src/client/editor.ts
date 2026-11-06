@@ -18,6 +18,7 @@ import {
   latest,
   libraryRef,
   pinToLibrary,
+  readUses,
   removeStep,
   rewrites,
   sourcesFor,
@@ -338,29 +339,36 @@ export function renderPipeline(view: HTMLElement, route: Route): void {
 
   // ---------- the library, which is the API's ----------
 
-  /** Every block this document names, fetched once, so a step's contract is its own file's header. */
+  /**
+   * Every block this document names, fetched once, so a step's contract is its own file's header.
+   *
+   * What to ask for is read out of `uses`, never out of `step.version`: `analyze` only fills a version
+   * in once the library has answered, so waiting on it here would wait for the thing being fetched.
+   * A path reference (`./count-words.sh`) carries no version, and the API runs blocks from the
+   * library, so it asks for the newest one — which is the version `analyze` draws its contract from.
+   */
   async function ensureLibrary(): Promise<void> {
     if (!analysis.ok) return;
     const wanted = new Set<string>();
     for (const step of analysis.steps) {
-      if (step.blockName === null || step.version === null) continue;
-      const key = `${step.blockName}@${step.version}`;
+      const ref = step.uses === null ? null : readUses(step.uses);
+      if (ref === null) continue;
+      const key = `${ref.name}@${ref.version ?? ""}`;
       if (!fetched.has(key)) wanted.add(key);
     }
     if (wanted.size === 0) return;
     for (const key of wanted) {
       fetched.add(key);
       const [name, versionText] = key.split("@") as [string, string];
-      const version = Number(versionText);
       try {
         const list = await api.blocks(name);
+        const version = versionText === "" ? list.latest : Number(versionText);
         const entry = library[name] ?? { name, versions: [] };
         if (!entry.versions.some((known) => known.version === version)) {
           const content = await api.blockContent(name, version);
           entry.versions = [...entry.versions, { version, source: content.text }].toSorted((a, b) => a.version - b.version);
         }
         library = { ...library, [name]: entry };
-        void list;
       } catch (error) {
         // A block the library does not have stays unfetched: the analysis already says so, and a
         // retry on the next keystroke would be the same answer.
