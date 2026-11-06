@@ -5,6 +5,7 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import { announce, duration, el, errorBox, fill, flash, sign, stateLine, stateStamp, when } from "./dom.js";
+import type { State } from "./dom.js";
 import { emptyLog, feedLog, logLines } from "./logs.js";
 import type { LogState } from "./logs.js";
 import type { Route } from "./app.js";
@@ -14,10 +15,33 @@ import type { Attempt, LogChunk, Run, RunStep, RunSummary } from "./api.js";
 /** How often a live run is re-read. The log is a byte offset, so this is a cursor, not a stream. */
 const POLL_MS = 1000;
 
-const RUN_STATES = new Set(["running", "succeeded", "failed", "cancelled"]);
+/**
+ * The words this screen has a sign and a stamp for: the seven step statuses of SPEC 4.4, the four run
+ * statuses that section's table ends with, and `interrupted` — SPEC 5 puts that on an attempt and
+ * never on a step or a run, but `status` is an unvalidated string on the wire and dom.ts already
+ * draws the shape, so a server that answers with it gets its own word shown rather than a guess.
+ *
+ * Anything else falls back to `pending`, and that is a choice rather than a reflex. `stateStamp`
+ * prints the word it is handed while `sign` quietly substitutes the not-started shape for a name it
+ * does not know, so passing an unknown status through would pair one state's word with another's
+ * shape; and `sign` is typed, so an unknown string is a type error rather than a runtime one.
+ * `pending` is the least wrong thing to say about a status from an older server: it claims nothing
+ * about the outcome and is not final, so it cannot tell someone a run is over when the UI simply has
+ * never seen that state — and it always draws, so the stamp is never empty and nothing throws.
+ */
+const STAMPABLE = new Set<string>([
+  "pending",
+  "running",
+  "waiting_retry",
+  "succeeded",
+  "failed",
+  "skipped",
+  "cancelled",
+  "interrupted",
+] satisfies State[]);
 
-function state(value: string): Parameters<typeof sign>[0] {
-  return (RUN_STATES.has(value) ? value : "pending") as Parameters<typeof sign>[0];
+function state(value: string): State {
+  return (STAMPABLE.has(value) ? value : "pending") as State;
 }
 
 function attemptDuration(attempt: Attempt, now: number): number {
