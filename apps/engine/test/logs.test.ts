@@ -85,6 +85,28 @@ describe("reading a log", () => {
     expect(tail).toEqual({ data: new Uint8Array(), nextOffset: at, more: false });
   }, 60_000);
 
+  test("a positional read takes its size from the file, not from what it read", async () => {
+    const store = new FsRunStore(newRoot());
+    const runId = newRunId();
+    const log = Buffer.concat([Buffer.from("y".repeat(2 * MIB)), Buffer.from("\nend\n")]);
+    await store.writeFile(runId, LOG, new Uint8Array(log));
+
+    const window = await store.readFileRange(runId, LOG, MIB, 4096);
+    expect(window?.bytes.length).toBe(4096);
+    expect(window?.bytes[0]).toBe(0x79);
+    // The size is the file's, so a reader knows there is more even though this read was small.
+    expect(window?.size).toBe(log.length);
+
+    const tail = await store.readFileRange(runId, LOG, log.length - 4, 4096);
+    expect(text(tail!.bytes)).toBe("end\n");
+    expect(tail!.size).toBe(log.length);
+
+    const past = await store.readFileRange(runId, LOG, log.length + 10, 4096);
+    expect(past?.bytes.length).toBe(0);
+    expect(past?.size).toBe(log.length);
+    expect(await store.readFileRange(runId, "steps/build/attempts/9/log", 0, 4096)).toBeNull();
+  });
+
   test("next_offset never lands inside a character", async () => {
     const store = new FsRunStore(newRoot());
     const engine = new Engine({ store });
