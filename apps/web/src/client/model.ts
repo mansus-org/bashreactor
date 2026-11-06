@@ -459,7 +459,7 @@ export function analyze(text: string, library: Library): Read {
       problems.push(problem("dependency_cycle", lineOf(`steps.${stuck[0]}`), `These steps wait for each other: ${stuck.join(", ")}.`, stuck[0] ?? null));
       for (const id of stuck) {
         const deps = (byId[id]?.deps ?? []).filter((dep) => layerOf[dep] !== undefined);
-        layerOf[id] = deps.length > 0 ? Math.max(...deps.map((dep) => layerOf[dep]!)) : 0;
+        layerOf[id] = deps.length > 0 ? Math.max(...deps.map((dep) => layerOf[dep]! + 1)) : 0;
         order.push(id);
         pending.delete(id);
       }
@@ -467,7 +467,9 @@ export function analyze(text: string, library: Library): Read {
     }
     for (const id of ready) {
       const deps = [...(pending.get(id) ?? [])].filter((dep) => layerOf[dep] !== undefined);
-      layerOf[id] = deps.length > 0 ? Math.max(...deps.map((dep) => layerOf[dep]!)) : 0;
+      // A step sits one column to the right of everything it waits for, so a chain of six is six
+      // columns wide and a wire never has to skip a column to reach the next one.
+      layerOf[id] = deps.length > 0 ? Math.max(...deps.map((dep) => layerOf[dep]! + 1)) : 0;
       order.push(id);
       pending.delete(id);
     }

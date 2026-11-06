@@ -3,7 +3,8 @@
 //
 // Two layouts, picked by the room the stage has and not by device: columns by dependency depth when
 // every column fits, otherwise one column of steps with the wires in lanes down its left side.
-// Ported from mockup/graph.js unchanged.
+// Ported from mockup/graph.js, which drew a document whose blocks were all local: here the contracts
+// arrive from the API after the first paint, and a wire has to cope with that.
 
 import { el, flash, sign } from "./dom.js";
 import type { Analysis, Step } from "./model.js";
@@ -21,6 +22,8 @@ export interface Graph {
   select(id: string | null): void;
   flash(ids: string[]): void;
   focus(id: string): void;
+  /** Stop watching the stage. The screen that made this graph owns that duty when it goes away. */
+  destroy(): void;
 }
 
 function port(direction: "in" | "out", item: { name: string; source?: { refs: unknown[] } }): HTMLElement {
@@ -43,9 +46,10 @@ function wirePath(svg: SVGSVGElement, d: string, edge: { from: string; to: strin
 }
 
 // A port only exists once the block's contract has been read, and the contract is the API's, so the
-// first paint of a stored pipeline has wires whose ends are ports nothing has named yet. The
-// reference is still real and the wire still has to show, so it meets the step's own edge instead —
-// which is where a `needs` wire meets it anyway.
+// first paint of a stored pipeline has a wire whose source step has no output ports at all. The
+// reference is still real and the wire still has to show, so it meets the step's own edge, which is
+// where a `needs` wire meets it anyway. Only the source side can be missing one: a `with:` key makes
+// its input port whatever the contract says, so the target always has one to give.
 function nodeEdge(node: HTMLElement, side: "in" | "out"): { x: number; y: number } {
   return {
     x: side === "out" ? Math.round(node.offsetLeft + node.offsetWidth) : node.offsetLeft,
@@ -349,9 +353,10 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     if (target2 !== null) target2.focus();
   });
 
-  new ResizeObserver(() => {
+  const observer = new ResizeObserver(() => {
     if (stage.clientWidth !== width) draw();
-  }).observe(stage);
+  });
+  observer.observe(stage);
 
   return {
     update(next) {
@@ -369,6 +374,9 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     },
     focus(id) {
       stage.querySelector<HTMLElement>(`[data-step="${CSS.escape(id)}"]`)?.focus();
+    },
+    destroy() {
+      observer.disconnect();
     },
   };
 }
