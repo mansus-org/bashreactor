@@ -304,6 +304,61 @@ describe("runs logs", () => {
     expect(chunks.at(-1).text).toBe("");
   });
 
+  for (const size of [3_000_005, 1 << 20]) {
+    test(`a ${size} byte log is printed whole, with and without --follow`, async () => {
+      server = await startServer();
+      await library();
+      // Builtins only, like the other test blocks: the server's PATH is not the developer's.
+      const block = blockFile(
+        `name: biglog
+description: Write a log of a given size ending in END.
+inputs:
+  size:
+    type: integer`,
+        `chunk=$(printf 'x%.0s' {1..1024})
+body=$((INPUT_SIZE - 5))
+for ((i = 0; i < body / 1024; i++)); do printf '%s' "$chunk"; done
+printf '%s' "\${chunk:0:body % 1024}"
+printf '\\nEND\\n'`,
+      );
+      expect((await cli(["blocks", "add", "biglog", write("biglog.sh", block)], { url: server.url })).code).toBe(0);
+      await store(
+        "big-run",
+        `name: big-run
+inputs:
+  size:
+    type: integer
+steps:
+  big:
+    uses: biglog@1
+    with:
+      size: \${{ inputs.size }}
+`,
+      );
+      const started = await cli(["runs", "start", "big-run", "--input", `size=${size}`, "--wait", "--interval", "100"], {
+        url: server.url,
+      });
+      const id = runId(started);
+      const expected = "x".repeat(size - 5) + "\nEND\n";
+
+      const plain = await cli(["runs", "logs", id, "big"], { url: server.url });
+      expect(plain.stdout.length).toBe(size);
+      expect(plain.stdout === expected).toBe(true);
+      expect(plain.stderr.trim()).toBe(`next offset ${size}`);
+
+      const followed = await cli(["runs", "logs", id, "big", "--follow", "--interval", "100"], { url: server.url });
+      expect(followed.stdout === expected).toBe(true);
+      expect(followed.stderr).toContain(`next offset ${size}`);
+
+      // --json is one chunk per read, and the chunks join up.
+      const json = await cli(["runs", "logs", id, "big", "--json"], { url: server.url });
+      const chunks = json.stdout.trim().split("\n").map((line) => JSON.parse(line));
+      expect(chunks.length).toBe(Math.ceil(size / (1 << 20)));
+      expect(chunks.map((chunk) => chunk.text).join("") === expected).toBe(true);
+      expect(chunks.at(-1).truncated).toBe(false);
+    }, 60_000);
+  }
+
   test("a step that never ran is the API's answer", async () => {
     server = await startServer();
     await library();

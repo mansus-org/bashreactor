@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { FAILING_BLOCK, HELLO_BLOCK, SLOW_BLOCK, pipelineYaml, startApi } from "./helpers.ts";
+import { FAILING_BLOCK, HELLO_BLOCK, SLOW_BLOCK, blockFile, pipelineYaml, startApi } from "./helpers.ts";
 
 const server = startApi();
 afterAll(() => server.cleanup());
@@ -16,6 +16,30 @@ const INPUT_PIPELINE = pipelineYaml(
     with:
       name: \${{ inputs.who }}`,
   "inputs:\n  who:\n    type: string\n",
+);
+
+// A log of exactly `size` bytes whose last line is END, so a reader that skipped the tail is caught.
+const BIGLOG_BLOCK = blockFile(
+  "biglog",
+  `name: biglog
+description: Write a log of a given size ending in END.
+inputs:
+  size:
+    type: integer`,
+  // Builtins only: the test PATH holds just the binaries SPEC 2.6 requires, and head and tr are not among them.
+  `chunk=$(printf 'x%.0s' {1..1024})
+body=$((INPUT_SIZE - 5))
+for ((i = 0; i < body / 1024; i++)); do printf '%s' "$chunk"; done
+printf '%s' "\${chunk:0:body % 1024}"
+printf '\\nEND\\n'`,
+);
+const BIGLOG_PIPELINE = pipelineYaml(
+  "biglog-pipeline",
+  `  big:
+    uses: biglog@1
+    with:
+      size: \${{ inputs.size }}`,
+  "inputs:\n  size:\n    type: integer\n",
 );
 
 async function start(pipeline: string): Promise<{ id: string; status: string }> {
@@ -159,6 +183,43 @@ describe("following a log by offset", () => {
     expect(tail.text).toBe(all.text.slice(8));
     expect(tail.offset).toBe(8);
   });
+
+  const MIB = 1 << 20;
+
+  // Sizes that are not a multiple of 1 MiB, exactly 1 MiB, and one byte over it.
+  for (const size of [3_000_005, MIB, MIB + 1]) {
+    test(`following next_offset over a ${size} byte log returns every byte in order`, async () => {
+      expect((await server.call("POST", "/v1/blocks/biglog/versions", { body: { content: BIGLOG_BLOCK.content } })).status).toBe(201);
+      expect((await server.call("POST", "/v1/pipelines/biglog-pipeline/versions", { body: { yaml: BIGLOG_PIPELINE } })).status).toBe(201);
+      const response = await server.call("POST", "/v1/runs", { body: { pipeline: "biglog-pipeline", inputs: { size } } });
+      expect(response.status).toBe(201);
+      const run = (await response.json()) as { id: string };
+      expect((await server.waitForRun(run.id)).status).toBe("succeeded");
+
+      let offset = 0;
+      let text = "";
+      let reads = 0;
+      for (;;) {
+        const chunk = await body(await server.call("GET", `/v1/runs/${run.id}/logs/big/1?offset=${offset}`));
+        expect(chunk.offset).toBe(offset);
+        expect(chunk.next_offset).toBe(offset + new TextEncoder().encode(chunk.text).length);
+        text += chunk.text;
+        offset = chunk.next_offset;
+        reads += 1;
+        if (!chunk.truncated) break;
+        expect(reads).toBeLessThan(10);
+      }
+      expect(text).toBe("x".repeat(size - 5) + "\nEND\n");
+      expect(reads).toBe(Math.ceil(size / MIB));
+
+      for (const at of [size, size + 100]) {
+        const end = await body(await server.call("GET", `/v1/runs/${run.id}/logs/big/1?offset=${at}`));
+        expect(end.text).toBe("");
+        expect(end.truncated).toBe(false);
+        expect(end.next_offset).toBe(at);
+      }
+    }, 60_000);
+  }
 
   test("a step, an attempt or a run that is not there is 404", async () => {
     const run = await start("hello-pipeline");

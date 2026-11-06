@@ -16,6 +16,43 @@ afterAll(async () => {
   env.cleanup();
 });
 
+describe("a log larger than one answer", () => {
+  // Builtins only: the suite's PATH holds just the binaries SPEC 2.6 requires.
+  const BIGLOG = `#!/usr/bin/env bash
+# ---
+# name: biglog
+# description: Write a log of 3000005 bytes ending in END.
+# ---
+
+chunk=$(printf 'x%.0s' {1..1024})
+for ((i = 0; i < 2929; i++)); do printf '%s' "$chunk"; done
+printf '%s' "\${chunk:0:704}"
+printf '\\nEND\\n'
+`;
+
+  test("get_run_log called on next_offset while truncated reaches the END line", async () => {
+    await env.api("POST", "/v1/blocks/biglog/versions", { body: { content: BIGLOG } });
+    await env.api("POST", "/v1/pipelines/big-pipeline/versions", {
+      body: { yaml: "name: big-pipeline\nsteps:\n  big:\n    uses: biglog@1\n" },
+    });
+    const started = await session.call("start_run", { pipeline: "big-pipeline" });
+    const id = started.json.run.id;
+    await env.waitForRun(id);
+
+    let offset = 0;
+    let text = "";
+    for (let reads = 0; reads < 10; reads++) {
+      const chunk = (await session.call("get_run_log", { id, step: "big", attempt: 1, offset })).json;
+      text += chunk.text;
+      offset = chunk.next_offset;
+      if (!chunk.truncated) break;
+    }
+    expect(text.length).toBe(3_000_005);
+    expect(text.endsWith("\nEND\n")).toBe(true);
+    expect(offset).toBe(3_000_005);
+  }, 30_000);
+});
+
 describe("a run that outlives the call", () => {
   let id: string;
 
@@ -41,7 +78,12 @@ describe("a run that outlives the call", () => {
       await Bun.sleep(25);
     }
 
-    const first = await session.call("get_run_log", { id, step: "nap", attempt: 1, offset: 0 });
+    // The step is "running" a moment before the script's first line reaches the file.
+    let first = await session.call("get_run_log", { id, step: "nap", attempt: 1, offset: 0 });
+    for (let tries = 0; first.json.text === "" && tries < 100; tries++) {
+      await Bun.sleep(25);
+      first = await session.call("get_run_log", { id, step: "nap", attempt: 1, offset: 0 });
+    }
     expect(first.json.text).toContain("starting to sleep");
     expect(first.json.next_offset).toBeGreaterThan(0);
 

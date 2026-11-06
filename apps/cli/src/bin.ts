@@ -4,4 +4,6 @@
 
 import { runCli } from "./index.ts";
 
-process.exit(await runCli(process.argv.slice(2)));
+// Not process.exit: it drops what a pipe has not taken yet, which cut a multi-megabyte log short
+// under `| wc -c`. The process ends by itself once stdout is flushed and the command's sockets are closed.
+process.exitCode = await runCli(process.argv.slice(2));

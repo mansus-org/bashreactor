@@ -2,7 +2,7 @@
 // FsRunStore here is the minimal file-backed implementation the engine's tests use, including the
 // restart test, which needs a store that outlives the engine process.
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { RunRecord } from "./run.ts";
 
@@ -56,6 +56,8 @@ export interface RunStore {
 
   writeFile(runId: string, rel: string, data: Uint8Array, mode?: number): Promise<void>;
   readFile(runId: string, rel: string): Promise<Uint8Array | null>;
+  /** At most `length` bytes from `offset`, plus the file's size after the read. Null when the file is missing. */
+  readFileRange(runId: string, rel: string, offset: number, length: number): Promise<{ bytes: Uint8Array; size: number } | null>;
   stat(runId: string, rel: string): Promise<FileStat>;
   chmod(runId: string, rel: string, mode: number): Promise<void>;
   remove(runId: string, rel: string): Promise<void>;
@@ -180,6 +182,34 @@ export class FsRunStore implements RunStore {
 
   async readFile(runId: string, rel: string): Promise<Uint8Array | null> {
     return readIfExists(join(this.layout(runId).runDir, rel));
+  }
+
+  async readFileRange(
+    runId: string,
+    rel: string,
+    offset: number,
+    length: number,
+  ): Promise<{ bytes: Uint8Array; size: number } | null> {
+    let fd: number;
+    try {
+      fd = openSync(join(this.layout(runId).runDir, rel), "r");
+    } catch {
+      return null;
+    }
+    try {
+      const buffer = new Uint8Array(length);
+      let filled = 0;
+      // readSync may return short of what was asked; only a zero means the end of the file.
+      while (filled < length) {
+        const got = readSync(fd, buffer, filled, length - filled, offset + filled);
+        if (got === 0) break;
+        filled += got;
+      }
+      // Sized after the read, so bytes appended meanwhile still count as "more to read".
+      return { bytes: buffer.subarray(0, filled), size: fstatSync(fd).size };
+    } finally {
+      closeSync(fd);
+    }
   }
 
   async stat(runId: string, rel: string): Promise<FileStat> {

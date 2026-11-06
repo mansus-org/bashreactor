@@ -166,11 +166,30 @@ describe("Engine", () => {
     const record = await engine.start(pathOf(new URL("flaky.yaml", fixtures)));
     await engine.drive(record.id);
 
-    const first = await engine.readLog(record.id, "run", 1, 0);
+    const first = await engine.readLog(record.id, "run", 1, 0, 1 << 20);
     expect(text(first.data)).toContain("first attempt: asking for a retry");
     expect(first.nextOffset).toBeGreaterThan(0);
-    const tail = await engine.readLog(record.id, "run", 1, first.nextOffset);
+    expect(first.nextOffset).toBe(first.data.length);
+    expect(first.more).toBe(false);
+    const tail = await engine.readLog(record.id, "run", 1, first.nextOffset, 1 << 20);
     expect(tail.data.length).toBe(0);
+    expect(tail.more).toBe(false);
+
+    // A small limit pages through the same bytes; the cursor is what was returned, not the file's end.
+    const pieces: Uint8Array[] = [];
+    let at = 0;
+    for (;;) {
+      const piece = await engine.readLog(record.id, "run", 1, at, 7);
+      expect(piece.nextOffset).toBe(at + piece.data.length);
+      pieces.push(piece.data);
+      at = piece.nextOffset;
+      if (!piece.more) break;
+    }
+    expect(Buffer.concat(pieces).equals(Buffer.from(first.data))).toBe(true);
+
+    const past = await engine.readLog(record.id, "run", 1, first.nextOffset + 50, 7);
+    expect(past).toEqual({ data: new Uint8Array(), nextOffset: first.nextOffset + 50, more: false });
+    expect((await engine.readLog(record.id, "run", 9, 0, 7)).data.length).toBe(0);
   }, 30_000);
 
   test("refuses to start when a required binary is missing", async () => {

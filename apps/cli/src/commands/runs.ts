@@ -169,6 +169,15 @@ export const runCommands: CommandSpec[] = [
         ctx.io.bytes(new TextEncoder().encode(chunk.text));
         openLine = !chunk.text.endsWith("\n");
       };
+      // The server cuts an answer at its own size and says so with `truncated`; one read is not the log.
+      // Under --json that means one chunk object per read.
+      const drain = async (): Promise<void> => {
+        for (;;) {
+          const chunk = await getLog(ctx, id, step, attempt, offset);
+          write(chunk);
+          if (!chunk.truncated) return;
+        }
+      };
       const note = (text: string): void => {
         if (openLine) ctx.io.err("");
         openLine = false;
@@ -176,19 +185,19 @@ export const runCommands: CommandSpec[] = [
       };
 
       if (!ctx.has("follow")) {
-        write(await getLog(ctx, id, step, attempt, offset));
+        await drain();
         if (!ctx.printer.json) note(`next offset ${offset}`);
         return 0;
       }
 
       const interval = ctx.int("interval", 1000);
       for (;;) {
-        write(await getLog(ctx, id, step, attempt, offset));
+        await drain();
         const run = await ctx.client.json<RunRecord>("GET", `/v1/runs/${encodeURIComponent(id)}`);
         const status = run.steps[step]?.status;
         if (status !== undefined && FINAL_STEP_STATUSES.includes(status)) {
           // Anything written between the two reads is still part of the answer.
-          write(await getLog(ctx, id, step, attempt, offset));
+          await drain();
           if (!ctx.printer.json) {
             note(`next offset ${offset}`);
             note(`run ${id} ${run.status}`);
