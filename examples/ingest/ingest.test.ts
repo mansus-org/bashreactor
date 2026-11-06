@@ -3,7 +3,7 @@
 // uv needs a Python it can run, as for every uv block; the blocks use the standard library only.
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../../apps/engine/src/engine.ts";
@@ -34,6 +34,7 @@ const cosine = (a: number[], b: number[]) => {
 
 let failEmbedCall = 0; // fail this embeddings request (1-based) once, then answer normally
 let embedCalls = 0;
+let forceStatus = 0; // answer every embeddings request with this status when set
 let embeddedTexts: string[] = [];
 let authHeaders: (string | null)[] = [];
 
@@ -57,6 +58,7 @@ const site = Bun.serve({
       authHeaders.push(request.headers.get("authorization"));
       // What a CDN in front of a real gateway does to a bare urllib.
       if (request.headers.get("user-agent")?.startsWith("Python-urllib")) return new Response("blocked", { status: 403 });
+      if (forceStatus) return new Response("echo: secret body", { status: forceStatus });
       if (embedCalls === failEmbedCall) return new Response("boom", { status: 500 });
       const body = (await request.json()) as { model: string; input: string[] };
       embeddedTexts.push(...body.input);
@@ -82,6 +84,7 @@ function newEngine(key: string | undefined) {
 
 function reset(failOn = 0) {
   failEmbedCall = failOn;
+  forceStatus = 0;
   embedCalls = 0;
   embeddedTexts = [];
   authHeaders = [];
@@ -103,7 +106,7 @@ function jsonl(path: string): any[] {
 
 test("two good URLs and a 404: the good ones are embedded, the 404 is reported", async () => {
   reset();
-  const { root, engine } = newEngine("sk-test-secret-123");
+  const { root, engine } = newEngine(undefined);
   const record = await engine.start(pipeline, inputs([`${base}/kube`, `${base}/gone`, `${base}/bread`]));
   const final = await engine.drive(record.id);
   expect(final.status).toBe("succeeded");
@@ -140,12 +143,16 @@ test("two good URLs and a 404: the good ones are embedded, the 404 is reported",
   // The 404 was asked for once: a permanent failure does not spend the retry budget.
   expect(final.steps.fetch!.attempts_used).toBe(1);
 
-  // The key reached the route and nothing on disk.
-  expect(authHeaders.every((h) => h === "Bearer sk-test-secret-123")).toBe(true);
-  const files = readdirSync(run, { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
-  for (const file of files) {
-    expect(readFileSync(join(file.parentPath, file.name)).includes("sk-test-secret-123")).toBe(false);
-  }
+  // No key in the server's environment: the route is asked without an Authorization header.
+  expect(authHeaders.length).toBeGreaterThan(0);
+  expect(authHeaders.every((h) => h === null)).toBe(true);
+
+  // The route got the prefix; the stored text does not carry it, and the manifest records it.
+  expect(embeddedTexts.length).toBe(rows.length);
+  expect(embeddedTexts.every((t) => t.startsWith("passage: "))).toBe(true);
+  expect(embeddedTexts.map((t) => t.slice("passage: ".length)).toSorted()).toEqual(rows.map((r) => r.text).toSorted());
+  expect(rows.some((r) => r.text.includes("passage:"))).toBe(false);
+  expect(manifest.prefix).toBe("passage: ");
 
   // A small retrieval check: the nearest chunk to a question is from the page about it.
   const query = vectorOf("how long should a sourdough starter rest");
@@ -166,38 +173,43 @@ test("a failing embeddings request is retried and only the missing chunks are pa
   expect(chunks).toBeGreaterThan(4);
   // Every chunk reached the model exactly once across both attempts.
   expect(embeddedTexts.length).toBe(chunks);
-  
 }, 120_000);
 
-test("a missing key stops the run before it starts, naming the variable", async () => {
+test("an empty prefix sends the text as it is and the manifest says so", async () => {
   reset();
-  const { engine } = newEngine(undefined);
-  const started = engine.start(pipeline, inputs([`${base}/bread`]));
-  await expect(started).rejects.toMatchObject({ code: "env_missing" });
-  await expect(started).rejects.toThrow("EMBEDDINGS_API_KEY");
-  expect(embedCalls).toBe(0);
-});
-
-test("the block itself refuses with exit 78 when the key is unset", async () => {
-  const proc = Bun.spawn(["bash", "-euo", "pipefail", join(here, "embed-chunks.sh")], {
-    env: { PATH: process.env.PATH ?? "" },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const output = await new Response(proc.stdout).text();
-  expect(await proc.exited).toBe(78);
-  expect(output).toContain("EMBEDDINGS_API_KEY is not set");
-});
-
-test("an empty key works for an endpoint that needs none, and sends no Authorization header", async () => {
-  reset();
-  const { engine } = newEngine("");
-  const record = await engine.start(pipeline, inputs([`${base}/bread`]));
+  const { root, engine } = newEngine("");
+  const record = await engine.start(pipeline, inputs([`${base}/bread`], { prefix: "" }));
   const final = await engine.drive(record.id);
   expect(final.status).toBe("succeeded");
-  expect(authHeaders.length).toBeGreaterThan(0);
+  const run = join(root, "runs", record.id);
+  const rows = jsonl(join(run, String(final.outputs!.embeddings)));
+  expect(embeddedTexts.toSorted()).toEqual(rows.map((r) => r.text).toSorted());
+  expect(JSON.parse(readFileSync(join(run, String(final.outputs!.manifest)), "utf8")).prefix).toBe("");
+  // An empty key is the same as none.
   expect(authHeaders.every((h) => h === null)).toBe(true);
 }, 120_000);
+
+async function embedLog(status: number) {
+  reset();
+  forceStatus = status;
+  const { root, engine } = newEngine(undefined);
+  const record = await engine.start(pipeline, inputs([`${base}/bread`]));
+  const final = await engine.drive(record.id);
+  expect(final.status).toBe("failed");
+  expect(final.steps.embed!.failure?.code).toBe("block_fatal");
+  return readFileSync(join(root, "runs", record.id, "steps", "embed", "attempts", "1", "log"), "utf8");
+}
+
+test("a 401 from the route exits 78 and says what to do, without printing the body", async () => {
+  const log = await embedLog(401);
+  expect(log).toContain("answered 401");
+  expect(log).toContain("pass_env: [EMBEDDINGS_API_KEY]");
+  expect(log).not.toContain("secret body");
+}, 60_000);
+
+test("a 400 (a chunk over the token limit) exits 78 and tells the reader to lower chunk_words", async () => {
+  expect(await embedLog(400)).toContain("lower chunk_words");
+}, 60_000);
 
 test("when every URL fails the run fails with the reason in the log", async () => {
   reset();
