@@ -7,7 +7,9 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@bashreactor/api": "workspace:*"
+    "@bashreactor/api": "workspace:*",
+    "@bashreactor/core": "workspace:*",
+    "yaml": "^2.8.0"
   },
   "scripts": {
     "test": "bun test",
