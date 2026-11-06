@@ -35,6 +35,11 @@ defaults, and `lines` 50. That file says a correct run returns a 163 byte report
 are the ones the tests expect. The run still in flight in the Runs list is the one exception, and its
 caption says so.
 
+Three of them were recaptured at `ee5453c`, after BASHR-13 gave every step status its own stamp
+(`dac64fe`): the two shots of the failed run and the full-page one in *Reading a log*. The rest are
+from the build just before it, and none of them shows a step status that the fix changed:
+`04-run-succeeded.png` is all-succeeded, and the two Runs lists stamp the run, not its steps.
+
 ### The gate
 
 ![The sign-in form: a Server field, a token field, and a checkbox to stay signed in on this device](docs/screenshots/00-signin-gate.png)
@@ -113,28 +118,36 @@ bytes, a picker for which attempt's log to read, its outputs (`report` at
 
 #### The run that did not
 
-![Run detail for the failed run: check failed with block_fatal after one attempt, report never started, count succeeded](docs/screenshots/05-run-failed.png)
+![Run detail for the failed run: the alarm box says check failed with block_fatal, generate and count read succeeded and check reads failed, and the report row is cut off at the bottom edge](docs/screenshots/05-run-failed.png)
 
 The same pipeline with `lines` 50. The corpus is below `min_lines`, so `check` exits 78 and the run is
 `failed` after 0 s. The alarm box names the step and the code and offers *Retry from check* and *Read
 its log*. The `check` row reads `1 attempt used`, and the pipeline gives that step two attempts
-(`docs/examples/word-report.yaml`): exit 78 does not spend the rest. `report` never started, its note
-reading *check failed, so this never started*. `count` needs nothing from `check`, so it is `succeeded`
-as well.
+(`docs/examples/word-report.yaml`): exit 78 does not spend the rest. `count` needs nothing from
+`check`, so it is `succeeded` as well. This frame is a 1440 x 900 viewport and it runs out part-way
+down the `report` row, so the picture holds that step's name and not its stamp or its note; the
+full-page shot in *Reading a log* below shows both.
 
-One thing on that `report` row is wrong. Its status stamp reads `pending`, and `run.json` says
-`skipped`. `state()` in `apps/web/src/client/runs.ts` recognises four statuses and falls back to
-`pending` for every other one, so `skipped` and `waiting_retry` both print as `pending` on this screen.
-It is a bug, not a different word for the same thing.
+The `report` row is the one thing this screen used to get wrong, and it reads `skipped`, the word
+`run.json` holds. `state()` in `apps/web/src/client/runs.ts` used to know four statuses and answer
+every other one with `pending`, so `skipped` and `waiting_retry` both printed as `pending` and the
+screen contradicted the run it was showing. It now stamps every status SPEC 4.4 allows plus
+`interrupted`, each with its own word and its own sign, and keeps `pending` for a status this UI has
+never seen: that word claims nothing about the outcome and is not final, so it cannot call a live run
+finished. `apps/web/src/client/runs.test.ts` stamps all eight of them and one the spec has never heard
+of, and checks the word and the shape each time. The note under `report`, *check failed, so this never
+started.*, is the half that was never wrong.
 
-![The failed run at phone width](docs/screenshots/11-mobile-run.png)
+![The same failed run at phone width: the run head, the inputs and the alarm box, with the step list beginning below them](docs/screenshots/11-mobile-run.png)
 
-The same failed run at phone width, a 390 px viewport: below 980 px the step list and the log panel
-stack into one column (`@media (max-width: 980px)` in `apps/web/src/client/style.css`).
+The same failed run at phone width, a 390 px viewport. Below 980 px the step list and the log panel
+stack into one column (`@media (max-width: 980px)` in `apps/web/src/client/style.css`), and the stack
+is taller than the phone: this frame ends inside the first step row, so the alarm box is the last
+thing it shows whole, and `report`, with its `skipped` stamp, is one scroll away.
 
 #### Reading a log
 
-![The log panel for the failed check step, read to byte 42, showing one line of output](docs/screenshots/14-run-log.png)
+![The whole failed run screen at desktop width: the step list with report stamped skipped, and beside it the log panel for the failed check step, read to byte 42 with its one line of output](docs/screenshots/14-run-log.png)
 
 The log pane holds one attempt of one step, and its cursor is a byte offset (SPEC 4.8). This pane has
 *Read to byte 42*, which is all of `check` attempt 1: one line, `check-corpus: 50 lines, need at least
@@ -216,10 +229,10 @@ which means *do not bother*: another attempt would read the same short corpus. T
 `max_attempts: 2` and the run spent one.
 
 **A skipped step does not stop unrelated work** (SPEC 4.4). Also the run that did not. `report` depends
-on `check`, so it never starts, with no attempts and no bound inputs. `count` needs nothing from
-`check`, so it ran and published `total_words`, `top_words` and `counts` regardless; read them in
-`run.json` or with `bashreactor runs get <id>`. Failure takes down what depended on it and leaves
-everything else alone.
+on `check`, so it never starts, with no attempts and no bound inputs; on the run screen that is a row
+stamped `skipped`, its note naming `check`. `count` needs nothing from `check`, so it ran and published
+`total_words`, `top_words` and `counts` regardless; read them in `run.json` or with
+`bashreactor runs get <id>`. Failure takes down what depended on it and leaves everything else alone.
 
 ## Try it
 
