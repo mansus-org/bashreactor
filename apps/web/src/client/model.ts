@@ -7,8 +7,8 @@
 // `uses` takes the library form `name@version` (SPEC 3.4) as well as the path form. And the problem
 // codes are the SPEC 5 ones, so a problem the editor found locally reads the way the API's would.
 
-import { formatScalar, isMap, parse } from "./yaml.ts";
-import type { Json, Loc, YamlError } from "./yaml.ts";
+import { formatScalar, isMap, parse } from "./yaml.js";
+import type { Json, Loc, YamlError } from "./yaml.js";
 
 export interface LibraryVersion {
   version: number;
