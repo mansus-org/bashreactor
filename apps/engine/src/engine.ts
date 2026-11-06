@@ -81,6 +81,11 @@ export class Engine {
   readonly env: Record<string, string | undefined>;
   readonly path: string;
   private runtimeMissing: string[] | null = null;
+  // Shutdown is carried out by each drive loop itself, at the top of its next turn, so it can never
+  // race a step being started or an attempt being recorded: the loop is the only writer of its run.
+  private stopping = false;
+  private hurried = false;
+  private readonly drives = new Set<Promise<unknown>>();
 
   constructor(options: EngineOptions) {
     this.store = options.store;
@@ -189,8 +194,10 @@ export class Engine {
   }
 
   async drive(runId: string): Promise<RunRecord> {
-    await this.claim(runId);
-    return this.runLoop(runId);
+    return this.track(async () => {
+      await this.claim(runId);
+      return this.runLoop(runId);
+    });
   }
 
   async resume(runId: string): Promise<RunRecord> {
@@ -198,28 +205,42 @@ export class Engine {
   }
 
   async retry(runId: string): Promise<RunRecord> {
-    const record = await this.store.loadRun(runId);
-    if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
-    if (record.status !== "failed" && record.status !== "cancelled") {
-      throw new BashreactorError("run_not_retryable", `run "${runId}" is ${record.status}, not failed or cancelled`);
-    }
-    await this.claim(runId);
-    for (const step of Object.values(record.steps)) {
-      if (step.status === "failed" || step.status === "skipped" || step.status === "cancelled") {
-        step.status = "pending";
-        step.with = null;
-        step.failure = null;
-        step.next_attempt_at = null;
-        step.attempts_used = 0;
+    return this.track(async () => {
+      const record = await this.store.loadRun(runId);
+      if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
+      if (record.status !== "failed" && record.status !== "cancelled") {
+        throw new BashreactorError("run_not_retryable", `run "${runId}" is ${record.status}, not failed or cancelled`);
       }
-    }
-    record.status = "running";
-    record.cancel_requested_at = null;
-    record.finished_at = null;
-    record.outputs = null;
-    await this.store.clearCancelRequest(runId);
-    await this.store.saveRun(record);
-    return this.runLoop(runId);
+      await this.claim(runId);
+      for (const step of Object.values(record.steps)) {
+        if (step.status === "failed" || step.status === "skipped" || step.status === "cancelled") {
+          step.status = "pending";
+          step.with = null;
+          step.failure = null;
+          step.next_attempt_at = null;
+          step.attempts_used = 0;
+        }
+      }
+      record.status = "running";
+      record.cancel_requested_at = null;
+      record.finished_at = null;
+      record.outputs = null;
+      await this.store.clearCancelRequest(runId);
+      await this.store.saveRun(record);
+      return this.runLoop(runId);
+    });
+  }
+
+  /**
+   * SPEC 4.7, graceful shutdown. Stops every drive loop from starting steps, stops the attempts that
+   * are running (SIGTERM, `kill_grace`, SIGKILL), marks them interrupted, releases the claims and
+   * resolves. The runs stay `running`, so the next engine resumes them. A second call skips the
+   * remaining grace: the attempts are killed at once, and the bookkeeping still happens.
+   */
+  async shutdown(): Promise<void> {
+    if (this.stopping) this.hurried = true;
+    this.stopping = true;
+    await Promise.allSettled(this.drives);
   }
 
   async cancel(runId: string): Promise<void> {
@@ -339,6 +360,14 @@ export class Engine {
     return { pipeline, blocks, inputTypes: new Map(pipeline.inputs.map((input) => [input.name, input.type])) };
   }
 
+  private track<T>(work: () => Promise<T>): Promise<T> {
+    const running = work();
+    const entry = running.catch(() => undefined);
+    this.drives.add(entry);
+    void entry.then(() => this.drives.delete(entry));
+    return running;
+  }
+
   private async runLoop(runId: string): Promise<RunRecord> {
     const plan = await this.loadPlan(runId);
     const state: DriveState = { plan, active: new Map(), reaped: [] };
@@ -348,6 +377,10 @@ export class Engine {
       while (true) {
         const record = await this.store.loadRun(runId);
         if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
+        if (this.stopping) {
+          await this.windDown(record, state);
+          return record;
+        }
         if (await this.store.hasCancelRequest(runId)) {
           await this.applyCancel(record, state);
           await this.store.clearCancelRequest(runId);
@@ -390,27 +423,75 @@ export class Engine {
       const attempt = step.attempts[step.attempts.length - 1];
       if (attempt !== undefined && attempt.pid !== null && attempt.pid_start !== null
         && readProcStartTime(attempt.pid) === attempt.pid_start) {
-        const killGraceMs = (state.plan.pipeline.steps.find((s) => s.id === step.id)?.kill_grace ?? 30) * 1000;
-        await this.stopProcessGroup(attempt.pid, killGraceMs);
+        await this.stopProcessGroup(attempt.pid, this.killGraceMs(state, step.id));
       }
-      if (attempt !== undefined) {
-        attempt.status = "interrupted";
-        attempt.finished_at = nowIso();
-        attempt.failure = { code: "interrupted", message: "engine restart" };
-      }
-      step.status = record.cancel_requested_at !== null ? "cancelled" : "pending";
+      this.markInterrupted(record, step, "engine restart");
       changed = true;
     }
     if (changed) await this.store.saveRun(record);
   }
 
-  private async stopProcessGroup(pgid: number, killGraceMs: number): Promise<void> {
-    sendGroupSignal(pgid, "SIGTERM");
+  // The rules of section 4.7 for an attempt cut off by an engine going away, shared by resume and
+  // shutdown so there is one copy of them.
+  private markInterrupted(record: RunRecord, step: StepRecord, message: string): void {
+    const attempt = step.attempts[step.attempts.length - 1];
+    if (attempt !== undefined) {
+      attempt.status = "interrupted";
+      attempt.finished_at = nowIso();
+      attempt.failure = { code: "interrupted", message };
+    }
+    step.status = record.cancel_requested_at !== null ? "cancelled" : "pending";
+  }
+
+  private killGraceMs(state: DriveState, stepId: string): number {
+    return (state.plan.pipeline.steps.find((s) => s.id === stepId)?.kill_grace ?? 30) * 1000;
+  }
+
+  // Runs on the drive loop's own turn, so nothing else is starting or recording an attempt. Attempts
+  // that ended by themselves before shutdown began are recorded as they ended; the rest are stopped
+  // and interrupted, never read as a timeout, a signal death or a retry.
+  private async windDown(record: RunRecord, state: DriveState): Promise<void> {
+    await this.reap(record, state);
+    const live = [...state.active.values()].filter((attempt) => !attempt.finished);
+    await Promise.all(live.map((attempt) => {
+      // An attempt already in its grace period (timeout or cancel) has had its SIGTERM; it keeps the
+      // clock it was on instead of getting a second signal and a fresh grace.
+      const termed = attempt.sigtermAt;
+      const graceLeft = termed === null ? attempt.killGraceMs : Math.max(0, termed + attempt.killGraceMs - Date.now());
+      return this.stopProcessGroup(attempt.pid, graceLeft, termed === null);
+    }));
+    for (const attempt of live) {
+      const step = record.steps[attempt.stepId]!;
+      const attemptRecord = step.attempts.find((a) => a.n === attempt.n)!;
+      if (attempt.cancelled) {
+        attemptRecord.status = "cancelled";
+        attemptRecord.finished_at = nowIso();
+        attemptRecord.failure = { code: "cancelled", message: "cancelled" };
+        step.status = "cancelled";
+      } else {
+        this.markInterrupted(record, step, "engine shutdown");
+      }
+      state.active.delete(attempt.stepId);
+    }
+    // Whatever exited meanwhile was caused by the signals above and must not be read as a result.
+    state.reaped.length = 0;
+    this.updateRunStatus(record, state.plan);
+    await this.store.saveRun(record);
+  }
+
+  private async stopProcessGroup(pgid: number, killGraceMs: number, sendTerm = true): Promise<void> {
+    if (sendTerm) sendGroupSignal(pgid, "SIGTERM");
     const deadline = Date.now() + killGraceMs;
-    while (readProcStartTime(pgid) !== null && Date.now() < deadline) {
+    while (!this.hurried && readProcStartTime(pgid) !== null && Date.now() < deadline) {
       await Bun.sleep(20);
     }
     sendGroupSignal(pgid, "SIGKILL");
+    // SIGKILL is not instant: the leader stays in /proc as a zombie until it is reaped. Waiting for it
+    // makes "stopped" true when this returns, which the interrupted mark that follows claims.
+    const gone = Date.now() + 2000;
+    while (readProcStartTime(pgid) !== null && Date.now() < gone) {
+      await Bun.sleep(10);
+    }
   }
 
   private async reap(record: RunRecord, state: DriveState): Promise<void> {
@@ -436,12 +517,12 @@ export class Engine {
   }
 
   private async schedule(record: RunRecord, state: DriveState): Promise<void> {
-    if (record.cancel_requested_at !== null) return;
+    if (record.cancel_requested_at !== null || this.stopping) return;
     const maxParallel = state.plan.pipeline.max_parallel;
     const running = [...state.active.values()].filter((attempt) => !attempt.finished).length;
     let started = 0;
     for (const step of Object.values(record.steps)) {
-      if (running + started >= maxParallel) return;
+      if (running + started >= maxParallel || this.stopping) return;
       if (!this.isEligible(step, record)) continue;
       await this.startStep(record, step.id, state);
       if (record.steps[step.id]!.status === "running") started += 1;
@@ -487,6 +568,7 @@ export class Engine {
     }
 
     const layout = this.store.layout(record.id);
+    const before = { status: step.status, next_attempt_at: step.next_attempt_at };
     const n = (step.attempts[step.attempts.length - 1]?.n ?? 0) + 1;
     await this.store.ensureDir(record.id, `steps/${stepId}/work`);
     await this.store.ensureDir(record.id, `steps/${stepId}/attempts/${n}/outputs`);
@@ -508,6 +590,16 @@ export class Engine {
     step.status = "running";
     step.next_attempt_at = null;
     await this.store.saveRun(record);
+
+    // The awaits above are where a shutdown can begin. Nothing after this check awaits before the
+    // spawn, so no process starts once the flag is set; the attempt just recorded is taken back.
+    if (this.stopping) {
+      step.attempts.pop();
+      step.status = before.status;
+      step.next_attempt_at = before.next_attempt_at;
+      await this.store.saveRun(record);
+      return;
+    }
 
     let proc;
     try {
