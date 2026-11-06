@@ -241,10 +241,22 @@ export class Engine {
     return this.store.listRunIds();
   }
 
-  async readLog(runId: string, stepId: string, attempt: number, offset: number): Promise<{ data: Uint8Array; nextOffset: number }> {
-    const bytes = (await this.store.readFile(runId, `steps/${stepId}/attempts/${attempt}/log`)) ?? new Uint8Array();
-    const data = bytes.slice(offset);
-    return { data, nextOffset: bytes.length };
+  /**
+   * Up to `limit` bytes of an attempt's log from `offset`. `nextOffset` is `offset` plus the bytes
+   * returned, never the end of the file, so a reader that follows it cannot skip anything; `more` says
+   * whether bytes remain beyond what was returned.
+   */
+  async readLog(
+    runId: string,
+    stepId: string,
+    attempt: number,
+    offset: number,
+    limit: number,
+  ): Promise<{ data: Uint8Array; nextOffset: number; more: boolean }> {
+    const read = await this.store.readFileRange(runId, `steps/${stepId}/attempts/${attempt}/log`, offset, limit);
+    if (read === null) return { data: new Uint8Array(), nextOffset: offset, more: false };
+    const nextOffset = offset + read.bytes.length;
+    return { data: read.bytes, nextOffset, more: read.size > nextOffset };
   }
 
   // --- internals ----------------------------------------------------------

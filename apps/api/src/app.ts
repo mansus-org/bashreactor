@@ -236,15 +236,15 @@ export function createApi(deps: ApiDependencies): Api {
       });
     }
 
-    const chunk = await engine.readLog(id, stepId, attempt, offset);
-    const text = new TextDecoder("utf-8").decode(chunk.data.slice(0, MAX_LOG_TEXT_BYTES));
+    const chunk = await engine.readLog(id, stepId, attempt, offset, MAX_LOG_TEXT_BYTES);
+    const text = new TextDecoder("utf-8").decode(chunk.data);
     return json(200, {
       run: id,
       step: stepId,
       attempt,
       offset,
       next_offset: chunk.nextOffset,
-      truncated: chunk.data.length > MAX_LOG_TEXT_BYTES,
+      truncated: chunk.more,
       text,
     });
   });
