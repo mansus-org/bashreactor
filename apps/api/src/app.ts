@@ -226,7 +226,9 @@ export function createApi(deps: ApiDependencies): Api {
     const offset = parseIntegerParam("offset", url.searchParams.get("offset") ?? "0", 0);
 
     const record = await requiredRun(id);
-    const step = record.steps[stepId];
+    // `Object.hasOwn`, because a step id comes from the URL and `record.steps["__proto__"]` answers
+    // with the prototype: an inherited object is not a step of this run.
+    const step = Object.hasOwn(record.steps, stepId) ? record.steps[stepId] : undefined;
     if (step === undefined) {
       throw new ApiError("step_not_found", `run "${id}" has no step "${stepId}"`, { path: `steps.${stepId}` });
     }
@@ -255,13 +257,25 @@ export function createApi(deps: ApiDependencies): Api {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter((part) => part !== "");
 
-    if (request.method === "GET" && url.pathname === "/healthz") {
+    if (url.pathname === "/healthz") {
+      if (request.method !== "GET") {
+        throw new ApiError("method_not_allowed", "the deploy probe is GET /healthz");
+      }
       return json(200, { status: "ok", version: config.version });
     }
 
     const match = matchRoute(routes, request.method, parts);
     if (match === null) {
-      throw new ApiError("not_implemented", `${request.method} ${url.pathname} is not implemented yet`);
+      // A path this API has, with a method it does not take, is 405; a path it does not have at all is
+      // 404. Both used to be 501, which told a caller nothing about what to change.
+      const allowed = methodsAt(routes, parts);
+      if (allowed.length > 0) {
+        throw new ApiError(
+          "method_not_allowed",
+          `${request.method} ${url.pathname} is not allowed here; it takes ${allowed.toSorted().join(", ")}`,
+        );
+      }
+      throw new ApiError("not_found", `${request.method} ${url.pathname} is not a path this API has`);
     }
 
     const identity = authenticate(request, config, tokens);
@@ -427,27 +441,45 @@ function pipelineVersion(store: Store, name: string, version: string) {
   return store.getPipeline(checked, parseIntegerParam("version", version, 1));
 }
 
-/** A block file's comment header, for the name check that does not need the whole file. */
+/** Whether this route's fixed segments are this path, ignoring the method. */
+function pathMatches(route: Route, parts: readonly string[]): boolean {
+  if (route.segments.length !== parts.length) return false;
+  return route.segments.every((segment, index) => segment.startsWith(":") || segment === parts[index]);
+}
+
+/** Which methods this path takes, so a wrong one can be named instead of guessed at. */
+function methodsAt(routes: readonly Route[], parts: readonly string[]): string[] {
+  const found: string[] = [];
+  for (const route of routes) {
+    if (pathMatches(route, parts) && !found.includes(route.method)) found.push(route.method);
+  }
+  return found;
+}
+
 function matchRoute(
   routes: readonly Route[],
   method: string,
   parts: readonly string[],
 ): { route: Route; params: Record<string, string> } | null {
   for (const route of routes) {
-    if (route.method !== method || route.segments.length !== parts.length) continue;
+    if (route.method !== method || !pathMatches(route, parts)) continue;
     const params: Record<string, string> = {};
-    let ok = true;
     for (const [index, segment] of route.segments.entries()) {
-      const part = parts[index]!;
-      if (segment.startsWith(":")) params[segment.slice(1)] = decodeURIComponent(part);
-      else if (segment !== part) {
-        ok = false;
-        break;
-      }
+      if (segment.startsWith(":")) params[segment.slice(1)] = decodeSegment(parts[index]!);
     }
-    if (ok) return { route, params };
+    return { route, params };
   }
   return null;
+}
+
+// A path segment that is not valid percent-encoded UTF-8 is the caller's mistake, and `decodeURIComponent`
+// says so with a bare URIError, which used to arrive as a 500 carrying the engine's own text.
+function decodeSegment(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    throw new ApiError("bad_request", `"${part}" is not a valid percent-encoded path segment`);
+  }
 }
 
 function json(status: number, value: unknown): Response {

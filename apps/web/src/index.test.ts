@@ -61,10 +61,9 @@ describe("the mount", () => {
   test("leaves every route the API already had exactly as it was", async () => {
     const app = mount();
     try {
-      // The CI image job probes this 501; the UI lives under /app so that it can keep answering it.
       const root = await app.call("GET", "/");
-      expect(root.status).toBe(501);
-      expect(((await root.json()) as { code: string }).code).toBe("not_implemented");
+      expect(root.status).toBe(404);
+      expect(((await root.json()) as { code: string }).code).toBe("not_found");
 
       const health = await app.call("GET", "/healthz");
       expect(health.status).toBe(200);
@@ -80,11 +79,11 @@ describe("the mount", () => {
     }
   });
 
-  test("sends anything that is not a GET back to the API, which answers 501", async () => {
+  test("sends anything that is not a GET back to the API, which answers 404", async () => {
     const app = mount();
     try {
       const post = await app.call("POST", "/app/anything", { body: {} });
-      expect(post.status).toBe(501);
+      expect(post.status).toBe(404);
     } finally {
       app.close();
     }

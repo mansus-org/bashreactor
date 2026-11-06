@@ -45,7 +45,8 @@ describe("the server process", () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ status: "ok", version: "ci-test" });
 
-      expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(501);
+      // A path with no route is 404 now; `/` is not a route either.
+      expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(404);
 
       const disabled = await fetch(`http://127.0.0.1:${server.port}/v1/runs`);
       expect(disabled.status).toBe(503);

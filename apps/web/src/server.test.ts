@@ -48,8 +48,8 @@ test("the web entry serves the app and the API from one port, and stops on SIGTE
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: "ok", version: "ci-web" });
 
-    // The deploy probe's 501 at / survives the UI being mounted.
-    expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(501);
+    // A path with no route is 404, and `/` is not a route of the API underneath the UI.
+    expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(404);
 
     const app = await fetch(`http://127.0.0.1:${server.port}/app/`);
     expect(app.status).toBe(200);
