@@ -1,0 +1,106 @@
+name: ingest-article
+description: Fetch an article, chunk it, embed it, store it in a SQLite vector index, then search it.
+
+max_parallel: 2
+
+inputs:
+  url:
+    type: string
+    description: The article to ingest.
+    default: https://en.wikipedia.org/wiki/Vector_database
+  query:
+    type: string
+    description: The question to ask the index once it is built.
+    default: How does an approximate nearest neighbour index stay fast on large datasets?
+  endpoint:
+    type: string
+    description: The OpenAI-compatible embeddings route.
+    default: "http://127.0.0.1:8731/v1/embeddings"
+  model:
+    type: string
+    description: The embedding model to ask that route for.
+    default: qwen3-embedding-0.6b
+  chunk_words:
+    type: integer
+    description: How many words per chunk.
+    default: 120
+  overlap:
+    type: integer
+    description: How many of a chunk's last words start the next one.
+    default: 24
+  top:
+    type: integer
+    description: How many chunks a search returns.
+    default: 3
+  batch:
+    type: integer
+    description: How many chunks embed-chunks sends per request.
+    default: 8
+
+steps:
+  fetch:
+    name: Fetch the article
+    uses: ./fetch-article.sh
+    with:
+      url: ${{ inputs.url }}
+      min_bytes: 2000
+    timeout: 5m
+    retry:
+      # A download that fails on the network is worth another go; a 404 exits 78 and stops now.
+      max_attempts: 3
+      delay: 2s
+
+  chunk:
+    name: Split it into chunks
+    uses: ./chunk-text.sh
+    with:
+      article: ${{ steps.fetch.outputs.article }}
+      chunk_words: ${{ inputs.chunk_words }}
+      overlap: ${{ inputs.overlap }}
+    timeout: 2m
+
+  embed:
+    name: Embed every chunk
+    uses: ./embed-chunks.sh
+    with:
+      chunks: ${{ steps.chunk.outputs.chunks }}
+      endpoint: ${{ inputs.endpoint }}
+      model: ${{ inputs.model }}
+      batch: ${{ inputs.batch }}
+    timeout: 15m
+    retry:
+      # Each attempt keeps the vectors it already made in its work directory, so a retry after a
+      # dropped connection does not pay for the whole document again.
+      max_attempts: 3
+      delay: 2s
+
+  index:
+    name: Ingest into the vector index
+    uses: ./ingest-vectors.sh
+    with:
+      chunks: ${{ steps.chunk.outputs.chunks }}
+      vectors: ${{ steps.embed.outputs.vectors }}
+      title: ${{ steps.fetch.outputs.title }}
+      model: ${{ inputs.model }}
+    timeout: 5m
+
+  search:
+    name: Search the index
+    uses: ./search-vectors.sh
+    needs: [index]
+    with:
+      db: ${{ steps.index.outputs.db }}
+      query: ${{ inputs.query }}
+      endpoint: ${{ inputs.endpoint }}
+      model: ${{ inputs.model }}
+      top: ${{ inputs.top }}
+    timeout: 5m
+
+outputs:
+  db: ${{ steps.index.outputs.db }}
+  rows: ${{ steps.index.outputs.rows }}
+  dim: ${{ steps.embed.outputs.dim }}
+  chunks: ${{ steps.chunk.outputs.chunk_count }}
+  title: ${{ steps.fetch.outputs.title }}
+  top_score: ${{ steps.search.outputs.top_score }}
+  top_text: ${{ steps.search.outputs.top_text }}
