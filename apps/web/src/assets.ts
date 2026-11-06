@@ -22,6 +22,7 @@ import {
   modelSource,
   runsSource,
   styleCss,
+  yamlLibSource,
   yamlSource,
 } from "./raw.js";
 import { FONT_BASE64, FONT_LICENCE } from "./fonts.ts";
@@ -75,6 +76,8 @@ export function buildAssets(): { index: Asset; files: Map<string, Asset> } {
     // transformSync is typed for every loader Bun has; with loader "ts" it answers with a string.
     files.set(`assets/${name}.js`, asset(String(transpiler.transformSync(source)), `assets/${name}.js`));
   }
+  // Already JavaScript, and a bundle of someone else's code: it is served as it was built.
+  files.set("assets/yaml-lib.js", asset(yamlLibSource, "assets/yaml-lib.js"));
   files.set("assets/style.css", asset(styleCss, "assets/style.css"));
   for (const [name, base64] of Object.entries(FONT_BASE64)) {
     files.set(`assets/fonts/${name}`, asset(Buffer.from(base64, "base64"), `assets/fonts/${name}`));

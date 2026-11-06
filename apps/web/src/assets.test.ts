@@ -18,7 +18,8 @@ const CLIENT = join(import.meta.dir, "client");
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 /** Test files are Bun's, not the browser's: they import `.ts` directly and are never shipped. */
-const isShipped = (name: string): boolean => name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".testkit.ts");
+const isShipped = (name: string): boolean =>
+  name.endsWith(".ts") && !name.endsWith(".test.ts") && !name.endsWith(".testkit.ts") && !name.endsWith(".d.ts");
 
 /** Every TypeScript file under `client/`, however it is arranged: the table is flat, so a subdirectory is a bug. */
 function clientModules(dir: string = CLIENT, prefix = ""): string[] {

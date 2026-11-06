@@ -12,3 +12,4 @@ export declare const editorSource: string;
 export declare const runsSource: string;
 export declare const blocksSource: string;
 export declare const logsSource: string;
+export declare const yamlLibSource: string;

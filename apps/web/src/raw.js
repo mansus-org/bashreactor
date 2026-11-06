@@ -13,6 +13,9 @@
 // whichever loaded first wins. A test that wants a browser module's functions must take them from
 // the transpiled text the server serves, under a specifier of its own — see client/logs.test.ts.
 
+// The one thing here that is not a file on disk: the YAML parser the API validates with, bundled for the
+// browser when this file is transpiled (see yaml-lib.macro.ts), so it is inside server.js like the rest.
+import { yamlLibrary } from "./yaml-lib.macro.ts" with { type: "macro" };
 import indexHtml from "./client/index.html" with { type: "text" };
 import styleCss from "./client/style.css" with { type: "text" };
 import appSource from "./client/app.ts" with { type: "text" };
@@ -26,7 +29,10 @@ import runsSource from "./client/runs.ts" with { type: "text" };
 import blocksSource from "./client/blocks.ts" with { type: "text" };
 import logsSource from "./client/logs.ts" with { type: "text" };
 
+const yamlLibSource = yamlLibrary();
+
 export {
+  yamlLibSource,
   indexHtml,
   styleCss,
   appSource,
