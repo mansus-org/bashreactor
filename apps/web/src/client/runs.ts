@@ -5,6 +5,7 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import { announce, duration, el, errorBox, fill, flash, sign, stateLine, stateStamp, when } from "./dom.js";
+import type { State } from "./dom.js";
 import { emptyLog, feedLog, logLines } from "./logs.js";
 import type { LogState } from "./logs.js";
 import type { Route } from "./app.js";
@@ -14,10 +15,32 @@ import type { Attempt, LogChunk, Run, RunStep, RunSummary } from "./api.js";
 /** How often a live run is re-read. The log is a byte offset, so this is a cursor, not a stream. */
 const POLL_MS = 1000;
 
-const RUN_STATES = new Set(["running", "succeeded", "failed", "cancelled"]);
+/**
+ * The statuses this screen can stamp: the seven step statuses of SPEC 4.4, the run statuses that
+ * section's table ends with, and `interrupted` — SPEC 5 keeps that to an attempt, never a step or a
+ * run, but `status` is an unvalidated string on the wire and dom.ts already draws the shape, so a
+ * server that answers with it gets its own word rather than a guess.
+ *
+ * Everything else falls back to `pending`, which is a choice rather than a reflex. `stateStamp`
+ * prints the word it is handed and `sign` substitutes the not-started shape for a name it does not
+ * know, so handing an unknown status through would pair one state's word with another's shape. And
+ * `pending` is the least wrong thing to say about a status from an older server: it claims nothing
+ * about the outcome and is not final, so it cannot tell a reader a run is over when the UI has simply
+ * never seen that state — and it always draws, so the stamp is never blank and nothing throws.
+ */
+const STAMPABLE = new Set<string>([
+  "pending",
+  "running",
+  "waiting_retry",
+  "succeeded",
+  "failed",
+  "skipped",
+  "cancelled",
+  "interrupted",
+] satisfies State[]);
 
-function state(value: string): Parameters<typeof sign>[0] {
-  return (RUN_STATES.has(value) ? value : "pending") as Parameters<typeof sign>[0];
+function state(value: string): State {
+  return (STAMPABLE.has(value) ? value : "pending") as State;
 }
 
 function attemptDuration(attempt: Attempt, now: number): number {
