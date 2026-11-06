@@ -272,7 +272,7 @@ afterAll(() => {
   rmSync(served, { recursive: true, force: true });
 });
 
-// ---------- the run ----------
+// ---------- the runs on screen ----------
 
 const T0 = "2026-11-04T10:15:00Z";
 const T1 = "2026-11-04T10:15:41Z";
@@ -309,7 +309,7 @@ function step(id: string, status: string, needs: string[] = []): RunStep {
   };
 }
 
-function run(steps: RunStep[], status: string): Run {
+function runFixture(steps: RunStep[], status: string): Run {
   return {
     schema: 1,
     id: "20261104T101500Z-3fa9c2d1",
@@ -320,18 +320,18 @@ function run(steps: RunStep[], status: string): Run {
     cancel_requested_at: null,
     inputs: { lines: 200 },
     outputs: null,
-    steps: Object.fromEntries(steps.map((one) => [one.id, one])),
+    steps: Object.fromEntries(steps.map((entry) => [entry.id, entry])),
   };
 }
 
 /** The run from the bug report: `render` failed, so `report` never started. */
-const FAILED_RUN = run(
+const FAILED_RUN = runFixture(
   [step("fetch", "succeeded"), step("render", "failed", ["fetch"]), step("report", "skipped", ["render"])],
   "failed",
 );
 
 /** Not a run that happened: one step per status, so all of them are on screen at once. */
-const EVERY_STATUS = run(
+const EVERY_STATUS = runFixture(
   ["pending", "running", "waiting_retry", "succeeded", "failed", "skipped", "cancelled", "interrupted"].map((status) =>
     step(status, status),
   ),
@@ -404,7 +404,7 @@ describe("stamping a step", () => {
 
 describe("a status this UI has never seen", () => {
   test("falls back to pending rather than printing a word with no shape", async () => {
-    const view = await render(run([step("fetch", "approved", [])], "approved"));
+    const view = await render(runFixture([step("fetch", "approved", [])], "approved"));
     const stamp = stampOf(view, "fetch");
 
     // `stateStamp` prints the word it is given and `sign` has no art for a name it does not know, so
@@ -417,7 +417,7 @@ describe("a status this UI has never seen", () => {
   });
 
   test("interrupted is a word the screen knows, even though the spec keeps it to attempts", async () => {
-    const view = await render(run([step("render", "interrupted")], "interrupted"));
+    const view = await render(runFixture([step("render", "interrupted")], "interrupted"));
     expect(word(stampOf(view, "render"))).toBe("interrupted");
     expect(shape(stampOf(view, "render"))).toBe(signOf("interrupted"));
   });
