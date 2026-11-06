@@ -89,6 +89,19 @@ class FakeElement {
     }
   }
 
+  remove(): void {
+    this.parent?.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = null;
+  }
+
+  get childElementCount(): number {
+    return this.children.length;
+  }
+
+  get firstElementChild(): FakeElement | null {
+    return this.children[0] ?? null;
+  }
+
   replaceChildren(...nodes: (FakeElement | string)[]): void {
     for (const child of this.children) child.parent = null;
     this.children.length = 0;
@@ -228,6 +241,7 @@ for (const name of ["dom", "api", "logs", "runs"]) {
 writeFileSync(join(served, "app.js"), "export function navigate() {}\n");
 
 const { sign } = (await import(join(served, "dom.js"))) as typeof import("./dom.ts");
+const { MAX_DRAWN_LINES } = (await import(join(served, "logs.js"))) as typeof import("./logs.ts");
 const { renderRuns } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
 
 const controllers: AbortController[] = [];
@@ -243,12 +257,35 @@ function serve(run: Run): void {
   }) as unknown as typeof fetch;
 }
 
+/** One run, and a log served by byte offset in chunks of `chunkBytes`, the way the API cuts it. */
+function serveLog(run: Run, log: string, chunkBytes: number): void {
+  const bytes = new TextEncoder().encode(log);
+  globals.fetch = (async (href: string) => {
+    const url = new URL(String(href), "http://runs.test");
+    let body: unknown = run;
+    if (url.pathname.includes("/logs/")) {
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const piece = bytes.slice(offset, offset + chunkBytes);
+      body = {
+        run: run.id,
+        step: "",
+        attempt: 1,
+        offset,
+        next_offset: offset + piece.length,
+        text: new TextDecoder().decode(piece),
+        truncated: offset + piece.length < bytes.length,
+      };
+    }
+    return { ok: true, status: 200, json: async () => body };
+  }) as unknown as typeof fetch;
+}
+
 /** Renders one run the way the router does. `renderRuns` is fire and forget, so this waits for it. */
-async function render(run: Run): Promise<FakeElement> {
+async function render(run: Run, serving: () => void = () => serve(run), keepOpen = false): Promise<FakeElement> {
   const view = new FakeElement("div");
   const controller = new AbortController();
   controllers.push(controller);
-  serve(run);
+  serving();
   renderRuns(
     view as unknown as HTMLElement,
     { path: `/runs/${run.id}`, parts: ["runs", run.id], query: new URLSearchParams() },
@@ -259,7 +296,8 @@ async function render(run: Run): Promise<FakeElement> {
     if (rows.length > 0 && rows.every((row) => row.querySelector(".steprow__stamp")?.textContent !== "")) break;
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
-  controller.abort();
+  // A log read that is still going when the pane is aborted is dropped, so the log tests leave it open.
+  if (!keepOpen) controller.abort();
   return view;
 }
 
@@ -399,6 +437,53 @@ describe("stamping a step", () => {
     const view = await render(FAILED_RUN);
     const head = one(view.querySelector(".runhead__meta"), "run head");
     expect(word(one(head.querySelector(".stamp"), "head stamp"))).toBe("failed");
+  });
+});
+
+/** The pane stops polling for a finished run, so whatever it reads at the start is all it will ever read. */
+async function settle(): Promise<void> {
+  for (let turn = 0; turn < 200; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+describe("a log longer than one read", () => {
+  const FINISHED = runFixture([step("render", "succeeded")], "succeeded");
+
+  test("reads on until the server stops truncating, and ends on the last line", async () => {
+    const lines = Array.from({ length: 600 }, (_, n) => `line ${n}`);
+    const log = `${lines.join("\n")}\nEND\n`;
+    const view = await render(FINISHED, () => serveLog(FINISHED, log, 1000), true);
+    await settle();
+
+    const drawn = view.querySelectorAll(".log__text");
+    expect(drawn.at(-1)?.textContent).toBe("END");
+    expect(drawn.length).toBe(601);
+    expect(view.querySelector("[id=log-note]")?.hidden).toBe(true);
+    expect(view.querySelector("[id=log-status]")?.textContent).toBe(`Read to byte ${new TextEncoder().encode(log).length}.`);
+  });
+
+  test("a line cut by a chunk boundary is whole once the rest arrives", async () => {
+    const log = `${"x".repeat(2500)}\nEND\n`;
+    const view = await render(FINISHED, () => serveLog(FINISHED, log, 1000), true);
+    await settle();
+
+    const drawn = view.querySelectorAll(".log__text");
+    expect(drawn.map((node) => node.textContent.length)).toEqual([2500, 3]);
+    expect(drawn.at(-1)?.textContent).toBe("END");
+  });
+
+  test("past the drawing cap it keeps the end and says how much it left out", async () => {
+    const total = MAX_DRAWN_LINES + 700;
+    const log = `${Array.from({ length: total }, (_, n) => `line ${n}`).join("\n")}\nEND\n`;
+    const view = await render(FINISHED, () => serveLog(FINISHED, log, 4000), true);
+    await settle();
+
+    const drawn = view.querySelectorAll(".log__text");
+    expect(drawn.length).toBe(MAX_DRAWN_LINES);
+    expect(drawn.at(-1)?.textContent).toBe("END");
+    const note = one(view.querySelector("[id=log-note]"), "cap note");
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain(`The first ${total + 1 - MAX_DRAWN_LINES} lines`);
+    expect(note.textContent).toContain("are not drawn");
   });
 });
 
