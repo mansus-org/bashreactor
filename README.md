@@ -246,12 +246,9 @@ alias bashreactor='bun apps/cli/src/bin.ts'
 ./examples/demo.sh
 ```
 
-Then open <http://127.0.0.1:8080/app> and look at what you just ran. The screenshots need a build
-whose web client boots: `apps/web/src/client/model.ts` imports `./yaml.js`, and on a build that still
-imports `./yaml.ts` the browser 404s on that module and every screen stays on "Loading."
-
-`examples/api-demo.sh` walks the same path over `curl` and `jq`. `examples/mcp-demo.sh` calls the MCP
-read tools against the runs those two made, so it runs after them and starts no run of its own.
+Then open <http://127.0.0.1:8080/app> and look at what you just ran. `examples/api-demo.sh` walks the
+same path over `curl` and `jq`. `examples/mcp-demo.sh` calls the MCP read tools against the runs those
+two made, so it runs after them and starts no run of its own.
 [`examples/README.md`](examples/README.md) is the long version of all of it, troubleshooting included.
 
 ## Layout
