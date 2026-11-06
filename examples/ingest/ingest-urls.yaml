@@ -1,0 +1,72 @@
+name: ingest-urls
+description: Read several web pages, chunk their text, embed the chunks, and write one JSONL file of embeddings.
+
+inputs:
+  urls:
+    type: string
+    description: The pages to ingest, one URL per line.
+  chunk_words:
+    type: integer
+    description: How many words per chunk.
+    default: 120
+  overlap:
+    type: integer
+    description: How many of a chunk's last words start the next one.
+    default: 24
+  endpoint:
+    type: string
+    description: The OpenAI-compatible embeddings route.
+    default: https://litellm.cloudpunk.org/v1/embeddings
+  model:
+    type: string
+    description: The embedding model to ask that route for.
+    default: text-embedding-3-small
+  batch:
+    type: integer
+    description: How many chunks go in one embeddings request.
+    default: 16
+
+steps:
+  fetch:
+    name: Read the pages
+    uses: ./fetch-pages.sh
+    with:
+      urls: ${{ inputs.urls }}
+    timeout: 10m
+    retry:
+      # Only a network problem asks for this; a 404 is recorded as a failed URL and costs nothing.
+      max_attempts: 3
+      delay: 2s
+
+  chunk:
+    name: Split them into chunks
+    uses: ./chunk-pages.sh
+    with:
+      pages: ${{ steps.fetch.outputs.pages }}
+      chunk_words: ${{ inputs.chunk_words }}
+      overlap: ${{ inputs.overlap }}
+    timeout: 2m
+
+  embed:
+    name: Embed every chunk
+    uses: ./embed-chunks.sh
+    with:
+      chunks: ${{ steps.chunk.outputs.chunks }}
+      statuses: ${{ steps.fetch.outputs.statuses }}
+      endpoint: ${{ inputs.endpoint }}
+      model: ${{ inputs.model }}
+      batch: ${{ inputs.batch }}
+    # The key is read from the server's environment and is never an input, which run.json records.
+    pass_env: [EMBEDDINGS_API_KEY]
+    timeout: 30m
+    retry:
+      max_attempts: 3
+      delay: 2s
+
+outputs:
+  embeddings: ${{ steps.embed.outputs.embeddings }}
+  manifest: ${{ steps.embed.outputs.manifest }}
+  chunks: ${{ steps.embed.outputs.embedded }}
+  dim: ${{ steps.embed.outputs.dim }}
+  urls_ok: ${{ steps.fetch.outputs.ok_count }}
+  urls_failed: ${{ steps.fetch.outputs.failed_count }}
