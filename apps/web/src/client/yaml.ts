@@ -87,6 +87,7 @@ function describe(text: string, raw: string): YamlError {
   if (at !== null) {
     return { code: "pipeline_yaml_invalid", line: Number(at[1]), message: raw.slice(0, at.index).trim() + "." };
   }
+  if (raw.endsWith("got 0")) return { code: "pipeline_yaml_invalid", line: 1, message: "There is no YAML document in this file." };
   // "expected one YAML document, got 2" names no line, so point at the second document's marker.
   const markers = text.split("\n").flatMap((line, index) => (/^---(\s|$)/.test(line) ? [index + 1] : []));
   return { code: "pipeline_yaml_invalid", line: markers[1] ?? markers[0] ?? 1, message: `${raw}.` };
