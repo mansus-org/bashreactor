@@ -615,3 +615,6 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
   50% { background: var(--sparse) var(--paper); color: var(--ink); }
 }
 @media (prefers-reduced-motion: reduce) { .is-new { animation: none; } }
+
+/* A JSON field in the Start dialog is code, so it is set in the code face. */
+.field textarea.code { font-family: var(--font-code); }

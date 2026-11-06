@@ -165,7 +165,7 @@ function startField(input: PipelineInput): { node: HTMLElement; control: HTMLEle
   const initial = input.type === "json" ? (input.required ? "" : JSON.stringify(input.default, null, 2)) : input.default === null ? "" : String(input.default);
   const control: HTMLInputElement | HTMLTextAreaElement =
     input.type === "json"
-      ? el("textarea", { id, rows: 6, spellcheck: "false", autocomplete: "off", "aria-describedby": describedBy })
+      ? el("textarea", { id, class: "code", rows: 6, spellcheck: "false", autocomplete: "off", "aria-describedby": describedBy })
       : el("input", {
           id,
           type: "text",
@@ -669,7 +669,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         const reading = parseTyped(input.type, input.name, raw);
         if (!reading.ok) return refuse(reading.message);
         if (reading.value !== undefined && !writable(reading.value)) {
-          return refuse(`${input.name} is a ${Array.isArray(reading.value) ? "list" : "object"} the graph cannot write safely: edit it in the YAML pane.`);
+          return refuse(`${input.name} is ${Array.isArray(reading.value) ? "a list" : "an object"} the graph cannot write safely: edit it in the YAML pane.`);
         }
         write(reading.value as Json, `text:${fieldId}`);
       },
