@@ -623,34 +623,49 @@ interface FakeResponse {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+interface FakeResponse {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
   blob: () => Promise<Blob>;
   headers: { get: (name: string) => string | null };
+  /** The real Response has one, and `errorOf` reads through it so the caller keeps a body of its own. */
+  clone: () => FakeResponse;
 }
 
-const reply = (body: unknown, status = 200): FakeResponse => ({
-  ok: status < 400,
-  status,
-  json: async () => body,
-  blob: async () => new Blob([JSON.stringify(body)]),
-  headers: { get: () => null },
-});
+const reply = (body: unknown, status = 200): FakeResponse => {
+  // Reading a fake never uses the body up, so a clone of it is the same answer again.
+  const response: FakeResponse = {
+    ok: status < 400,
+    status,
+    json: async () => body,
+    blob: async () => new Blob([JSON.stringify(body)]),
+    headers: { get: () => null },
+    clone: () => response,
+  };
+  return response;
+};
 
 /**
  * A download: bytes and a filename, and a `json()` that refuses, so a page that tried to read a
  * tarball as JSON finds out rather than being handed a lie.
  */
-const replyBytes = (text: string, filename: string): FakeResponse => ({
-  ok: true,
-  status: 200,
-  json: async (): Promise<unknown> => {
-    throw new TypeError("this is a file, not JSON");
-  },
-  blob: async () => new Blob([text]),
-  headers: {
-    get: (name: string) =>
-      name.toLowerCase() === "content-disposition" ? `attachment; filename="${filename}"` : null,
-  },
-});
+const replyBytes = (text: string, filename: string): FakeResponse => {
+  const response: FakeResponse = {
+    ok: true,
+    status: 200,
+    json: async (): Promise<unknown> => {
+      throw new TypeError("this is a file, not JSON");
+    },
+    blob: async () => new Blob([text]),
+    headers: {
+      get: (name: string) =>
+        name.toLowerCase() === "content-disposition" ? `attachment; filename="${filename}"` : null,
+    },
+    clone: () => response,
+  };
+  return response;
+};
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).length;
 

@@ -239,6 +239,9 @@ export class FakeElement {
 
   focus(): void {}
 
+  /** The app selects what a person typed so retyping is not needed; the fake only has to survive it. */
+  select(): void {}
+
   showModal(): void {
     this.open = true;
   }

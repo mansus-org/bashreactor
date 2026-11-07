@@ -227,14 +227,22 @@ async function send(
       message: `${session.base} did not answer. Check the address, and that this server is running.`,
     });
   }
-  if (response.status === 401 && !options.raw) session.onUnauthorized(await errorOf(response));
+  // Any 401, on any call: it is the token that failed, not the endpoint, so the shell hears about it
+  // whether the caller wanted its body parsed as JSON or not.
+  if (response.status === 401) session.onUnauthorized(await errorOf(response));
   return response;
 }
 
+/**
+ * Reads the SPEC 5 object off a response. It reads a clone, which is the whole point of it: reading
+ * the body here used to leave nothing for the caller, whose own read then threw "answered with no
+ * error object" — so the one message the person needed, the server's own reason, was the one thing
+ * the screen could not show them.
+ */
 async function errorOf(response: Response): Promise<ApiError> {
   let body: { code?: string; message?: string; path?: string; file?: string } = {};
   try {
-    body = (await response.json()) as typeof body;
+    body = (await response.clone().json()) as typeof body;
   } catch {
     body = { message: `The server answered ${response.status} with no error object.` };
   }

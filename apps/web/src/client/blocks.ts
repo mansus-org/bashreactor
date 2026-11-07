@@ -74,9 +74,18 @@ const heading = () => [
         "What a pipeline can run. A block is one bash file, and its front matter says what goes in and what comes out.",
       ),
     ),
-    el("a", { class: "btn btn--ink", href: "/app/blocks/new", "data-link": "" }, "Write a block"),
+    el("a", { class: "btn btn--ink", href: "/app/blocks-new", "data-link": "" }, "Write a block"),
   ),
 ];
+
+/**
+ * The size of a version as the server counted it. The store keeps the byte count of the file it
+ * wrote, so this is the file's real size; counting the characters of the text here would be wrong
+ * by however many of them are not ASCII, and say so in the same breath as the word "bytes".
+ */
+function sizeLabel(bytes: number | undefined): string {
+  return bytes === undefined ? "no stored file" : `${new Intl.NumberFormat().format(bytes)} bytes`;
+}
 
 /** The name in the box is the block to look at. */
 function openNamed(name: string): void {
@@ -136,12 +145,22 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
   }
 
   const target = route.parts[1];
+  // The writer for a block that does not exist yet lives at `/blocks-new` of its own. It cannot live
+  // at `/blocks/new`, because `new` is a legal block name and the block called `new` has to be able
+  // to open at its own address.
+  const writing = route.parts[0] === "blocks-new";
 
   // At 980 px and below the two panes take turns instead of sitting side by side, and whose turn it
   // is is the route's business, not a click's: `/blocks` is the list, anything under it is the block
   // or the writer that path opened. Read off the route, the class is put back by every render — after
   // a publish, a version, a sign-in — where a click handler would be gone by the next one.
-  lib.classList.toggle("lib--open", target !== undefined);
+  lib.classList.toggle("lib--open", target !== undefined || writing);
+
+  if (writing) {
+    renderHistory(null);
+    renderWriter(detail, null);
+    return;
+  }
 
   if (target === undefined) {
     renderHistory(null);
@@ -152,24 +171,34 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
     return;
   }
 
-  if (target === "new") {
-    renderHistory(null);
-    renderWriter(detail, null);
-    return;
-  }
-
   const edit = route.parts[2] === "edit";
   const wanted = route.parts[2];
   const name = target;
-  remember(name);
   renderHistory(name);
   detail.replaceChildren(stateLine(`Loading ${name}.`));
   try {
     const record = await api.blocks(name);
+    // Only a block the library confirmed belongs in the list on the left. Remembering the name first
+    // left every typo and every deleted block in it for good, under a heading that says these exist.
+    remember(name);
+    renderHistory(name);
     const versions: LibraryVersion[] = [];
+    // One label per version, from the size the store kept beside the file. A version whose bytes are
+    // gone keeps its row and says so: the list still names it, and a version that is listed but
+    // unreadable is a fact about the store that the screen has no business hiding.
+    const sizes = new Map<number, string>();
     for (const version of record.versions) {
-      const content = await api.blockContent(name, version.version);
-      versions.push({ version: version.version, source: content.text });
+      try {
+        versions.push({ version: version.version, source: (await api.blockContent(name, version.version)).text });
+        sizes.set(version.version, sizeLabel(version.size));
+      } catch (error) {
+        if (error instanceof ApiError && error.code === "block_version_not_found") {
+          versions.push({ version: version.version, source: "" });
+          sizes.set(version.version, sizeLabel(undefined));
+          continue;
+        }
+        throw error;
+      }
     }
     const entry: LibraryEntry = { name, versions };
     if (edit) {
@@ -177,7 +206,22 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
       return;
     }
     const chosen = wanted !== undefined ? versions.find((version) => version.version === Number(wanted)) : undefined;
-    renderBlock(detail, entry, chosen ?? latest(entry));
+    if (wanted !== undefined && chosen === undefined) {
+      // Asking for v99 used to fall through to whatever was newest, so the screen said "Source of v1"
+      // under an address that said 99. A version the library does not have is called what it is.
+      detail.replaceChildren(
+        el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, `No version ${wanted} of ${name}`),
+        el("p", {}, `The library has ${versions.map((version) => `v${version.version}`).join(", ")}.`),
+        el(
+          "div",
+          { class: "row" },
+          el("a", { class: "btn back", href: `/app/blocks/${name}`, "data-link": "" }, `Latest of ${name}`),
+          el("a", { class: "btn", href: "/app/blocks", "data-link": "" }, "All blocks"),
+        ),
+      );
+      return;
+    }
+    renderBlock(detail, entry, chosen ?? latest(entry), sizes);
   } catch (error) {
     if (error instanceof ApiError && error.code === "block_not_found") {
       detail.replaceChildren(
@@ -187,7 +231,7 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
           "div",
           { class: "row" },
           el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
-          el("a", { class: "btn", href: "/app/blocks/new", "data-link": "" }, "Write it here"),
+          el("a", { class: "btn", href: "/app/blocks-new", "data-link": "" }, "Write it here"),
         ),
       );
       return;
@@ -220,7 +264,12 @@ function contractDiff(versions: LibraryVersion[], index: number): string | null 
   return parts.length > 0 ? `Contract: ${parts.join(", ")}.` : "Contract unchanged.";
 }
 
-function renderBlock(detail: HTMLElement, entry: LibraryEntry, version: LibraryVersion): void {
+function renderBlock(
+  detail: HTMLElement,
+  entry: LibraryEntry,
+  version: LibraryVersion,
+  sizes: Map<number, string>,
+): void {
   const parsed = parseBlock(version.source);
   const newest = latest(entry);
 
@@ -313,7 +362,7 @@ function renderBlock(detail: HTMLElement, entry: LibraryEntry, version: LibraryV
               "a",
               { class: "version", href: `/app/blocks/${entry.name}/${known.version}`, "data-link": "", "aria-current": known === version ? "true" : null },
               el("span", { class: "version__num" }, `v${known.version}`),
-              el("span", {}, known.source.length > 0 ? `${new Intl.NumberFormat().format(known.source.length)} bytes` : ""),
+              el("span", {}, sizes.get(known.version) ?? sizeLabel(undefined)),
               el("span", { class: "version__note" }, change !== null ? el("span", { class: "version__change" }, change) : null),
             ),
           );
@@ -343,7 +392,10 @@ function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
   });
   const declared = el("div", { class: "writer__side" });
   const error = el("p", { class: "form-error", role: "alert", hidden: true });
-  const publish = el("button", { class: "btn btn--ink", type: "submit" }, base !== null ? `Publish v${latest(base).version + 1}` : "Publish v1");
+  // The version this file would become if it were published as it stands, and the one it already is
+  // when the bytes have not moved.
+  const newest = base !== null ? latest(base) : null;
+  const publish = el("button", { class: "btn btn--ink", type: "submit" }, `Publish v${(newest?.version ?? 0) + 1}`);
   const starters = base === null
     ? el(
         "div",
@@ -368,6 +420,13 @@ function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
 
   function update(): void {
     const parsed = parseBlock(source.value);
+    // SPEC 3.4: a new version exists only if the SHA-256 differs from the latest one, and the store
+    // answers identical bytes by handing back the version it already has. A button that still said
+    // "Publish v2" at that moment promised a thing that cannot happen, and the person found out by
+    // pressing it and landing on v1.
+    if (newest !== null) {
+      publish.textContent = unchanged() ? `Unchanged, still v${newest.version}` : `Publish v${newest.version + 1}`;
+    }
     fill(declared, [
       el(
         "div",
@@ -401,6 +460,11 @@ function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
 
   source.addEventListener("input", update);
 
+  /** Whether these are already the bytes of the newest version, down to the last byte. */
+  function unchanged(): boolean {
+    return newest !== null && source.value === newest.source;
+  }
+
   if (!canWrite()) {
     detail.replaceChildren(
       el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "This token can read only"),
@@ -429,6 +493,7 @@ function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
           if (parsed.problems.length > 0) return fail(`Fix line ${parsed.problems[0]!.line} first: ${parsed.problems[0]!.message}`);
           if (parsed.name === "new-block") return fail('Give the block its own name: "new-block" is the template\u2019s.');
           if (base !== null && parsed.name !== base.name) return fail(`This is a new version of ${base.name}, so its name has to stay ${base.name}.`);
+          if (unchanged()) return fail(`Nothing has changed: v${newest!.version} is already these exact bytes.`);
           const name = parsed.name ?? "";
           publish.disabled = true;
           api
