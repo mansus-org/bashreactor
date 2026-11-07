@@ -1072,8 +1072,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       );
       versionSelect.value = String(wanted);
       setText(record.yaml, { source: "load" });
-      restoreDraft();
       announce(`${name} version ${wanted} opened.`);
+      restoreDraft();
     } catch (error) {
       if (gone()) return;
       versionSelect.hidden = true;
