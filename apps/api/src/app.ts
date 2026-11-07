@@ -179,12 +179,32 @@ export function createApi(deps: ApiDependencies): Api {
 
   // --- runs ----------------------------------------------------------------
 
-  route("GET", "/v1/runs", "read", async () => {
-    const ids = await engine.listRuns();
-    const records = await Promise.all(ids.map((id) => engine.getRun(id)));
+  route("GET", "/v1/runs", "read", async ({ url }) => {
+    // SPEC 4.2: a run id sorts by time, so the ids alone order the list. The page is chosen from them
+    // and only the page is read; reading every run to throw all but a page away is what made this one
+    // request cost the whole history.
+    const limit = runPageLimit(url.searchParams.get("limit"));
+    const cursor = url.searchParams.get("cursor");
+    const ids = (await engine.listRuns())
+      .filter((id) => RUN_ID_RE.test(id))
+      .toSorted((a, b) => b.localeCompare(a))
+      // Anything that is not a run id is just a cursor: it compares, and the page comes back from the
+      // top or empty. A caller cannot break the listing with a bad one.
+      .filter((id) => cursor === null || id.localeCompare(cursor) < 0);
+    const page = ids.slice(0, limit);
+    // A run whose record cannot be read is not listable, and one bad file must not take the whole
+    // listing with it: it is logged and left out, and the cursor being positional means the walk moves
+    // past it instead of stopping there for good.
+    const records = await Promise.all(
+      page.map((id) =>
+        engine.getRun(id).catch((error: unknown) => {
+          log(`run ${id} is not listable: ${error}`);
+          return null;
+        }),
+      ),
+    );
     const runs = records
       .filter((record): record is RunRecord => record !== null)
-      .toSorted((a, b) => b.id.localeCompare(a.id))
       .map((record) => ({
         id: record.id,
         pipeline: record.pipeline,
@@ -193,7 +213,10 @@ export function createApi(deps: ApiDependencies): Api {
         finished_at: record.finished_at,
         cancel_requested_at: record.cancel_requested_at,
       }));
-    return json(200, runs);
+    // The next cursor is the last id of the page whether or not every run on it could be read, so a
+    // run the server cannot parse moves the walk along instead of stalling it on itself.
+    const headers = page.length < ids.length ? { "x-next-cursor": page[page.length - 1]! } : undefined;
+    return json(200, runs, headers);
   });
 
   route("POST", "/v1/runs", "write", async ({ request }) => {
@@ -482,6 +505,20 @@ function runId(value: string): string {
   return value;
 }
 
+/** What a page of the run list holds when the caller does not say, and the most it will ever hold. */
+const DEFAULT_RUN_PAGE = 100;
+const MAX_RUN_PAGE = 500;
+
+/**
+ * `?limit=` for the run list. Absent, empty or 0 is the default, and more than the cap is clamped
+ * rather than refused: asking for more than the server will give is not a malformed request.
+ */
+function runPageLimit(raw: string | null): number {
+  if (raw === null || raw === "") return DEFAULT_RUN_PAGE;
+  const requested = parseIntegerParam("limit", raw, 0);
+  return requested === 0 ? DEFAULT_RUN_PAGE : Math.min(requested, MAX_RUN_PAGE);
+}
+
 /**
  * The block file's exact bytes, from whichever field the caller sent. `content_b64` is the one that
  * can carry a file that is not valid UTF-8; SPEC 2 makes those bytes the version's identity, so
@@ -621,8 +658,8 @@ function requireStepAndAttempt(
   }
 }
 
-function json(status: number, value: unknown): Response {
-  return Response.json(value, { status });
+function json(status: number, value: unknown, headers?: Record<string, string>): Response {
+  return Response.json(value, { status, headers });
 }
 
 function respond(error: { status: number; body: unknown }): Response {
