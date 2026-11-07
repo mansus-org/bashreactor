@@ -1,9 +1,11 @@
-// The two commands that are not about a document: what the server is, and who the token makes you.
+// The commands that are not about a document: what the server is, who the token makes you, and how
+// much room the server has left to write in.
 
 import { ENV_TOKEN, ENV_URL, maskToken } from "../connection.ts";
 import type { Source } from "../connection.ts";
 import type { CommandSpec } from "../args.ts";
-import type { Health, Identity } from "../types.ts";
+import { sizeText } from "./runs.ts";
+import type { Disk, Health, Identity } from "../types.ts";
 
 export const systemCommands: CommandSpec[] = [
   {
@@ -52,7 +54,32 @@ export const systemCommands: CommandSpec[] = [
       return 0;
     },
   },
+  {
+    group: "",
+    name: "disk",
+    summary: "say how much room the server has left to write in",
+    run: async (ctx) => {
+      const disk = await ctx.client.json<Disk>("GET", "/v1/disk");
+      ctx.printer.emit(disk, (p) => {
+        p.fields([
+          ["path", disk.path],
+          ["free", `${sizeText(disk.free_bytes)} of ${sizeText(disk.total_bytes)}`],
+          ["used", `${sizeText(disk.used_bytes)}${share(disk)}`],
+          ["low", disk.low ? "yes" : "no"],
+        ]);
+      });
+      // `low` is the news, and a cron should not have to read prose to get it — the same reason
+      // `health` returns 1 for a degraded server.
+      return disk.low ? 1 : 0;
+    },
+  },
 ];
+
+/** `  (41%)`, or nothing when the filesystem would not say how big it is. */
+function share(disk: Disk): string {
+  if (disk.total_bytes <= 0) return "";
+  return `  (${Math.round((disk.used_bytes / disk.total_bytes) * 100)}%)`;
+}
 
 function where(source: Source | null, flag: string, env: string, file: string): string {
   if (source === "flag") return flag;

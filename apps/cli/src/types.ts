@@ -157,3 +157,12 @@ export interface Health {
   version: string;
   problem?: string;
 }
+
+/** `GET /v1/disk`: the filesystem `$BASHREACTOR_HOME` sits on, in bytes. */
+export interface Disk {
+  path: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  low: boolean;
+}
