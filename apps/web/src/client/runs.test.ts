@@ -1,14 +1,18 @@
-// The run screen stamps a step with the word the engine wrote into `run.json`, and it used to know
-// four of them. A `skipped` step — final, and with a note underneath saying why it never started —
-// came back stamped `pending`, which is a lie about a step that is never going to run. So: every
-// status in SPEC 4.4 gets its own word and its own sign, and only a status this UI has genuinely
-// never seen falls back.
+// The run screen is the page a person watches while their work runs, and it used to say things that
+// were not true. A step stamped `pending` when the engine had written `skipped` into `run.json`; a
+// refusal that vanished before the frame was painted; a status line still reporting the byte offset
+// of the step you had just left; a server that had died and was not mentioned. So: every status in
+// SPEC 4.4 gets its own word and its own sign, an action the server refuses keeps its own words on
+// the page until they are dismissed, the controls are built once and updated in place, and the line
+// under the log says where the cursor really is and when there is no server to read it from.
 //
 // The modules come from the bytes the server serves, as in client/logs.test.ts, and they are written
 // to a directory of their own so their `./dom.js`, `./api.js` and `./logs.js` specifiers resolve.
 // `./app.js` is the one module this file writes itself: the real shell starts rendering the moment it
 // is imported, and runs.ts only reaches for it to navigate from the run-jump box, which is not what is
-// under test here. The DOM stand-in lives in this file too, because Bun has no browser.
+// under test here. The DOM stand-in lives in this file too, because Bun has no browser: it takes
+// clicks, it holds focus, and — the part that matters for a screen that redraws itself every second —
+// it drops focus to the body when the focused node is thrown away, so a rebuild cannot pass unnoticed.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -611,7 +615,8 @@ const byteLength = (text: string): number => new TextEncoder().encode(text).leng
  * reads somewhere unexpected fails loudly instead of reading a hole.
  */
 class FakeServer {
-  readonly run: Run;
+  /** The run this server answers with; a test swaps it to watch a run reach its end. */
+  run: Run;
   /** Log bytes, keyed by step id, or by `step/attempt` when the attempts differ. */
   logs: Record<string, string> = {};
   /** How many bytes one answer holds, which is how a log takes more than one read. */
@@ -721,6 +726,8 @@ async function waitFor(what: string, done: () => boolean): Promise<void> {
 
 const click = (node: FakeElement): void => void node.dispatchEvent("click");
 const statusLine = (view: FakeElement): string => one(view.querySelector('[id="log-status"]'), "the log status line").textContent;
+const runStamp = (view: FakeElement): string =>
+  one(one(view.querySelector(".runhead__meta"), "the run head").querySelector(".stamp"), "the head stamp").textContent.trim();
 const drawnLines = (view: FakeElement): string[] => view.querySelectorAll(".log__text").map((node) => node.textContent);
 const alarmOf = (view: FakeElement): FakeElement => one(view.querySelector(".alarm"), "the alarm");
 const attemptButtons = (view: FakeElement): FakeElement[] =>
@@ -988,6 +995,20 @@ describe("the alarm over the steps", () => {
     expect(one(alarm.querySelector('[data-action="retry-all"]'), "the retry button").textContent).toBe("Retry 2 steps");
   });
 
+  test("the alarm is not rebuilt under you while the run polls", async () => {
+    const limping = runFixture([step("render", "failed"), step("report", "running", ["render"])], "running");
+    const server = new FakeServer(limping);
+    const view = await openRun(server);
+    const retry = one(alarmOf(view).querySelector('[data-action="retry-all"]'), "the retry button");
+    retry.focus();
+
+    const polls = server.polls;
+    await waitFor("a poll", () => server.polls > polls);
+
+    expect(one(alarmOf(view).querySelector('[data-action="retry-all"]'), "the retry button")).toBe(retry);
+    expect(fakeDocument.activeElement).toBe(retry);
+  });
+
   test("a failed step's name in the alarm points the pane at its log and puts the focus on its row", async () => {
     const server = new FakeServer(SIX_FAILED);
     const view = await openRun(server);
@@ -1022,6 +1043,24 @@ describe("following a log", () => {
 
     expect(buttonNamed(view, "Follow").disabled).toBe(false);
     expect(buttonNamed(view, "Pause").disabled).toBe(false);
+  });
+
+  test("a pause made while the run was live can still be undone after it finishes", async () => {
+    const server = new FakeServer(LIVE);
+    server.logs = { render: "hello\n" };
+    const view = await openRun(server);
+    await waitFor("the log", () => drawnLines(view).length > 0);
+    click(buttonNamed(view, "Pause"));
+    expect(statusLine(view)).toContain("Paused.");
+
+    server.run = DONE;
+    await waitFor("the run to finish", () => runStamp(view) === "succeeded");
+    expect(buttonNamed(view, "Follow").disabled).toBe(true);
+    expect(buttonNamed(view, "Resume reading").disabled).toBe(false);
+
+    click(buttonNamed(view, "Resume reading"));
+    await waitFor("the reading to start again", () => !statusLine(view).startsWith("Paused."));
+    expect(statusLine(view)).toBe("Read to byte 6.");
   });
 
   test("a step that has never started has nothing to pause", async () => {

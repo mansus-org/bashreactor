@@ -182,10 +182,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   } catch (error) {
     if (signal.aborted) return;
     view.replaceChildren(
-      errorBox(
-        error instanceof ApiError ? error : { code: "internal_error", message: String(error) },
-        el("a", { class: "btn btn--ink", href: "/app/runs", "data-link": "" }, "All runs"),
-      ),
+      errorBox(errorBody(error), el("a", { class: "btn btn--ink", href: "/app/runs", "data-link": "" }, "All runs")),
     );
     return;
   }
@@ -261,6 +258,9 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     "Retry",
   );
   const readOnly = el("span", { class: "stamp stamp--type", hidden: true }, "read only");
+  // The alarm's own retry, built once for the same reason: it says how many steps it will reset, and
+  // that number is what changes, not the button.
+  const alarmRetry = el("button", { class: "btn btn--ink", type: "button", "data-action": "retry-all", onclick: () => void act("retry") });
   // Built once, for the reason the step rows give below: what you type in the jump box and the focus
   // on these buttons do not survive a rebuild, and renderHead runs every second.
   const tools = el(
@@ -407,6 +407,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     cancelButton.disabled = busy;
     resumeButton.disabled = busy;
     retryButton.disabled = busy;
+    alarmRetry.disabled = busy;
 
     renderAlarm();
   }
@@ -456,6 +457,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   /** Every failed step by name, each one a way to its log, and a retry labelled with what it does. */
   function failureBox(failed: string[]): Children {
     const reset = Object.values(run.steps).filter((step) => ["failed", "skipped", "cancelled"].includes(step.status)).length;
+    alarmRetry.textContent = `Retry ${reset} ${reset === 1 ? "step" : "steps"}`;
     return [
       el(
         "h2",
@@ -471,22 +473,14 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
           el("span", {}, step.failure !== null ? `${step.failure.code}: ${step.failure.message}` : "The step exited with an error."),
         );
       }),
-      el(
-        "p",
-        { class: "help" },
-        `Retry sets ${retryScope()} back to pending and runs them again. The steps that succeeded keep their results, and the work directories are kept.`,
-      ),
-      el(
-        "div",
-        { class: "row" },
-        canWrite()
-          ? el(
-              "button",
-              { class: "btn btn--ink", type: "button", "data-action": "retry-all", onclick: () => void act("retry") },
-              `Retry ${reset} ${reset === 1 ? "step" : "steps"}`,
-            )
-          : el("span", { class: "stamp stamp--type" }, "read only"),
-      ),
+      canWrite()
+        ? el(
+            "p",
+            { class: "help" },
+            `Retry sets ${retryScope()} back to pending and runs them again. The steps that succeeded keep their results, and the work directories are kept.`,
+          )
+        : null,
+      el("div", { class: "row" }, canWrite() ? alarmRetry : el("span", { class: "stamp stamp--type" }, "read only")),
     ];
   }
 
@@ -603,7 +597,9 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     // button that does nothing.
     const finished = run.status !== "running";
     followButton.disabled = finished;
-    pauseButton.disabled = finished || !started;
+    // A pause made while the run was live still has to be undoable after it ends, or the pane is
+    // stuck on half a log with the only way out of it greyed off.
+    pauseButton.disabled = !started || (finished && !paused);
     followButton.setAttribute("aria-pressed", String(follow));
     pauseButton.textContent = paused ? "Resume reading" : "Pause";
 
