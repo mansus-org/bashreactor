@@ -85,6 +85,9 @@ Global, on every command, before or after the command name:
 | `--token <token>` | the bearer token |
 | `--help`, `-h` | the command table, or the one for a command |
 
+On its own, with no command: `bashreactor --version` prints the CLI's version and exits 0, with no URL
+and no token configured.
+
 Per command:
 
 | Flag | On | Does |
@@ -350,5 +353,3 @@ thing this task must not do.
   holds a secret (its mode, and where it goes when `BASHREACTOR_HOME` is a volume).
 - **`--follow` is a poll.** The offset cursor makes it correct and it costs one request per interval;
   a websocket would need the API to have one first.
-- **The CLI has no `version` command.** `--version` already means "which block version", and a CLI
-  that overloaded it for both would be its own bug report.

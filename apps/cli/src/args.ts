@@ -1,6 +1,7 @@
-// The command line, parsed in one place so every command gets the same errors for the same mistake.
+// The whole command line, parsed in one place so every command gets the same errors for the same mistake.
 // Flags may appear before or after the command name; a value may be `--flag value` or `--flag=value`.
 
+import manifest from "../package.json";
 import type { ApiClient } from "./client.ts";
 import type { Connection } from "./connection.ts";
 import { usage } from "./errors.ts";
@@ -82,6 +83,7 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
   const flags = new Map<string, string | string[]>();
   const positional: string[] = [];
   let onlyPositional = false;
+  let wantsVersion = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i]!;
@@ -116,6 +118,12 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
     if (value === undefined) {
       const next = argv[i + 1];
       if (next === undefined || (next.startsWith("--") && known.has(next.slice(2)))) {
+        if (name === "version" && positional.length === 0) {
+          // `br --version` with no command asks what the CLI is. `--version 3` after a command still
+          // asks which version of a block, which is what the flag was always for.
+          wantsVersion = true;
+          continue;
+        }
         throw usage(`"--${name}" needs a value`);
       }
       value = next;
@@ -140,6 +148,7 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
   const head = positional[0];
   if (head === undefined) {
     if (help) return { spec: HELP_COMMAND, args: [], flags, json, url, token, help };
+    if (wantsVersion) return { spec: VERSION_COMMAND, args: [], flags, json, url, token, help };
     throw usage("no command given (run `bashreactor --help` for the list)");
   }
 
@@ -218,6 +227,19 @@ export const HELP_COMMAND: CommandSpec = {
   args: [{ name: "[command]", optional: true }],
   run: () => 0,
 };
+
+/** Also not a command: `br --version` says what the CLI is and exits 0, with no URL and no token. */
+export const VERSION_COMMAND: CommandSpec = {
+  group: "",
+  name: "version",
+  summary: "",
+  anonymous: true,
+  run: () => 0,
+};
+
+export function versionText(): string {
+  return `bashreactor ${manifest.version}`;
+}
 
 export function usageText(table: readonly CommandSpec[], topic?: string[]): string {
   if (topic !== undefined && topic.length > 0) {

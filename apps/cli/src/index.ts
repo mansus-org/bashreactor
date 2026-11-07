@@ -2,7 +2,7 @@
 // command can fail with is caught here, because this is the one place allowed to decide what a
 // failure prints and what the process exits with.
 
-import { HELP_COMMAND, parseArgs, usageText } from "./args.ts";
+import { HELP_COMMAND, parseArgs, usageText, VERSION_COMMAND, versionText } from "./args.ts";
 import type { CommandSpec, Ctx } from "./args.ts";
 import { ApiClient } from "./client.ts";
 import { requireToken, resolveConnection } from "./connection.ts";
@@ -52,6 +52,11 @@ async function dispatch(
   const parsed = parseArgs(argv, COMMANDS);
   if (parsed.spec === HELP_COMMAND) {
     io.out(usageText(COMMANDS, parsed.args));
+    return 0;
+  }
+  // Before the connection, because saying what the CLI is needs no URL and no token.
+  if (parsed.spec === VERSION_COMMAND) {
+    io.out(versionText());
     return 0;
   }
 
