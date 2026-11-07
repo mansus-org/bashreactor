@@ -11,4 +11,4 @@ export type {
   RunStore,
 } from "./run-store.ts";
 export type { AttemptRecord, FailureInfo, RunRecord, StepRecord } from "./run.ts";
-export { newRunId } from "./run.ts";
+export { FINAL_RUN_STATUSES, newRunId } from "./run.ts";

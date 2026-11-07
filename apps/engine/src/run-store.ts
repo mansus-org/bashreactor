@@ -4,6 +4,8 @@
 
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { BashreactorError } from "@bashreactor/core";
+import { RUN_ID_RE } from "./run.ts";
 import type { RunRecord } from "./run.ts";
 
 export interface EngineClaim {
@@ -45,6 +47,12 @@ export interface RunStore {
   saveRun(record: RunRecord): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   listRunIds(): Promise<string[]>;
+  /**
+   * Take a run's whole directory away (SPEC 4.2). The only method here that destroys anything, so it
+   * is the one that refuses a name that is not a run id: every other path it could build is under
+   * `runs/`, and this one would be a tree somewhere else.
+   */
+  removeRun(runId: string): Promise<void>;
 
   tryClaim(runId: string, claim: EngineClaim): Promise<ClaimResult>;
   loadClaim(runId: string): Promise<EngineClaim | null>;
@@ -126,6 +134,14 @@ export class FsRunStore implements RunStore {
     const runsDir = join(this.root, "runs");
     if (!existsSync(runsDir)) return [];
     return readdirSync(runsDir).filter((name) => !name.startsWith(".tmp-"));
+  }
+
+  async removeRun(runId: string): Promise<void> {
+    if (!RUN_ID_RE.test(runId)) throw new BashreactorError("run_not_found", `"${runId}" is not a run id`);
+    const { runDir } = this.layout(runId);
+    // `force`, so deleting twice is the same answer as deleting once. A run directory that is a
+    // symlink goes as the link and not as whatever it points at: `rmSync` lstats what it walks.
+    rmSync(runDir, { recursive: true, force: true });
   }
 
   async tryClaim(runId: string, claim: EngineClaim): Promise<ClaimResult> {

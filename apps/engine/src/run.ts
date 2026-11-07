@@ -48,6 +48,12 @@ export interface RunRecord {
   steps: Record<string, StepRecord>; // insertion order = declaration order
 }
 
+/**
+ * The shape `newRunId` produces. A run id is also a directory name, so anything that takes one from a
+ * caller and turns it into a path has to check it first — above all the thing that deletes.
+ */
+export const RUN_ID_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
+
 export function newRunId(now: Date = new Date()): string {
   const stamp = [
     now.getUTCFullYear(),

@@ -30,7 +30,7 @@ import type {
   ValueType,
   WithValue,
 } from "@bashreactor/core";
-import { readProcStartTime } from "./proc.ts";
+import { isLiveClaim, readProcStartTime } from "./proc.ts";
 import { FINAL_RUN_STATUSES, FINAL_STEP_STATUSES, nowIso, newRunId } from "./run.ts";
 import type { AttemptRecord, RunRecord, StepRecord } from "./run.ts";
 import type { EngineClaim, RunFiles, RunLayout, RunStore } from "./run-store.ts";
@@ -270,6 +270,29 @@ export class Engine {
 
   async getRun(runId: string): Promise<RunRecord | null> {
     return this.store.loadRun(runId);
+  }
+
+  /**
+   * Remove a run and everything it wrote (SPEC 4.2). The engine owns `$BASHREACTOR_HOME/runs/<id>/`,
+   * which is why this is the only way to delete one: a caller that reached for `rm -rf` would be
+   * guessing at a layout it does not own, and would miss whatever the store keeps beside it.
+   *
+   * A run with a live claim is refused, not interrupted. Its step is a process group writing into
+   * this very directory; taking the directory out from under it leaves a process logging to a path
+   * that is gone and a half-written record in a directory that is not there. Cancel it, wait for it
+   * to stop, delete it. A claim left by a worker that died is stale and does not hold.
+   */
+  async deleteRun(runId: string): Promise<void> {
+    const record = await this.store.loadRun(runId);
+    if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
+    const claim = await this.store.loadClaim(runId);
+    if (claim !== null && isLiveClaim(claim)) {
+      throw new BashreactorError(
+        "run_claimed",
+        `run "${runId}" is claimed by a live engine (pid ${claim.pid}); cancel it and delete it once it has stopped`,
+      );
+    }
+    await this.store.removeRun(runId);
   }
 
   async listRuns(): Promise<string[]> {
