@@ -53,6 +53,7 @@ interface ActiveAttempt {
   stepId: string;
   n: number;
   pid: number;
+  startedAt: number;
   deadline: number;
   killGraceMs: number;
   timedOut: boolean;
@@ -72,6 +73,12 @@ interface DriveState {
 interface AttemptOutcome {
   status: "succeeded" | "failed" | "cancelled";
   code: ErrorCode | null;
+  /**
+   * The human half of the error (SPEC 5): whatever the code does not already say — the exit code,
+   * which output, the limit that was hit. Empty for a succeeded attempt, which has nothing to
+   * explain. The code is what the CLI, the API and the MCP server match on; this is what they read.
+   */
+  message: string;
   retryable: boolean;
   outputs: Record<string, Value> | null;
 }
@@ -469,7 +476,7 @@ export class Engine {
         && readProcStartTime(attempt.pid) === attempt.pid_start) {
         await this.stopProcessGroup(attempt.pid, this.killGraceMs(state, step.id));
       }
-      this.markInterrupted(record, step, "engine restart");
+      this.markInterrupted(record, step, "an engine restart");
       changed = true;
     }
     if (changed) await this.store.saveRun(record);
@@ -477,12 +484,12 @@ export class Engine {
 
   // The rules of section 4.7 for an attempt cut off by an engine going away, shared by resume and
   // shutdown so there is one copy of them.
-  private markInterrupted(record: RunRecord, step: StepRecord, message: string): void {
+  private markInterrupted(record: RunRecord, step: StepRecord, reason: string): void {
     const attempt = step.attempts[step.attempts.length - 1];
     if (attempt !== undefined) {
       attempt.status = "interrupted";
       attempt.finished_at = nowIso();
-      attempt.failure = { code: "interrupted", message };
+      attempt.failure = { code: "interrupted", message: `step "${step.id}" was interrupted by ${reason}` };
     }
     step.status = record.cancel_requested_at !== null ? "cancelled" : "pending";
   }
@@ -510,7 +517,7 @@ export class Engine {
       if (attempt.cancelled) {
         attemptRecord.status = "cancelled";
         attemptRecord.finished_at = nowIso();
-        attemptRecord.failure = { code: "cancelled", message: "cancelled" };
+        attemptRecord.failure = { code: "cancelled", message: `step "${attempt.stepId}" was cancelled while it was running` };
         step.status = "cancelled";
       } else {
         this.markInterrupted(record, step, "engine shutdown");
@@ -594,7 +601,7 @@ export class Engine {
       } catch (error) {
         if (error instanceof BashreactorError && error.code === "input_too_large") {
           step.status = "failed";
-          step.failure = { code: error.code, message: error.message };
+          step.failure = { code: error.code, message: `step "${stepId}": ${error.message}` };
           this.skipDownstream(record, stepId);
           return;
         }
@@ -605,7 +612,7 @@ export class Engine {
     for (const name of pipelineStep.pass_env) {
       if (this.env[name] === undefined) {
         step.status = "failed";
-        step.failure = { code: "env_missing", message: `environment variable "${name}" is not set` };
+        step.failure = { code: "env_missing", message: `step "${stepId}": environment variable "${name}" is not set` };
         this.skipDownstream(record, stepId);
         return;
       }
@@ -656,9 +663,10 @@ export class Engine {
     } catch (error) {
       attemptRecord.status = "failed";
       attemptRecord.finished_at = nowIso();
-      attemptRecord.failure = { code: "spawn_failed", message: (error as Error).message };
+      const reason = `step "${stepId}" could not be started: ${(error as Error).message}`;
+      attemptRecord.failure = { code: "spawn_failed", message: reason };
       step.status = "failed";
-      step.failure = { code: "spawn_failed", message: (error as Error).message };
+      step.failure = { code: "spawn_failed", message: reason };
       step.attempts_used += 1;
       this.skipDownstream(record, stepId);
       await this.store.saveRun(record);
@@ -670,6 +678,7 @@ export class Engine {
       stepId,
       n,
       pid,
+      startedAt: Date.now(),
       deadline: Date.now() + pipelineStep.timeout * 1000,
       killGraceMs: pipelineStep.kill_grace * 1000,
       timedOut: false,
@@ -795,7 +804,7 @@ export class Engine {
 
     const outcome = await this.decideOutcome(attempt, record, block);
     attemptRecord.status = outcome.status;
-    attemptRecord.failure = outcome.status === "succeeded" || outcome.code === null ? null : { code: outcome.code, message: outcome.code };
+    attemptRecord.failure = outcome.status === "succeeded" || outcome.code === null ? null : { code: outcome.code, message: outcome.message };
 
     if (outcome.status === "succeeded") {
       step.status = "succeeded";
@@ -818,7 +827,7 @@ export class Engine {
         }
       } else {
         step.status = "failed";
-        step.failure = outcome.code === null ? null : { code: outcome.code, message: outcome.code };
+        step.failure = outcome.code === null ? null : { code: outcome.code, message: outcome.message };
         this.skipDownstream(record, attempt.stepId);
       }
     }
@@ -826,29 +835,48 @@ export class Engine {
   }
 
   private async decideOutcome(attempt: ActiveAttempt, record: RunRecord, block: Block): Promise<AttemptOutcome> {
-    if (attempt.cancelled) return { status: "cancelled", code: "cancelled", retryable: false, outputs: null };
-    if (attempt.timedOut) return { status: "failed", code: "timeout", retryable: true, outputs: null };
-    if (attempt.exit?.signal !== null && attempt.exit?.signal !== undefined) {
-      return { status: "failed", code: "killed_by_signal", retryable: true, outputs: null };
+    const step = `step "${attempt.stepId}"`;
+    if (attempt.cancelled) {
+      return { status: "cancelled", code: "cancelled", message: `${step} was cancelled while it was running`, retryable: false, outputs: null };
     }
-    if (attempt.exit?.exitCode === 75) return { status: "failed", code: "retry_requested", retryable: true, outputs: null };
-    if (attempt.exit?.exitCode === 78) return { status: "failed", code: "block_fatal", retryable: false, outputs: null };
-    if (attempt.exit?.exitCode !== 0 && attempt.exit?.exitCode !== null) {
-      return { status: "failed", code: "exit_nonzero", retryable: true, outputs: null };
+    if (attempt.timedOut) {
+      // Both numbers, because they differ: a block that ignores SIGTERM runs on until its kill_grace
+      // ends, and "timed out after 30s" on its own hides that it then took another minute to die.
+      const limit = formatDuration((attempt.deadline - attempt.startedAt) / 1000);
+      const ran = formatDuration((Date.now() - attempt.startedAt) / 1000);
+      return { status: "failed", code: "timeout", message: `${step} timed out after ${limit} (ran ${ran})`, retryable: true, outputs: null };
+    }
+    const signal = attempt.exit?.signal;
+    if (signal !== null && signal !== undefined) {
+      return { status: "failed", code: "killed_by_signal", message: `${step} was killed by ${signal}`, retryable: true, outputs: null };
+    }
+    const exitCode = attempt.exit?.exitCode;
+    if (exitCode === 75) {
+      return { status: "failed", code: "retry_requested", message: `${step} exit 75 (the block asked for a retry)`, retryable: true, outputs: null };
+    }
+    if (exitCode === 78) {
+      return { status: "failed", code: "block_fatal", message: `${step} exit 78 (the block says a retry will not help)`, retryable: false, outputs: null };
+    }
+    if (exitCode !== 0 && exitCode !== null && exitCode !== undefined) {
+      return { status: "failed", code: "exit_nonzero", message: `${step} exit ${exitCode}`, retryable: true, outputs: null };
     }
     return this.readOutputs(record, attempt, block);
   }
 
   private async readOutputs(record: RunRecord, attempt: ActiveAttempt, block: Block): Promise<AttemptOutcome> {
     const outputs: Record<string, Value> = {};
+    const dir = this.store.layout(record.id).attemptOutputsDir(attempt.stepId, attempt.n);
     for (const output of block.outputs) {
       const rel = `steps/${attempt.stepId}/attempts/${attempt.n}/outputs/${output.name}`;
       const stat = await this.store.stat(record.id, rel);
       if (stat.kind === "missing") {
-        return { status: "failed", code: "output_missing", retryable: false, outputs: null };
+        // Which output, and where it was looked for: the two things that tell a person whether the
+        // block never wrote it or wrote it somewhere else.
+        return { status: "failed", code: "output_missing", message: `output "${output.name}" was not written to ${dir}`, retryable: false, outputs: null };
       }
       if (stat.kind !== "file") {
-        return { status: "failed", code: "output_invalid", retryable: false, outputs: null };
+        const found = stat.kind === "directory" ? "a directory" : "not a regular file";
+        return { status: "failed", code: "output_invalid", message: `output "${output.name}" in ${dir} is ${found}`, retryable: false, outputs: null };
       }
       if (output.type === "file") {
         await this.store.chmod(record.id, rel, 0o444);
@@ -860,15 +888,15 @@ export class Engine {
       try {
         text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
       } catch {
-        return { status: "failed", code: "output_invalid", retryable: false, outputs: null };
+        return { status: "failed", code: "output_invalid", message: `output "${output.name}" in ${dir} is not valid UTF-8`, retryable: false, outputs: null };
       }
       const parsed = parseTextForm(output.type, text);
       if (!parsed.ok) {
-        return { status: "failed", code: parsed.code, retryable: false, outputs: null };
+        return { status: "failed", code: parsed.code, message: `output "${output.name}" in ${dir}: ${parsed.message}`, retryable: false, outputs: null };
       }
       outputs[output.name] = parsed.value;
     }
-    return { status: "succeeded", code: null, retryable: false, outputs };
+    return { status: "succeeded", code: null, message: "", retryable: false, outputs };
   }
 
   private skipDownstream(record: RunRecord, failedStepId: string): void {
@@ -983,6 +1011,23 @@ function absolutize(type: ValueType, value: Value, runDir: string): Value {
     return join(runDir, value);
   }
   return value;
+}
+
+/**
+ * A duration written the way a pipeline writes one (SPEC 1.3), so a limit quoted in a message reads
+ * like the `timeout:` the author set. Nothing here is finer-grained than a second.
+ */
+function formatDuration(totalSeconds: number): string {
+  let left = Math.max(0, Math.round(totalSeconds));
+  let out = "";
+  for (const [size, unit] of [[86400, "d"], [3600, "h"], [60, "m"], [1, "s"]] as const) {
+    const count = Math.floor(left / size);
+    if (count > 0) {
+      out += `${count}${unit}`;
+      left -= count * size;
+    }
+  }
+  return out === "" ? "0s" : out;
 }
 
 function signalName(code: NodeJS.Signals | number | null): string | null {
