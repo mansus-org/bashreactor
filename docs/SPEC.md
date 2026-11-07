@@ -931,6 +931,14 @@ stdout and stderr. The script writes to the file directly, with no pipe through 
 - a background process that keeps the descriptor open cannot hold up the end of an attempt,
 - a reader follows it by byte offset, which is the cursor that the API and the CLI use.
 
+**Chunking.** A read answers with no more than the window it was asked for, plus at most three bytes
+more to finish a character the window cut in half, so the cursor never lands inside a UTF-8 sequence
+and a reader that decodes each chunk on its own is never shown a replacement character for text the
+block wrote correctly. When the file stops mid-sequence on an attempt that is still running, the
+unfinished bytes are held back and the next read brings the whole character; once the attempt is
+final they are the block's own bytes and come through. Anything else that is not valid UTF-8 comes
+through as it was written, byte for byte, whatever the attempt's state.
+
 *Rejected: a pipe through the engine with NDJSON and a timestamp per line.* The engine becomes a
 bottleneck and a single point of failure for every long job, and a crash loses the tail.
 *Rejected: separate stdout and stderr files.* The relative order of errors and output is what you need

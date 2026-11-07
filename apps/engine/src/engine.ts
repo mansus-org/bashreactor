@@ -263,9 +263,16 @@ export class Engine {
   }
 
   /**
-   * Up to `limit` bytes of an attempt's log from `offset`. `nextOffset` is `offset` plus the bytes
-   * returned, never the end of the file, so a reader that follows it cannot skip anything; `more` says
-   * whether bytes remain beyond what was returned.
+   * Up to `limit` bytes of an attempt's log from `offset`. Only the window is read from disk, never
+   * the whole file, so following the cursor over hours of output stays cheap (SPEC 4.8).
+   *
+   * `nextOffset` is `offset` plus the bytes returned, never the end of the file, so a reader that
+   * follows it cannot skip anything; `more` says whether bytes remain beyond what was looked at.
+   * A chunk never ends inside a UTF-8 sequence: the window is extended by at most three bytes to
+   * finish a character it cut. When the attempt is still open (`attemptOpen`) and the file stops
+   * mid-character, the partial bytes are held back for the next read instead of being handed over
+   * as a broken character. Bytes that cannot start or continue a sequence are the block's own
+   * garbage and always come through, byte for byte.
    */
   async readLog(
     runId: string,
@@ -273,11 +280,36 @@ export class Engine {
     attempt: number,
     offset: number,
     limit: number,
+    options: { attemptOpen?: boolean } = {},
   ): Promise<{ data: Uint8Array; nextOffset: number; more: boolean }> {
-    const read = await this.store.readFileRange(runId, `steps/${stepId}/attempts/${attempt}/log`, offset, limit);
-    if (read === null) return { data: new Uint8Array(), nextOffset: offset, more: false };
-    const nextOffset = offset + read.bytes.length;
-    return { data: read.bytes, nextOffset, more: read.size > nextOffset };
+    const rel = `steps/${stepId}/attempts/${attempt}/log`;
+    const first = await this.store.readFileRange(runId, rel, offset, limit);
+    if (first === null) return { data: new Uint8Array(), nextOffset: offset, more: false };
+
+    let bytes = first.bytes;
+    // How far into the file this read has looked. It is not where the chunk ends, which is what keeps
+    // `more` honest when a partial character at the end is held back.
+    let seen = offset + bytes.length;
+    let cut = utf8Cut(bytes);
+    if (cut.end < bytes.length) {
+      const beyond = first.size - seen;
+      if (beyond > 0) {
+        const rest = await this.store.readFileRange(runId, rel, seen, Math.min(cut.needed, beyond));
+        if (rest !== null && rest.bytes.length > 0) {
+          const joined = new Uint8Array(bytes.length + rest.bytes.length);
+          joined.set(bytes, 0);
+          joined.set(rest.bytes, bytes.length);
+          bytes = joined;
+          seen += rest.bytes.length;
+          cut = utf8Cut(bytes);
+        }
+      }
+      // Still cut, so the file stops mid-character. A running attempt may write the rest: hold it
+      // back and the next poll reads the whole character. A finished one never will: these are the
+      // block's bytes, so they go through.
+      if (cut.end < bytes.length && options.attemptOpen === true) bytes = bytes.subarray(0, cut.end);
+    }
+    return { data: bytes, nextOffset: offset + bytes.length, more: first.size > seen };
   }
 
   // --- internals ----------------------------------------------------------
@@ -892,6 +924,37 @@ export class Engine {
       record.outputs = null;
     }
   }
+}
+
+/** A UTF-8 sequence is at most this many bytes, so a cut never has to look further back. */
+const UTF8_MAX_SEQUENCE = 4;
+
+/** How many bytes a sequence starting with `lead` claims, or 0 when `lead` cannot start one. */
+function utf8SequenceLength(lead: number): number {
+  if (lead < 0x80) return 1;
+  if (lead >= 0xc2 && lead <= 0xdf) return 2;
+  if (lead >= 0xe0 && lead <= 0xef) return 3;
+  if (lead >= 0xf0 && lead <= 0xf4) return 4;
+  return 0;
+}
+
+/**
+ * Where a chunk of a log may end: `end` is the length to cut to and `needed` how many more bytes
+ * would complete the sequence it cut. Only lengths are judged, never whether a whole sequence is
+ * well formed, so a block's own broken bytes come back untouched instead of being read as a cut.
+ */
+function utf8Cut(bytes: Uint8Array): { end: number; needed: number } {
+  for (let back = 1; back < UTF8_MAX_SEQUENCE; back++) {
+    const start = bytes.length - back;
+    if (start < 0) break;
+    const lead = bytes[start]!;
+    if (lead >= 0x80 && lead <= 0xbf) continue; // a continuation byte: the sequence started earlier
+    const length = utf8SequenceLength(lead);
+    if (length === 0) break; // neither a lead nor a continuation: the block's own garbage
+    if (back < length) return { end: start, needed: length - back };
+    break; // the last sequence already has all of its bytes
+  }
+  return { end: bytes.length, needed: 0 };
 }
 
 function effectiveNeeds(step: PipelineStep, pipeline: Pipeline): string[] {

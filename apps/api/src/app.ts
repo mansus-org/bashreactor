@@ -236,7 +236,12 @@ export function createApi(deps: ApiDependencies): Api {
       });
     }
 
-    const chunk = await engine.readLog(id, stepId, attempt, offset, MAX_LOG_TEXT_BYTES);
+    // A running attempt is still writing, so a chunk that stops mid-character holds the half back and
+    // the next poll reads it whole; a finished attempt's bytes are final (SPEC 4.8).
+    const open = step.attempts.some((entry) => entry.n === attempt && entry.status === "running");
+    const chunk = await engine.readLog(id, stepId, attempt, offset, MAX_LOG_TEXT_BYTES, {
+      attemptOpen: open,
+    });
     const text = new TextDecoder("utf-8").decode(chunk.data);
     return json(200, {
       run: id,
