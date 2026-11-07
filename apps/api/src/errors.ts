@@ -18,6 +18,7 @@ export type ApiExtraCode =
   | "not_found"
   | "method_not_allowed"
   | "bad_request"
+  | "file_not_found"
   | "internal_error";
 
 /** Store codes with no SPEC section 5 equivalent, passed through unchanged. */
@@ -58,6 +59,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   step_not_found: 404,
   attempt_not_found: 404,
   artifact_not_found: 404,
+  // A path inside a run directory that is not there, is a link, or is not inside it at all.
+  file_not_found: 404,
   // No route is mounted at the path the request named.
   not_found: 404,
   // The thing exists but is in the wrong state for this call.

@@ -214,6 +214,41 @@ export const TOOLS: readonly ToolDef[] = [
         query: { offset: Number(args.offset ?? 0) },
       }),
   },
+  {
+    name: "list_run_files",
+    title: "List a run's files",
+    description:
+      "What one run wrote, and how big each file is: its declared outputs that are files (by output " +
+      "name, with the step and attempt that produced them), and for every step and attempt its outputs, " +
+      "its log and its work directory, each with a run-relative path and a size. Narrow it with `step`, " +
+      "`attempt` and `scope` (outputs, work, logs, all). A running run answers `partial: true`, and so " +
+      "does an attempt still being written, which means a size may not be the file's last word. A " +
+      "symlink a block left behind is listed with `kind: link` and no size, and cannot be downloaded: " +
+      "nothing here follows a link out of the run directory. This tool lists those files only. Their " +
+      "bytes are binary and can be hundreds of megabytes, which does not fit a text result, so there " +
+      "is no tool that returns them: use `bashreactor runs download` and `runs archive` (or the API's " +
+      "GET /v1/runs/:id/file and /archive) to get the file itself.",
+    access: "read",
+    annotations: read,
+    args: {
+      id: { type: "string", required: true, description: RUN_ID_ARG },
+      step: { type: "string", description: "Only this step, a key of the run's `steps`." },
+      attempt: { type: "integer", minimum: 1, description: "Only this attempt of that step." },
+      scope: {
+        type: "string",
+        enum: ["outputs", "work", "logs", "all"],
+        description: "Which parts to list. Defaults to all.",
+      },
+    },
+    run: (client, args) =>
+      client.json(`/v1/runs/${encodeURIComponent(String(args.id))}/files`, {
+        query: {
+          step: args.step === undefined ? undefined : String(args.step),
+          attempt: args.attempt === undefined ? undefined : Number(args.attempt),
+          scope: args.scope === undefined ? undefined : String(args.scope),
+        },
+      }),
+  },
 
   // --- writing ---------------------------------------------------------------
   {

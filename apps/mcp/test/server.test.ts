@@ -63,6 +63,7 @@ describe("tools/list", () => {
       "list_runs",
       "get_run",
       "get_run_log",
+      "list_run_files",
       "store_block_version",
       "store_pipeline_version",
       "start_run",

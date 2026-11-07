@@ -53,6 +53,28 @@ printf '\\nEND\\n'
   }, 30_000);
 });
 
+describe("a run's files", () => {
+  test("list_run_files gives the manifest, and the bytes are not its business", async () => {
+    const started = await session.call("start_run", { pipeline: "hello-pipeline" });
+    const id = started.json.run.id;
+    await env.waitForRun(id);
+
+    const listed = await session.call("list_run_files", { id });
+    expect(listed.isError).toBe(false);
+    expect(listed.json.run).toBe(id);
+    expect(listed.json.partial).toBe(false);
+    expect(listed.json.steps.greet.attempts[0].log.path).toBe("steps/greet/attempts/1/log");
+    const outputs = listed.json.steps.greet.attempts[0].outputs.map((entry: any) => entry.path);
+    expect(outputs.includes("steps/greet/attempts/1/outputs/greeting")).toBe(true);
+
+    // Narrowing is the API's answer, not a second implementation here.
+    expect(Object.keys((await session.call("list_run_files", { id, step: "greet", scope: "logs" })).json.steps)).toEqual([
+      "greet",
+    ]);
+    expect((await session.call("list_run_files", { id, step: "nope" })).json.code).toBe("step_not_found");
+  }, 30_000);
+});
+
 describe("a run that outlives the call", () => {
   let id: string;
 
