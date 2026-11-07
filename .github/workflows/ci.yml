@@ -50,6 +50,31 @@ jobs:
           bash --version | head -1
           uv --version
           bun --version
+      # The UI smoke tests (BASHR-40) drive the browser the runner image ships — Google Chrome on both
+      # images this matrix runs on. They skip themselves when there is none, because a laptop without
+      # Chromium should still be able to run the suite, which would make a missing browser on CI a
+      # green run that tested nothing. So the job checks, with the same names
+      # apps/web/src/client/browser.testkit.ts looks for, and says the reason.
+      - name: A browser for the UI smoke tests is on PATH
+        run: |
+          if [ -n "${BASHREACTOR_BROWSER:-}" ]; then
+            test -x "$BASHREACTOR_BROWSER" || {
+              echo "browser_missing: BASHREACTOR_BROWSER is $BASHREACTOR_BROWSER, which is not executable" >&2
+              exit 1
+            }
+            echo "browser: $BASHREACTOR_BROWSER"
+            "$BASHREACTOR_BROWSER" --version
+          else
+            for name in google-chrome google-chrome-stable chromium chromium-browser chrome; do
+              if command -v "$name" > /dev/null; then
+                echo "browser: $(command -v "$name")"
+                "$name" --version
+                exit 0
+              fi
+            done
+            echo "browser_missing: no Chromium or Google Chrome on PATH, so the UI smoke tests would skip and prove nothing" >&2
+            exit 1
+          fi
       # Before the tests, so a bundle that will not build is reported as a build failure and not as a
       # container that silently refuses to connect.
       - run: bun run build
