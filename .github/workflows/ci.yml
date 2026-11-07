@@ -70,8 +70,12 @@ jobs:
           curl --silent --show-error --fail --retry 20 --retry-delay 1 --retry-all-errors \
             http://localhost:8080/healthz | tee /dev/stderr | grep -q '"version":"ci-test"'
 
+          # `/` is not a dead end for a person who types the host into a browser: it redirects to the
+          # UI, and following it has to land on the app bundle.
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8080/)
-          test "$status" = 501
+          test "$status" = 302
+          curl --silent --show-error --fail --retry 20 --retry-delay 1 --retry-all-errors -L \
+            http://localhost:8080/ | grep -q '/app/assets/app.js'
 
           test "$(docker exec app id -u)" = 10001
 

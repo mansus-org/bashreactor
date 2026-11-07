@@ -23,7 +23,8 @@ With no admin token at all the server still starts and still answers `/healthz`,
 route is 503: an unset token is not a reason for a pod to fail its probe.
 
 `GET /healthz` is unauthenticated and answers `{"status":"ok","version":"…"}`. That, and `GET /`
-answering 501, is the contract the CI image job probes; both still hold.
+redirecting to `/app/` (where the web UI is mounted in the image), is the contract the CI image job
+probes; both still hold.
 
 If the API could not be built at all — a `$BASHREACTOR_HOME` the uid cannot write, a store that will
 not open — the server still listens: `/healthz` answers 200 with
@@ -58,13 +59,15 @@ answer differently:
 
 | Status | Codes |
 | --- | --- |
+| 400 | `bad_request`, a path that is not decodable percent-encoded UTF-8 |
 | 401 | `unauthenticated` |
 | 403 | `forbidden` |
-| 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found` |
+| 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found`, and `not_found` for a path with no route |
+| 405 | `method_not_allowed`, a path this API has with a method it does not take |
 | 409 | `run_claimed`, `run_not_active`, `run_not_retryable`, `already_exists`, `version_conflict` |
 | 422 | every definition and starting code (`pipeline_yaml_invalid`, `pipeline_schema_invalid`, `block_header_malformed`, `block_schema_invalid`, `unknown_*`, `missing_input`, `type_mismatch`, `expression_invalid`, `dependency_cycle`, `file_input_not_found`, `env_missing`) and a request body that does not fit |
 | 500 | `internal_error`, `store_migration_failed`, `store_closed` |
-| 501 | `not_implemented`, for a route this API does not have |
+| 501 | `not_implemented`, for a route this task has not built yet |
 | 503 | `runtime_missing` (a block runtime binary is missing, no admin token is configured, or the API never started), `store_locked` |
 
 Two rules that the code table alone cannot say:
@@ -77,8 +80,9 @@ Two rules that the code table alone cannot say:
   `unknown_input` and a wrong one is `type_mismatch`, each with `path` naming the field. That is the
   spec's own vocabulary for exactly this, and SPEC 5 has no code of its own for a bad request.
 
-`unauthenticated`, `forbidden`, `token_not_found`, `pipeline_not_found` and `internal_error` are this
-API's codes, not the spec's: SPEC section 5 has none for them. They are the open item at the bottom.
+`unauthenticated`, `forbidden`, `token_not_found`, `pipeline_not_found`, `not_found`,
+`method_not_allowed`, `bad_request` and `internal_error` are this API's codes, not the spec's: SPEC
+section 5 has none for them. They are the open item at the bottom.
 
 ## Routes
 
@@ -107,7 +111,9 @@ API's codes, not the spec's: SPEC section 5 has none for them. They are the open
 | `POST` | `/v1/runs/:id/resume` | write | take up a run left `running` |
 | `GET` | `/v1/runs/:id/logs/:step/:attempt` | read | the log from `?offset=`, plus the new offset |
 
-Anything else, including a known path with a method it does not take, is 501 `not_implemented`.
+A path this API does not have is 404 `not_found`; a path it does have, with a method it does not take,
+is 405 `method_not_allowed` naming the methods it takes. `GET /` is not a route: it redirects to
+`/app/`, where the image mounts the web UI.
 
 An id in a path is checked before it is used: a run id must match SPEC 4.2's shape
 (`20261104T101500Z-3fa9c2d1`) and a block or pipeline name must match SPEC 1.1's, because the engine
@@ -221,8 +227,9 @@ has every binary SPEC 2.6 demands, so they do not depend on what happens to be i
 
 ## Open items
 
-- **SPEC 5 needs codes** for `unauthenticated`, `forbidden`, `pipeline_not_found`, `token_not_found`
-  and `internal_error`. Until it has them this API answers with its own, listed above.
+- **SPEC 5 needs codes** for `unauthenticated`, `forbidden`, `pipeline_not_found`, `token_not_found`,
+  `not_found`, `method_not_allowed`, `bad_request` and `internal_error`. Until it has them this API
+  answers with its own, listed above.
 - **The engine should take a block resolver.** Then `src/staging.ts` and its JSON re-emission go
   away and a library reference resolves the way the spec describes it.
 - **No route lists every block or every pipeline.** `packages/store` has no `listBlockNames()` or

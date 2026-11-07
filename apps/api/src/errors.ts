@@ -15,6 +15,9 @@ export type ApiExtraCode =
   | "forbidden"
   | "token_not_found"
   | "pipeline_not_found"
+  | "not_found"
+  | "method_not_allowed"
+  | "bad_request"
   | "internal_error";
 
 /** Store codes with no SPEC section 5 equivalent, passed through unchanged. */
@@ -30,6 +33,8 @@ export type StorePassthroughCode =
   | "store_closed";
 
 const STATUS_BY_CODE: Record<string, number> = {
+  // The request itself could not be read: a path that is not a sequence of decodable segments.
+  bad_request: 400,
   // Definition and request validation: the request is understood and wrong.
   pipeline_yaml_invalid: 422,
   pipeline_schema_invalid: 422,
@@ -53,6 +58,8 @@ const STATUS_BY_CODE: Record<string, number> = {
   step_not_found: 404,
   attempt_not_found: 404,
   artifact_not_found: 404,
+  // No route is mounted at the path the request named.
+  not_found: 404,
   // The thing exists but is in the wrong state for this call.
   run_claimed: 409,
   run_not_active: 409,
@@ -63,6 +70,7 @@ const STATUS_BY_CODE: Record<string, number> = {
   unauthenticated: 401,
   forbidden: 403,
   // The server, not the caller.
+  method_not_allowed: 405,
   not_implemented: 501,
   runtime_missing: 503,
   store_locked: 503,

@@ -12,6 +12,20 @@ describe("the command line", () => {
     expect(parsed({ ...result, stdout: result.stderr }).message).toContain("no command given");
   });
 
+  test("--version says what the CLI is and exits 0, with no URL and no token configured", async () => {
+    const result = await cli(["--version"], { url: null, token: null });
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toMatch(/^bashreactor [0-9]+\.[0-9]+\.[0-9]+$/);
+  });
+
+  test("--version after a command still means which version of the name", async () => {
+    const result = await cli(["--url", "http://127.0.0.1:1", "--token", "x", "blocks", "get", "hello", "--version", "3"]);
+    // It got past the command line and failed on the connection, which is the only proof that the
+    // flag was read as a version and not as the CLI's own.
+    expect(result.code).not.toBe(2);
+  });
+
   test("an unknown command is a usage error, not a 404", async () => {
     const result = await cli(["--url", "http://127.0.0.1:1", "--token", "x", "frobnicate"]);
     expect(result.code).toBe(2);

@@ -41,18 +41,26 @@ type YamlMap = Parameters<typeof mapEntries>[0];
 export function stagePipeline(options: StageOptions): StagedPipeline {
   mkdirSync(options.baseDir, { recursive: true });
   const dir = mkdtempSync(join(options.baseDir, "pipeline-"));
-  const file = join(dir, "pipeline.yaml");
 
-  const parsed = parseYamlDocument(options.yaml);
-  const rewrites = parsed.ok ? libraryRefs(parsed, dir, options.resolveBlock) : new Map<string, string>();
+  // Everything past the mkdir can throw on a document the caller chose, and a caller that never got
+  // the `cleanup` back has no way to remove the directory. So the thrower does it here: a refused
+  // request leaves nothing in `<dataDir>/stage`, which is what makes `validate` create nothing.
+  try {
+    const file = join(dir, "pipeline.yaml");
+    const parsed = parseYamlDocument(options.yaml);
+    const rewrites = parsed.ok ? libraryRefs(parsed, dir, options.resolveBlock) : new Map<string, string>();
 
-  let source = options.yaml;
-  if (rewrites.size > 0 && parsed.ok) {
-    source = `${JSON.stringify(rewrite(parsed, rewrites), null, 2)}\n`;
+    let source = options.yaml;
+    if (rewrites.size > 0 && parsed.ok) {
+      source = `${JSON.stringify(rewrite(parsed, rewrites), null, 2)}\n`;
+    }
+    writeFileSync(file, source);
+
+    return { path: file, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  } catch (error) {
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
   }
-  writeFileSync(file, source);
-
-  return { path: file, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 /** step id -> `name@version`, for every step whose library block the store can supply. */
@@ -62,6 +70,10 @@ function libraryRefs(
   resolveBlock: StageOptions["resolveBlock"],
 ): Map<string, string> {
   const rewrites = new Map<string, string>();
+  // A document that is not a mapping has no steps to rewrite. The engine reports it as
+  // `pipeline_schema_invalid`; reading it as one here is what turned a scalar into a crash.
+  if (kindOf(parsed.root, parsed.doc) !== "map") return rewrites;
+
   const stepsEntry = entriesOf(parsed, parsed.root).find((entry) => entry.key === "steps");
   if (stepsEntry === undefined || stepsEntry.value === null) return rewrites;
   const stepsNode = stepsEntry.value;
