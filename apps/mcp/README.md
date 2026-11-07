@@ -95,6 +95,7 @@ agent calls.
 | `list_runs` | read | `GET /v1/runs` | Every run, newest first |
 | `get_run` | read | `GET /v1/runs/:id` | The whole `run.json` |
 | `get_run_log` | read | `GET /v1/runs/:id/logs/:step/:attempt?offset=` | One attempt's log from a byte offset |
+| `list_run_files` | read | `GET /v1/runs/:id/files` | What the run wrote, by output name and by step, with sizes |
 | `store_block_version` | write | `POST /v1/blocks/:name/versions` | A new block version |
 | `store_pipeline_version` | write | `POST /v1/pipelines/:name/versions` | A new pipeline version, validated first |
 | `start_run` | write | `POST /v1/runs` | `201` and a run that has not run yet |
@@ -127,6 +128,27 @@ instructions string says so before anyone has to discover it.
 `get_run_log` takes a byte offset and returns `{offset, next_offset, truncated, text}`. Start at 0,
 pass `next_offset` back, get only what is new. That is the same cursor the CLI and the web UI use,
 and it is what makes polling a run that has been going for hours cheap.
+
+### A run's files are listed here and downloaded with the CLI
+
+`list_run_files` answers the manifest: the run's declared outputs that are files, and for every step
+and attempt its outputs, its log and its work directory, each with a run-relative path and a size.
+That is a JSON document and it fits a tool result.
+
+There is deliberately **no tool for the bytes**. `GET /v1/runs/:id/file` and
+`GET /v1/runs/:id/archive` answer binary, and a run's embeddings file or work directory is routinely
+hundreds of megabytes; base64-ing that into a text result would spend the context window on it and
+still leave the caller with a file to reassemble. Get the bytes with the CLI, which streams them to
+disk:
+
+```bash
+bashreactor runs files <run id>                       # the same manifest this tool returns
+bashreactor runs download <run id> steps/embed/attempts/1/outputs/embeddings.jsonl
+bashreactor runs archive <run id> -o run.tar.gz
+```
+
+The same rules apply whoever asks: paths are run-relative, a path that escapes the run directory or
+passes through a symlink is `file_not_found`, and a running run's files may be partial.
 
 ## Errors
 

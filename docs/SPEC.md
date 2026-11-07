@@ -1022,6 +1022,33 @@ directory, and turned absolute when rendered. Times are ECMAScript `Date.prototy
 
 The `steps` keys are in declaration order.
 
+### 4.10 Reading a run's files
+
+A run's files are read by a path **relative to the run directory**, using the paths [section 4.2](#42-run-directory)
+documents: `steps/<step id>/attempts/<n>/outputs/<name>`, `steps/<step id>/attempts/<n>/log`,
+`steps/<step id>/work/...`, `run.json`, `pipeline.yaml`, `inputs/<name>`. There is no way to name a file
+that is not inside one run directory, and no route that reads a run's files reaches outside it.
+
+A path is refused when it is empty, begins with `/`, contains a NUL byte, or has a segment that is empty,
+`.` or `..` — after percent-decoding, so `..`, `%2e%2e` and `..%2f` are one path and not three. It is
+refused when any component of it, read from the run directory down and without following links, is a
+symlink. A block is arbitrary bash and can leave anything in its own directory, including a link at
+`tokens.json`, at the store, or at another run's directory, so a link is never followed and never
+served: asking for one is `file_not_found`, and a listing shows it as a link with no size so that
+planting one cannot hide it. An archive follows the same rule, skipping links and saying how many it
+skipped.
+
+A download is an attachment with a neutral content type and `X-Content-Type-Options: nosniff`, and is
+never rendered inline. A block can write an HTML file, and a file served from the API's own origin is a
+script that runs as the API. Files are streamed rather than read into memory whole, because a run's
+output can be far larger than the memory a server is allowed.
+
+A run that is `running` is still writing, so any file it holds may be incomplete, and that is signalled
+rather than hidden: the manifest says `partial: true` for the run and for each attempt that is `running`,
+and a single file answered while the run is running says so in its own header. A finished run's files
+are final. An unknown run, step or attempt is the same answer the log route gives (`run_not_found`,
+`step_not_found`, `attempt_not_found`); a path with no file behind it is `file_not_found`.
+
 ---
 
 ## 5. Errors
@@ -1062,6 +1089,7 @@ key in the pipeline that referenced it, per [section 3.9](#39-what-is-invalid).
 | `run_not_retryable` | Manual retry on a run that is `running` or `succeeded`. |
 | `run_claimed` | Resume on a run with a live claim. |
 | `runtime_missing` | [Section 2.6](#26-runtime-contract). The engine refuses to start. |
+| `file_not_found` | [Section 4.10](#410-reading-a-runs-files). No file of this run is at that path, or it is only reachable through a link. |
 | `not_implemented` | Not built yet (`AGENTS.md`). |
 
 ---

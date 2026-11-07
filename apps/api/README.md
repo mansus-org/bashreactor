@@ -62,7 +62,7 @@ answer differently:
 | 400 | `bad_request`, a path that is not decodable percent-encoded UTF-8 |
 | 401 | `unauthenticated` |
 | 403 | `forbidden` |
-| 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found`, and `not_found` for a path with no route |
+| 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found`, `file_not_found`, and `not_found` for a path with no route |
 | 405 | `method_not_allowed`, a path this API has with a method it does not take |
 | 409 | `run_claimed`, `run_not_active`, `run_not_retryable`, `already_exists`, `version_conflict` |
 | 422 | every definition and starting code (`pipeline_yaml_invalid`, `pipeline_schema_invalid`, `block_header_malformed`, `block_schema_invalid`, `unknown_*`, `missing_input`, `type_mismatch`, `expression_invalid`, `dependency_cycle`, `file_input_not_found`, `env_missing`) and a request body that does not fit |
@@ -82,7 +82,8 @@ Two rules that the code table alone cannot say:
 
 `unauthenticated`, `forbidden`, `token_not_found`, `pipeline_not_found`, `not_found`,
 `method_not_allowed`, `bad_request` and `internal_error` are this API's codes, not the spec's: SPEC
-section 5 has none for them. They are the open item at the bottom.
+section 5 has none for them. They are the open item at the bottom. `file_not_found` is the spec's
+(SPEC 4.10).
 
 ## Routes
 
@@ -110,6 +111,9 @@ section 5 has none for them. They are the open item at the bottom.
 | `POST` | `/v1/runs/:id/retry` | write | manual retry of a failed or cancelled run |
 | `POST` | `/v1/runs/:id/resume` | write | take up a run left `running` |
 | `GET` | `/v1/runs/:id/logs/:step/:attempt` | read | the log from `?offset=`, plus the new offset |
+| `GET` | `/v1/runs/:id/files` | read | what the run wrote: its file outputs, and each step's outputs, log and work, with sizes |
+| `GET` | `/v1/runs/:id/file?path=` | read | one of those files, streamed, as an attachment |
+| `GET` | `/v1/runs/:id/archive` | read | the run, one step or one attempt as tar.gz |
 
 A path this API does not have is 404 `not_found`; a path it does have, with a method it does not take,
 is 405 `method_not_allowed` naming the methods it takes. `GET /` is not a route: it redirects to
@@ -189,6 +193,43 @@ curl -s -X POST -H "Authorization: Bearer $WRITE" $BR/v1/runs/20261104T101500Z-3
 curl -s -X POST -H "Authorization: Bearer $WRITE" $BR/v1/runs/20261104T101500Z-3fa9c2d1/retry
 curl -s -X POST -H "Authorization: Bearer $WRITE" $BR/v1/runs/20261104T101500Z-3fa9c2d1/resume
 ```
+
+```bash
+# what a run wrote, then one file of it, then the whole run as tar.gz
+RUN=20261104T101500Z-3fa9c2d1
+curl -s -H "Authorization: Bearer $READ" $BR/v1/runs/$RUN/files
+curl -s -H "Authorization: Bearer $READ" \
+  --url-query "path=steps/embed/attempts/1/outputs/embeddings.jsonl" -O -J $BR/v1/runs/$RUN/file
+curl -s -H "Authorization: Bearer $READ" -o "$RUN.tar.gz" $BR/v1/runs/$RUN/archive
+# one step, or one attempt of it
+curl -s -H "Authorization: Bearer $READ" -o embed.tar.gz --url-query step=embed $BR/v1/runs/$RUN/archive
+curl -s -H "Authorization: Bearer $READ" -o embed1.tar.gz --url-query step=embed --url-query attempt=1 $BR/v1/runs/$RUN/archive
+```
+
+## Reading a run's files, and what that cannot reach
+
+`files`, `file` and `archive` answer about one directory: `$BASHREACTOR_HOME/runs/<run id>/`. Paths
+are run-relative — the strings SPEC 4.2 documents — and every one of them goes through one helper
+(`src/run-files.ts`), so the three routes cannot disagree about what is reachable.
+
+- A path is refused when it is empty, starts with `/`, contains a NUL, or has a segment that is empty,
+  `.` or `..`. The check runs on the decoded string, so `..`, `%2e%2e%2f`, `..%2f` and a double
+  encoding are the same refusal.
+- **A symlink is never followed, in a download or in an archive.** A block is arbitrary bash and can
+  leave a link at `tokens.json`, at the store, or at another run's directory; every component of a
+  path is read with `lstat` from the run directory down and a link anywhere in it is `file_not_found`.
+  The manifest lists a link with `"kind": "link"` and no size, so planting one cannot hide it, and the
+  archive skips links and reports how many in `x-run-skipped`.
+- A download is `content-disposition: attachment` with `content-type: application/octet-stream` and
+  `x-content-type-options: nosniff`, whatever the file's name or bytes say. A block can write an HTML
+  file, and one served inline from the API's origin is a script that runs as the API.
+- Files stream from `Bun.file` and the tar is piped through `CompressionStream("gzip")`; neither is
+  ever assembled in memory, because a run's embeddings file can be larger than the pod's whole limit.
+- A running run is still writing, so its files may be partial: the manifest says `partial: true`, and
+  a download carries `x-run-partial: true`. A finished run's files are final.
+
+An unknown run, step or attempt is the same 404 the log route gives. A path with no file behind it is
+`file_not_found`; a path that names a directory is `bad_request` telling you to use the archive.
 
 ## How a run is started, and why it is not waited for
 
