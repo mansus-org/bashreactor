@@ -114,6 +114,11 @@ class FakeElement {
     for (const handler of this.listeners.get(type) ?? []) handler(event);
   }
 
+  /** What a browser calls when something is pressed, and what `save()` calls on the anchor it makes. */
+  click(): void {
+    this.dispatchEvent("click");
+  }
+
   append(...nodes: (FakeElement | string)[]): void {
     for (const node of nodes) {
       if (typeof node === "string") {
@@ -312,6 +317,23 @@ globals.sessionStorage = storage();
 globals.CSS = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) };
 globals.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
 
+// Bun has no browser, so it has no object URLs. `save()` needs two: it turns the bytes it fetched into
+// one and clicks an anchor at it. Recording what came back is how the download tests know a click
+// really went to the API and came back as a file, rather than just navigating somewhere.
+const savedFiles: { name: string; url: string }[] = [];
+const realCreateObjectURL = URL.createObjectURL;
+const realRevokeObjectURL = URL.revokeObjectURL;
+URL.createObjectURL = ((blob: Blob) => `blob:${blob.size}`) as typeof URL.createObjectURL;
+URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL;
+fakeDocument.createElement = (tag: string) => {
+  const node = new FakeElement(tag);
+  if (tag === "a") {
+    const anchor = node as unknown as { download: string; href: string; click: () => void };
+    anchor.click = () => void savedFiles.push({ name: anchor.download, url: anchor.href });
+  }
+  return node;
+};
+
 // ---------- the modules the browser runs, and the server it talks to ----------
 
 const served = mkdtempSync(join(tmpdir(), "bashreactor-runs-"));
@@ -387,6 +409,8 @@ async function render(run: Run, serving: () => void = () => serve(run), keepOpen
 
 afterAll(() => {
   for (const controller of controllers) controller.abort();
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
   for (const [name, value] of Object.entries(installed)) {
     if (value === undefined) delete globals[name];
     else globals[name] = value;
@@ -599,12 +623,33 @@ interface FakeResponse {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  blob: () => Promise<Blob>;
+  headers: { get: (name: string) => string | null };
 }
 
 const reply = (body: unknown, status = 200): FakeResponse => ({
   ok: status < 400,
   status,
   json: async () => body,
+  blob: async () => new Blob([JSON.stringify(body)]),
+  headers: { get: () => null },
+});
+
+/**
+ * A download: bytes and a filename, and a `json()` that refuses, so a page that tried to read a
+ * tarball as JSON finds out rather than being handed a lie.
+ */
+const replyBytes = (text: string, filename: string): FakeResponse => ({
+  ok: true,
+  status: 200,
+  json: async (): Promise<unknown> => {
+    throw new TypeError("this is a file, not JSON");
+  },
+  blob: async () => new Blob([text]),
+  headers: {
+    get: (name: string) =>
+      name.toLowerCase() === "content-disposition" ? `attachment; filename="${filename}"` : null,
+  },
 });
 
 const byteLength = (text: string): number => new TextEncoder().encode(text).length;
@@ -623,6 +668,16 @@ class FakeServer {
   chunkBytes = 1_000_000;
   /** Real milliseconds an answer takes, so a test can look at the page in the middle of a read. */
   logDelayMs = 0;
+  /**
+   * What the manifest route answers (SPEC 4.11). Left null so a run with nothing listed reads as a
+   * 404, which is what a server that has no files for a run says, and what the page has to survive.
+   */
+  files: unknown | null = null;
+  /**
+   * Downloadable bytes, keyed by the `?path=` a file route is asked for, plus `archive` for the whole
+   * run. A path nobody gave bytes for answers 404, the way the API answers a path that is not there.
+   */
+  downloads: Record<string, string> = {};
   readonly asked: string[] = [];
   private dead = false;
   private routes = new Map<string, () => FakeResponse>();
@@ -671,6 +726,26 @@ class FakeServer {
     const route = this.routes.get(key);
     if (route !== undefined) return route();
     if (key === `GET ${this.runPath}`) return reply(this.run);
+    if (key === `GET ${this.runPath}/files`) {
+      return this.files === null
+        ? reply({ code: "not_found", message: `run "${this.run.id}" has no files listed` }, 404)
+        : reply(this.files);
+    }
+    if (key === `GET ${this.runPath}/file`) {
+      const path = url.searchParams.get("path") ?? "";
+      const text = this.downloads[path];
+      return text === undefined
+        ? reply({ code: "file_not_found", message: `no file ${path} in run "${this.run.id}"` }, 404)
+        : replyBytes(text, path.slice(path.lastIndexOf("/") + 1));
+    }
+    if (key === `GET ${this.runPath}/archive`) {
+      const stepId = url.searchParams.get("step");
+      const attemptNo = url.searchParams.get("attempt");
+      // The same names apps/api names them with, so a test that reads a filename reads something true.
+      const name =
+        stepId === null ? this.run.id : `${this.run.id}-${stepId}${attemptNo === null ? "" : `-attempt${attemptNo}`}`;
+      return replyBytes(this.downloads.archive ?? "", `${name}.tar.gz`);
+    }
     const log = /^\/v1\/runs\/[^/]+\/logs\/([^/]+)\/(\d+)$/.exec(url.pathname);
     if (log !== null) return this.logChunk(url, log[1]!, log[2]!);
     return reply({ code: "internal_error", message: `nothing on this server answers ${key}` }, 500);
@@ -1191,5 +1266,137 @@ describe("the app's own content security policy", () => {
 
   test("a label beside its buttons is a class, and the class zeroes the margin", () => {
     expect(ruleBody(".label--inline")).toMatch(/margin:\s*0/);
+  });
+});
+
+// ---------- the files a run can hand out ----------
+//
+// A run leaves files on the node (SPEC 4.9) and the API will give them back (SPEC 4.11), so the run
+// screen has to offer them: the manifest, each file of the attempt on screen, and an archive of a
+// step's attempt. What is pinned here is that the links name the run and the path they will fetch,
+// that clicking one goes through the API rather than navigating, and that a run whose files cannot be
+// listed still shows the run.
+
+const FILES_RUN = runFixture([step("ingest", "succeeded")], "succeeded");
+const ATTEMPT_DIR = "steps/ingest/attempts/1";
+const REPORT = `${ATTEMPT_DIR}/outputs/report.html`;
+const CHUNKS = `${ATTEMPT_DIR}/outputs/chunks/chunks.jsonl`;
+const LOGFILE = `${ATTEMPT_DIR}/log/output.txt`;
+
+/** What the manifest route answers for FILES_RUN: three files, one of them in a subdirectory. */
+const FILES_MANIFEST = {
+  run: FILES_RUN.id,
+  status: "succeeded",
+  partial: false,
+  outputs: [{ name: "report", path: REPORT, size: 24 }],
+  steps: {
+    ingest: {
+      attempts: [
+        {
+          n: 1,
+          status: "succeeded",
+          partial: false,
+          log: { path: LOGFILE, size: 118 },
+          outputs: [
+            { name: "report", path: REPORT, size: 24 },
+            { name: "chunks.jsonl", path: CHUNKS, size: 1_536 },
+          ],
+          work: [],
+        },
+      ],
+    },
+  },
+};
+
+function filesServer(): FakeServer {
+  const server = new FakeServer(FILES_RUN);
+  server.files = FILES_MANIFEST;
+  server.downloads = { [REPORT]: "<html></html>", [CHUNKS]: '{"url":"a"}\n', [LOGFILE]: "fetched\n", archive: "tar.gz bytes" };
+  return server;
+}
+
+/** A download link, found by the words on it — the fake selector cannot quote a label with spaces. */
+function fileLink(view: FakeElement, label: string): FakeElement {
+  const link = view
+    .querySelectorAll(".file")
+    .find((node) => node.getAttribute("data-download") === label);
+  if (link === undefined) throw new Error(`the run screen drew no link for ${label}`);
+  return link;
+}
+
+/** The links under the attempt, which is where the manifest's files are drawn. */
+const panelLinks = (view: FakeElement): string[] =>
+  view.querySelectorAll(".files .file").map((link) => link.getAttribute("data-download") ?? "");
+
+describe("the files of a run", () => {
+  test("the attempt on screen links to each of its files, at that run's own address", async () => {
+    const view = await openRun(filesServer());
+
+    expect(panelLinks(view)).toEqual([
+      REPORT,
+      CHUNKS,
+      LOGFILE,
+      "Everything in ingest as one archive",
+    ]);
+    for (const path of [REPORT, CHUNKS, LOGFILE]) {
+      expect(fileLink(view, path).getAttribute("href")).toBe(
+        `http://runs.test/v1/runs/${FILES_RUN.id}/file?path=${encodeURIComponent(path)}`,
+      );
+    }
+  });
+
+  test("the archive links say which run, which step and which attempt", async () => {
+    const view = await openRun(filesServer());
+
+    expect(fileLink(view, "Everything in ingest as one archive").getAttribute("href")).toBe(
+      `http://runs.test/v1/runs/${FILES_RUN.id}/archive?step=ingest&attempt=1`,
+    );
+    expect(fileLink(view, "Download the run").getAttribute("href")).toBe(
+      `http://runs.test/v1/runs/${FILES_RUN.id}/archive`,
+    );
+    expect(fileLink(view, "Download the manifest").getAttribute("href")).toBe(
+      `http://runs.test/v1/runs/${FILES_RUN.id}/files`,
+    );
+  });
+
+  test("a size is said, so nobody clicks blind into a gigabyte", async () => {
+    const view = await openRun(filesServer());
+
+    expect(fileLink(view, CHUNKS).textContent).toBe(`${CHUNKS} 1.5 kB`);
+    expect(fileLink(view, REPORT).textContent).toBe(`${REPORT} 24 B`);
+  });
+
+  test("clicking a file link asks the API for it and does not navigate", async () => {
+    const server = filesServer();
+    const view = await openRun(server);
+    savedFiles.length = 0;
+
+    let navigated = false;
+    fileLink(view, REPORT).dispatchEvent("click", { preventDefault: () => void (navigated = true) });
+    await waitFor("the file to be handed to the browser", () => savedFiles.length > 0);
+
+    expect(navigated).toBe(true);
+    expect(savedFiles).toEqual([{ name: "report.html", url: "blob:13" }]);
+    expect(server.asked).toContain(`GET /v1/runs/${FILES_RUN.id}/file`);
+  });
+
+  test("clicking the archive link downloads that step's attempt", async () => {
+    const server = filesServer();
+    const view = await openRun(server);
+    savedFiles.length = 0;
+
+    click(fileLink(view, "Everything in ingest as one archive"));
+    await waitFor("the archive to be handed to the browser", () => savedFiles.length > 0);
+
+    expect(savedFiles).toEqual([{ name: `${FILES_RUN.id}-ingest-attempt1.tar.gz`, url: "blob:12" }]);
+  });
+
+  test("a run whose files cannot be listed still shows the run", async () => {
+    const server = new FakeServer(FILES_RUN);
+    const view = await openRun(server);
+
+    expect(word(one(view.querySelector(".steprow .stamp"), "the step's stamp"))).toBe("succeeded");
+    expect(panelLinks(view)).toEqual([]);
+    expect(one(view.querySelector('[id="panel-title"]'), "the panel title").textContent).toBe("ingest");
   });
 });
