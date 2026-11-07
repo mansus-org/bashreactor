@@ -110,3 +110,24 @@ jobs:
           docker exec app sh -c 'for t in bash uv bun awk curl grep gzip jq sed tar cat mv wc; do command -v "$t" > /dev/null || { echo "runtime_missing: missing on PATH: $t"; exit 1; }; done'
           # Resolving on PATH is not enough: a binary that cannot link is on PATH and useless.
           docker exec app sh -c 'uv --version && jq --version && bun --version'
+
+      - name: Run the worked example inside it
+        env:
+          # Without an admin token the API is switched off entirely (apps/api/src/config.ts), so this
+          # is what makes the container answer /v1 at all. It is a throwaway container on a throwaway
+          # runner: the value exists for this job and is a secret nowhere else.
+          BASHREACTOR_ADMIN_TOKEN: ci-image-check
+        run: |
+          # A second container, because the step above removes the first one in its own trap and a
+          # step that starts something has to clean up after itself. Everything the example runs —
+          # including count-words, which makes uv fetch a musl CPython as uid 10001 — happens in
+          # there and never on the runner. That is the point: `command -v uv` above only proves the
+          # binary is on PATH, and this example is the only thing that has ever run it.
+          docker run -d --name example -p 8080:8080 -e BASHREACTOR_ADMIN_TOKEN bashreactor:ci
+          trap 'docker logs example; docker rm -f example' EXIT
+
+          for i in $(seq 1 30); do curl -sf localhost:8080/healthz >/dev/null && break; sleep 1; done
+
+          # curl and jq only, so the runner installs nothing to prove the image works. The admin
+          # token is the only one this container knows, and it passes every scope check (auth.ts).
+          BASHREACTOR_URL=http://localhost:8080 BASHREACTOR_TOKEN="$BASHREACTOR_ADMIN_TOKEN" examples/image-demo.sh
