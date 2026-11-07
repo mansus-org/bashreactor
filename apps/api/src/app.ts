@@ -3,12 +3,13 @@
 // `respond`. Nothing here computes anything the engine or the store does not already compute.
 
 import { join } from "node:path";
-import { BLOCK_NAME_RE, parseBlock, parsePipeline, validateBlockSource } from "@bashreactor/core";
+import { BLOCK_NAME_RE, parseBlock, parsePipeline, splitBlockHeaderBytes, validateBlockSource } from "@bashreactor/core";
 import { Engine, FsRunStore } from "@bashreactor/engine";
 import type { RunRecord } from "@bashreactor/engine";
 import { Store } from "@bashreactor/store";
 import type { BlockVersion, PipelineRecord } from "@bashreactor/store";
 import { optionalInputs, optionalInteger, optionalString, parseIntegerParam, readBody, requireString } from "./body.ts";
+import type { Body } from "./body.ts";
 import type { ApiConfig } from "./config.ts";
 import { ApiError, errorToResponse, firstIssueAsError } from "./errors.ts";
 import { authenticate, authorize } from "./auth.ts";
@@ -109,19 +110,32 @@ export function createApi(deps: ApiDependencies): Api {
 
   route("POST", "/v1/blocks/:name/versions", "write", async ({ request, params }) => {
     const name = blockName(params.name!);
-    const body = await readBody(request, ["content"]);
-    const content = requireString(body, "content");
+    const body = await readBody(request, ["content", "content_b64"]);
+    // SPEC 2: the identity of a version is the SHA-256 of the file's exact bytes, so the bytes have
+    // to arrive whole. `content_b64` carries any file; `content` is text and can only carry what is
+    // valid UTF-8, and a caller that sends it gets the bytes that text encodes to.
+    const bytes = blockBytes(body);
+    // SPEC 2.2: the header must be valid UTF-8 and the rest of the file is opaque bytes, so the
+    // header is checked over the bytes themselves — a body that is not UTF-8 must not hide a header
+    // that is not either, and must not stop a header that is from being read.
+    const header = splitBlockHeaderBytes(bytes);
+    if (!header.ok) {
+      throw new ApiError("block_header_malformed", header.error, { path: "name", file: `${name}.sh` });
+    }
+    // Only the header is read from this, and it is already known to be valid UTF-8, so the lossy
+    // decode of everything after it cannot change what the checks below see.
+    const source = new TextDecoder("utf-8").decode(bytes);
 
-    const issues = validateBlockSource(content);
+    const issues = validateBlockSource(source);
     if (issues.length > 0) throw firstIssueAsError(issues, `${name}.sh`);
-    const declared = parseBlock(content).name;
+    const declared = parseBlock(source).name;
     if (declared !== name) {
       throw new ApiError("block_schema_invalid", `the header declares "${declared}", not "${name}"`, {
         path: "name",
         file: `${name}.sh`,
       });
     }
-    return json(201, blockRecord(store.addBlockVersion(name, content)));
+    return json(201, blockRecord(store.addBlockVersion(name, bytes)));
   });
 
   // --- pipeline versions ---------------------------------------------------
@@ -420,6 +434,32 @@ function runId(value: string): string {
   if (!RUN_ID_RE.test(value)) throw new ApiError("run_not_found", `"${value}" is not a run id`);
   return value;
 }
+
+/**
+ * The block file's exact bytes, from whichever field the caller sent. `content_b64` is the one that
+ * can carry a file that is not valid UTF-8; SPEC 2 makes those bytes the version's identity, so
+ * nothing here is allowed to rewrite one of them on the way in.
+ */
+function blockBytes(body: Body): Uint8Array {
+  const content = optionalString(body, "content");
+  const encoded = optionalString(body, "content_b64");
+  if (content !== undefined && encoded !== undefined) {
+    throw new ApiError("unknown_input", 'give either "content" or "content_b64", not both', {
+      path: "content_b64",
+    });
+  }
+  if (encoded !== undefined) {
+    if (!BASE64_RE.test(encoded)) {
+      throw new ApiError("type_mismatch", '"content_b64" is not base64', { path: "content_b64" });
+    }
+    return new Uint8Array(Buffer.from(encoded, "base64"));
+  }
+  if (content !== undefined) return new TextEncoder().encode(content);
+  throw new ApiError("missing_input", '"content" or "content_b64" is required', { path: "content" });
+}
+
+/** Canonical base64, padding and all: anything else is the caller's mistake, not a byte to guess at. */
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function blockName(value: string): string {
   if (!BLOCK_NAME_RE.test(value)) {

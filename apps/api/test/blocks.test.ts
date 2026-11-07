@@ -1,10 +1,12 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { HELLO_BLOCK, blockFile, startApi } from "./helpers.ts";
 
 const server = startApi();
 afterAll(() => server.cleanup());
 
 const body = async (response: Response) => (await response.json()) as Record<string, unknown>;
+const sha256 = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
 
 describe("the block library", () => {
   test("creating a version stores it and answers with its metadata", async () => {
@@ -112,5 +114,70 @@ outputs:
     const wrong = await server.call("POST", "/v1/blocks/x/versions", { body: { content: 42 } });
     expect(wrong.status).toBe(422);
     expect(await body(wrong)).toMatchObject({ code: "type_mismatch", path: "content" });
+  });
+
+  // SPEC 2: the identity of a version is the SHA-256 of the file's exact bytes, and SPEC 2.2: the
+  // body is opaque bytes. A file that is not valid UTF-8 used to be rewritten on the way in, so the
+  // hash on the record was not the hash of the file that was uploaded. `content_b64` carries it whole.
+  test("content_b64 stores a file that is not valid UTF-8, byte for byte", async () => {
+    const bytes = Buffer.concat([
+      Buffer.from(
+        `#!/usr/bin/env bash\n# ---\n# name: binbody\n# description: Ends with bytes no terminal can show.\n# ---\n\necho hi\n: "`,
+      ),
+      Buffer.from([0xff, 0xfe, 0x00, 0x80, 0xc3]),
+      Buffer.from(`"\n`),
+    ]);
+    // A rewrite would be invisible unless it changed something: this is what the old path did to it.
+    expect(sha256(bytes)).not.toBe(sha256(Buffer.from(new TextDecoder().decode(bytes))));
+
+    const created = await server.call("POST", "/v1/blocks/binbody/versions", {
+      body: { content_b64: bytes.toString("base64") },
+    });
+    expect(created.status).toBe(201);
+    const record = await body(created);
+    expect(record.sha256).toBe(sha256(bytes));
+    expect(record.size).toBe(bytes.length);
+
+    const content = await server.call("GET", "/v1/blocks/binbody/1/content");
+    expect(content.status).toBe(200);
+    expect(Buffer.from(await content.arrayBuffer()).equals(bytes)).toBe(true);
+  });
+
+  test("content and content_b64 are one file either way", async () => {
+    const twin = blockFile("twin", `name: twin\ndescription: The same file, sent two ways.`, "echo twin");
+    const asText = await body(await server.call("POST", "/v1/blocks/twin/versions", { body: { content: twin.content } }));
+    const asBytes = await body(
+      await server.call("POST", "/v1/blocks/twin/versions", {
+        body: { content_b64: Buffer.from(twin.content, "utf8").toString("base64") },
+      }),
+    );
+    // The same bytes are the same version (SPEC 3.4), whichever field they came in on.
+    expect(asBytes).toMatchObject({ version: 1, sha256: asText.sha256 });
+  });
+
+  test("a body that cannot say which bytes to store is 422", async () => {
+    const both = await server.call("POST", "/v1/blocks/x/versions", { body: { content: "a", content_b64: "YQ==" } });
+    expect(both.status).toBe(422);
+    expect(await body(both)).toMatchObject({ code: "unknown_input" });
+
+    const junk = await server.call("POST", "/v1/blocks/x/versions", { body: { content_b64: "not base64!!" } });
+    expect(junk.status).toBe(422);
+    expect(await body(junk)).toMatchObject({ code: "type_mismatch", path: "content_b64" });
+  });
+
+  // SPEC 2.2: the header must be valid UTF-8 and the rest of the file is opaque, so a body of raw
+  // bytes must not be allowed to hide a header that is not.
+  test("a header that is not valid UTF-8 is refused, whatever the body is", async () => {
+    const bytes = Buffer.concat([
+      Buffer.from("#!/usr/bin/env bash\n# ---\n# name: bad"),
+      Buffer.from([0xff, 0xfe]),
+      Buffer.from("\n# ---\necho hi\n"),
+    ]);
+    const response = await server.call("POST", "/v1/blocks/badheader/versions", {
+      body: { content_b64: bytes.toString("base64") },
+    });
+    expect(response.status).toBe(422);
+    expect(await body(response)).toMatchObject({ code: "block_header_malformed" });
+    expect((await server.call("GET", "/v1/blocks/badheader")).status).toBe(404);
   });
 });
