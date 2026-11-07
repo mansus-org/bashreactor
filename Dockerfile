@@ -18,10 +18,11 @@ RUN bun run build
 
 FROM oven/bun:1-alpine
 WORKDIR /app
-# SPEC 2.6: an engine checks these on PATH at startup and refuses to start without them. The base
+# SPEC 2.6: the server checks these on PATH at startup and, if one is missing, comes up degraded and
+# names it at /healthz instead of exiting. The base
 # image already brings bun and busybox's awk, grep, gzip, sed, tar and coreutils; these four are what
-# it is missing, so without them the image we ship would reject its first block. Before USER, as apk
-# needs root.
+# it is missing, so without them the image we ship would say so on its first probe instead of running
+# blocks. Before USER, as apk needs root.
 RUN apk add --no-cache bash curl jq uv
 COPY --from=build /app/dist/server.js ./server.js
 # The process runs as a uid with no entry in /etc/passwd, so it has no home to fall back on and

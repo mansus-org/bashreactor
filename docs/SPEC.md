@@ -352,15 +352,27 @@ on a volume.
 **Secrets** reach a block through `pass_env` only. Inputs are recorded in `run.json` in clear text, so
 a secret MUST NOT be passed as an input.
 
-**What is on `PATH`.** An engine MUST check at startup that each of these resolves on `PATH`, and
-refuse to start with `runtime_missing` otherwise:
+**What is on `PATH`.** A server MUST check, at startup and before it serves anything, that each of
+these resolves on the `PATH` it will hand a block, and answer `runtime_missing` if any of them does
+not:
 
 `bash` (5 or newer), `uv`, `bun`, `awk`, `curl`, `grep`, `gzip`, `jq`, `sed`, `tar`, and coreutils, which
 the check takes to be present if `cat`, `mv` and `wc` are.
 
+The refusal takes the [section 1.5](#15-health) form rather than an exit: the process binds its
+socket anyway, `/healthz` answers `degraded` with the missing binaries named in `problem`, and every
+other route answers 503 `runtime_missing`. A container that refuses the connection tells the
+orchestrator nothing and the person reading the probe nothing either; one that says `degraded` says
+which package its image is short. The check is made once per process and is not repeated, so the fix
+is a new container, not a repaired one. An engine checks the same list again when it is asked to start
+a run: that is what catches a runtime that went away after the process came up, and what covers an
+engine built with no server in front of it.
+
 `python3` and `node` are not guaranteed. A block that needs them goes through uv or bun.
 
 *Rejected: a fixed PATH such as `/usr/bin:/bin`.* It does not exist on NixOS.
+*Rejected: exiting the process when a runtime is missing.* Section 1.5: the probe is the only window a
+preview deployment gets into a container that will not come up, and an exit spends it.
 
 ### 2.7 Calling uv and bun
 

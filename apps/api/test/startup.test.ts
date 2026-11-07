@@ -5,9 +5,11 @@ import { join } from "node:path";
 import type { Startup } from "../src/startup.ts";
 import { startServer } from "../src/startup.ts";
 import { resolveConfig } from "../src/config.ts";
+import { fakeRuntimeDir } from "./helpers.ts";
 
 // What these pin down is the gap between "the process started" and "the socket is listening": nothing
-// that touches the filesystem may take the listener down with it. SPEC 1.5.
+// that touches the filesystem may take the listener down with it, and nothing that a block needs from
+// the image may go unnoticed until a run asks for it. SPEC 1.5 and SPEC 2.6.
 
 const roots: string[] = [];
 
@@ -106,6 +108,85 @@ describe("startServer", () => {
       expect(api).toBeNull();
       expect(problem).toContain("mkdir");
       expect((await get(server)).status).toBe(200);
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("a container built without jq is degraded from its first probe, not from its first run", async () => {
+    // The review's repro, without a container: an image that has everything except the one package
+    // blocks call. It used to answer `{"status":"ok"}` here and refuse at the first POST /v1/runs.
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-startup-"));
+    roots.push(root);
+    const bin = fakeRuntimeDir(root);
+    rmSync(join(bin, "jq"));
+
+    const lines: string[] = [];
+    const { server, api, problem } = startServer({
+      config: resolveConfig({ BASHREACTOR_HOME: root, PORT: "0", PATH: bin }, "test-version"),
+      log: (line) => lines.push(line),
+    });
+    try {
+      expect(api).toBeNull();
+      expect(problem).toBe("missing on PATH: jq");
+      expect(lines.some((line) => line.includes("missing on PATH: jq"))).toBe(true);
+
+      const health = await get(server);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({
+        status: "degraded",
+        version: "test-version",
+        problem: "missing on PATH: jq",
+      });
+
+      // Publishing a block into a server that can never run it is the second half of the finding.
+      const publish = await fetch(`http://127.0.0.1:${server.port}/v1/blocks/hello/versions`, { method: "POST" });
+      expect(publish.status).toBe(503);
+      expect(await publish.json()).toEqual({
+        code: "runtime_missing",
+        message: "bashreactor could not start: missing on PATH: jq",
+      });
+    } finally {
+      server.stop();
+    }
+  });
+
+  test("checks the PATH it will hand the engine, not the one the process happens to have", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-startup-"));
+    roots.push(root);
+    const complete = resolveConfig({ BASHREACTOR_HOME: root, PORT: "0", PATH: fakeRuntimeDir(root) }, "test-version");
+
+    // The process's own PATH goes empty for the duration, so a check that read `process.env` instead
+    // of the config would come back degraded here and the assertion below would be the one to say so.
+    const saved = process.env.PATH;
+    process.env.PATH = "";
+    const { server, api, problem } = startServer({ config: complete, log: () => {} });
+    process.env.PATH = saved;
+    try {
+      expect(problem).toBeNull();
+      expect(api).not.toBeNull();
+      expect((await get(server)).status).toBe(200);
+    } finally {
+      server.stop();
+      api?.close();
+    }
+  });
+
+  test("says which runtime is missing before whatever the build would have complained about", async () => {
+    // Both are wrong, and the person reading `/healthz` fixes the image first: an unwritable data
+    // directory is often only what a missing binary's error would have turned into anyway.
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-startup-"));
+    roots.push(root);
+    const bin = fakeRuntimeDir(root);
+    rmSync(join(bin, "jq"));
+
+    const { server, problem } = startServer({
+      config: resolveConfig({ BASHREACTOR_HOME: root, PORT: "0", PATH: bin }, "test-version"),
+      log: () => {},
+      build: broken("the store would not open"),
+    });
+    try {
+      expect(problem).toBe("missing on PATH: jq");
     } finally {
       server.stop();
     }

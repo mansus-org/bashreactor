@@ -4,7 +4,12 @@
 // anything can answer a probe. A preview deployment gets one URL out of that, so a server whose API
 // could not be built still listens and says what failed at `/healthz` instead of refusing the
 // connection. SPEC 1.5.
+//
+// The runtimes a block may call (SPEC 2.6) are checked here for the same reason: an image built
+// without `jq` has to say so on its first probe, not at the first run someone publishes.
 
+import { checkRuntime } from "@bashreactor/engine";
+import { BashreactorError } from "@bashreactor/core";
 import { createApi } from "./app.ts";
 import type { Api } from "./app.ts";
 import type { ApiConfig } from "./config.ts";
@@ -41,6 +46,16 @@ export function startServer(options: StartupOptions): Startup {
   let api: Api | null = null;
   let problem: string | null = null;
   try {
+    // SPEC 2.6, in the form SPEC 1.5 gives it: a runtime missing from PATH is refused, and the form
+    // the refusal takes is this degraded listener rather than an exit, because a container that
+    // refuses the connection reports nothing to the probe that is its only window in. Checked before
+    // the build, on the PATH the engine will be handed, so the message names the package the image
+    // is short instead of a symptom of it several layers down.
+    const missing = checkRuntime(options.config.enginePath);
+    if (missing.length > 0) {
+      throw new BashreactorError("runtime_missing", `missing on PATH: ${missing.join(", ")}`);
+    }
+
     const built = build(options.config, log);
     api = built;
     handle = (request) => built.fetch(request);
