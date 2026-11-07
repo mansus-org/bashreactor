@@ -161,7 +161,7 @@ export function treeDigest(dir: string): string[] {
     }
   };
   walk(dir, "");
-  return found.sort();
+  return found.toSorted();
 }
 
 /** The SHA-256 a test compares against what the server recorded, as lowercase hex. */
