@@ -8,7 +8,7 @@
 // the API is built exactly as main.ts builds it, and only its `fetch` is wrapped.
 
 import manifest from "../package.json";
-import { createApi, resolveConfig, resolveVersion, resumeRunningRuns, startServer, stopOnSignals } from "@bashreactor/api";
+import { createApi, resolveConfig, resolveVersion, resumeRunningRuns, announceRetention, startServer, stopOnSignals } from "@bashreactor/api";
 import type { Api, ApiConfig } from "@bashreactor/api";
 import { createMcpServer, resolveConfig as resolveMcpConfig } from "@bashreactor/mcp";
 import type { McpOptions } from "@bashreactor/mcp";
@@ -68,6 +68,11 @@ if (api !== null) {
   void resumeRunningRuns(api.engine).catch((error: unknown) => {
     console.log(`bashreactor: could not resume runs: ${error instanceof Error ? error.message : String(error)}`);
   });
+
+  // The other half of what a long-lived pod owes the volume it mounts: 1 Gi of `local-path` and a run
+  // that never stops writing to it (SPEC 6). This is the entry the image runs, so the trim that keeps
+  // it from filling has to be started here and not only in apps/api's own main.
+  announceRetention(api.engine, config.retentionMs);
 }
 
 stopOnSignals(startup);

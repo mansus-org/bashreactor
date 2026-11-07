@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 const ADMIN = "web_process_admin";
 
-async function serve(env: Record<string, string>): Promise<{ port: string; stop(): Promise<void> }> {
+async function serve(env: Record<string, string>): Promise<{ port: string; log(): string; stop(): Promise<void> }> {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "server.ts")], {
     env: { ...process.env, PORT: "0", ...env },
     stdout: "pipe",
@@ -28,13 +28,37 @@ async function serve(env: Record<string, string>): Promise<{ port: string; stop(
   }
   if (port === undefined) throw new Error(`the server did not say its port: ${seen}`);
   reader.releaseLock();
+  // Everything after the port line is still coming, and one of the lines a deployment cares about is
+  // below it, so the rest is drained into the same buffer rather than left in the pipe.
+  void (async () => {
+    const rest = proc.stdout.getReader();
+    for (;;) {
+      const { value, done } = await rest.read();
+      if (done) break;
+      seen += decoder.decode(value, { stream: true });
+    }
+  })();
   return {
     port,
+    log: () => seen,
     stop: async () => {
       proc.kill("SIGTERM");
       expect(await proc.exited).toBe(0);
     },
   };
+}
+
+/** The first stdout line holding `needle`, waiting a moment for it to arrive. */
+async function logged(server: { log(): string }, needle: string): Promise<string> {
+  for (let tries = 0; tries < 100; tries++) {
+    const line = server
+      .log()
+      .split("\n")
+      .find((each) => each.includes(needle));
+    if (line !== undefined) return line;
+    await Bun.sleep(20);
+  }
+  throw new Error(`the server never logged "${needle}": ${server.log()}`);
 }
 
 test("the web entry serves the app and the API from one port, and stops on SIGTERM", async () => {
@@ -68,6 +92,41 @@ test("the web entry serves the app and the API from one port, and stops on SIGTE
   } finally {
     await server.stop();
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// The volume a deployment mounts is a fixed size and a run never stops writing to it, so what happens
+// to old runs has to be said out loud by the entry that actually runs in the pod — and the trim has to
+// be started here, not only in apps/api's own main, which the image does not run.
+test("the entry says what happens to old runs, whichever way it was decided", async () => {
+  const quiet = mkdtempSync(join(tmpdir(), "bashreactor-web-main-"));
+  const off = await serve({
+    BASHREACTOR_HOME: quiet,
+    BASHREACTOR_ADMIN_TOKEN: ADMIN,
+    BASHREACTOR_VERSION: "ci-web",
+    // Said explicitly: a developer's own shell must not be able to turn this one on.
+    BASHREACTOR_RETENTION: "",
+  });
+  const trimmed = mkdtempSync(join(tmpdir(), "bashreactor-web-main-"));
+  const on = await serve({
+    BASHREACTOR_HOME: trimmed,
+    BASHREACTOR_ADMIN_TOKEN: ADMIN,
+    BASHREACTOR_VERSION: "ci-web",
+    BASHREACTOR_RETENTION: "12h",
+  });
+  try {
+    expect(await logged(off, "retention")).toContain("retention is off");
+    expect(await logged(on, "retention")).toContain("a run that finished over 12h ago is deleted");
+
+    // And the number is there to watch: the same route the CLI's `disk` reads.
+    const disk = await fetch(`http://127.0.0.1:${on.port}/v1/disk`, { headers: { authorization: `Bearer ${ADMIN}` } });
+    expect(disk.status).toBe(200);
+    expect(await disk.json()).toMatchObject({ path: trimmed });
+  } finally {
+    await off.stop();
+    await on.stop();
+    rmSync(quiet, { recursive: true, force: true });
+    rmSync(trimmed, { recursive: true, force: true });
   }
 });
 
