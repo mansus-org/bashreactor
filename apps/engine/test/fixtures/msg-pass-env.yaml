@@ -1,0 +1,7 @@
+name: msg-pass-env
+description: One step that needs a variable the engine does not have.
+steps:
+  needsenv:
+    uses: ./msg-echo.sh
+    pass_env: [MSG_ABSENT_VARIABLE]
+    timeout: 30s

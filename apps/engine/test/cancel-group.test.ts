@@ -107,7 +107,8 @@ describe("cancellation reaches the process group", () => {
     expect(step.status).toBe("cancelled");
     expect(step.attempts).toHaveLength(1);
     expect(step.attempts[0]!.status).toBe("cancelled");
-    expect(step.attempts[0]!.failure).toEqual({ code: "cancelled", message: "cancelled" });
+    // The code only: SPEC 5 keeps the message for people and out of tests.
+    expect(step.attempts[0]!.failure).toMatchObject({ code: "cancelled" });
     // A cancelled attempt spends none of the retry budget (4.5).
     expect(step.attempts_used).toBe(0);
 

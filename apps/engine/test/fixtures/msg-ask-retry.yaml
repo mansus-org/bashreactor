@@ -1,0 +1,10 @@
+name: msg-ask-retry
+description: One step that exits 75 with no retries left, so the request goes in the failure.
+steps:
+  ask:
+    uses: ./msg-exit.sh
+    with:
+      code: 75
+    timeout: 30s
+    retry:
+      max_attempts: 1

@@ -1,0 +1,6 @@
+name: msg-missing-block
+description: One step pointing at a block that is not there.
+steps:
+  gone:
+    uses: ./msg-no-such-block.sh
+    timeout: 30s

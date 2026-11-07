@@ -1,0 +1,10 @@
+name: msg-exit
+description: One step that exits 3, so its failure has to name that code.
+steps:
+  boom:
+    uses: ./msg-exit.sh
+    with:
+      code: 3
+    timeout: 30s
+    retry:
+      max_attempts: 1

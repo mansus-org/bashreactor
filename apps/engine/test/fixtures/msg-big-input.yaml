@@ -1,0 +1,12 @@
+name: msg-big-input
+description: One step handed more text than a block input may hold.
+inputs:
+  big:
+    type: string
+    description: The oversized text.
+steps:
+  swallow:
+    uses: ./msg-big-input.sh
+    with:
+      text: ${{ inputs.big }}
+    timeout: 30s

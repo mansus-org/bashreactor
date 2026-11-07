@@ -1,0 +1,6 @@
+name: msg-kill
+description: A step that dies from a signal rather than an exit code.
+steps:
+  selfkill:
+    uses: ./msg-kill.sh
+    timeout: 30s

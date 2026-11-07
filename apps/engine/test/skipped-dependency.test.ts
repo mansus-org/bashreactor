@@ -73,7 +73,8 @@ describe("skipped dependencies", () => {
     expect(final.steps.referrer!.needs).toEqual(["root"]);
 
     // root spent its single attempt: 78 is block_fatal, which no budget retries.
-    expect(final.steps.root!.failure).toEqual({ code: "block_fatal", message: "block_fatal" });
+    // The code only: SPEC 5 says the message is for people and must not be compared in a test.
+    expect(final.steps.root!.failure).toMatchObject({ code: "block_fatal" });
     expect(final.steps.root!.attempts_used).toBe(1);
 
     // The branch that had nothing to do with root ran, including the step that only became eligible

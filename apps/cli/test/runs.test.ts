@@ -588,7 +588,11 @@ describe("runs logs --follow", () => {
     expect(followed.code).toBe(1);
     expect(followed.stdout).toBe("about to fail\n");
     expect(followed.stderr).toContain(`run ${id} running`);
-    expect(followed.stderr).toContain("step boom failed (exit_nonzero)");
+    // SPEC 5's pair, both halves: the code for machines, the engine's message for people. Since
+    // BASHR-34 that message names the exit code instead of repeating the code, so the line no longer
+    // closes on the code.
+    expect(followed.stderr).toMatch(/step boom failed \(exit_nonzero: .+\)/);
+    expect(followed.stderr).toContain("exit 3");
   });
 
   test("a step the run does not have is still the API's answer, with --follow", async () => {

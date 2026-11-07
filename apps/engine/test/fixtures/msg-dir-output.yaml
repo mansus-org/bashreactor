@@ -1,0 +1,6 @@
+name: msg-dir-output
+description: A step that makes a directory where its output should be a file.
+steps:
+  notfile:
+    uses: ./msg-dir-output.sh
+    timeout: 30s

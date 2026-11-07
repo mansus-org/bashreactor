@@ -1,0 +1,6 @@
+name: msg-echo
+description: One plain step that would succeed, if it could only be started.
+steps:
+  say:
+    uses: ./msg-echo.sh
+    timeout: 30s
