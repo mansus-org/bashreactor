@@ -623,10 +623,6 @@ interface FakeResponse {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
-interface FakeResponse {
-  ok: boolean;
-  status: number;
-  json: () => Promise<unknown>;
   blob: () => Promise<Blob>;
   headers: { get: (name: string) => string | null };
   /** The real Response has one, and `errorOf` reads through it so the caller keeps a body of its own. */
