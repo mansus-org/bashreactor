@@ -98,7 +98,7 @@ section 5 has none for them. They are the open item at the bottom.
 | `GET` | `/v1/blocks/:name` | read | every version of a block |
 | `GET` | `/v1/blocks/:name/:version` | read | one version's metadata |
 | `GET` | `/v1/blocks/:name/:version/content` | read | the block's exact bytes |
-| `POST` | `/v1/blocks/:name/versions` | write | add a version (same bytes, same version) |
+| `POST` | `/v1/blocks/:name/versions` | write | add a version (`content`, or `content_b64`); same bytes, same version |
 | `GET` | `/v1/pipelines/:name` | read | every version of a pipeline, metadata only |
 | `GET` | `/v1/pipelines/:name/:version` | read | one version, with its YAML and parsed form |
 | `POST` | `/v1/pipelines/validate` | read | validate YAML, report every issue, create nothing |
@@ -119,6 +119,12 @@ An id in a path is checked before it is used: a run id must match SPEC 4.2's sha
 (`20261104T101500Z-3fa9c2d1`) and a block or pipeline name must match SPEC 1.1's, because the engine
 and the store join both straight into a path. A name that cannot be one is 404 for a run and 422 for
 a block or pipeline, whose name is part of the document being created.
+
+A block version is filed under the name its header declares, and the header's name need not be the
+filename (SPEC 2.3) — the route only refuses a body that declares something other than the name in
+its path. The bytes are what the version is (SPEC 2), so `content_b64` carries a file whose body is
+not valid UTF-8 whole, where `content` is text and can only carry what UTF-8 can hold. The header
+must be valid UTF-8 either way (SPEC 2.2).
 
 ### Examples
 
