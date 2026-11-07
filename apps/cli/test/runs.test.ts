@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Result } from "./helpers.ts";
-import { HELLO_BLOCK, SLOW_BLOCK, blockFile, cli, helloPipeline, parsed, startServer } from "./helpers.ts";
+import { HELLO_BLOCK, SLOW_BLOCK, blockFile, cli, helloPipeline, libraryDir, parsed, startServer, treeDigest } from "./helpers.ts";
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
 const dirs: string[] = [];
@@ -233,6 +233,27 @@ steps:
     expect(started.stderr).toContain("published");
     expect(started.stdout).toMatch(/status\s+succeeded/);
     expect(started.stdout).toMatch(/greet\s+succeeded/);
+  });
+
+  // A typo in a flag used to publish the blocks beside the file on the way to the error, because the
+  // file was published before the command line was read. Publishing the same bytes twice is silent,
+  // so this runs against a library that holds nothing yet: the proof is the empty directory.
+  test("a bad --input is refused before anything is published", async () => {
+    server = await startServer();
+    const dir = mkdtempSync(join(tmpdir(), "bashreactor-cli-files-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "hello.sh"), HELLO_BLOCK);
+    const yaml = join(dir, "local.yaml");
+    writeFileSync(yaml, `name: local-run\nsteps:\n  greet:\n    uses: ./hello.sh\n`);
+    expect(treeDigest(libraryDir(server))).toEqual([]);
+
+    for (const bad of [["--input", "bad"], ["--input", "name"]]) {
+      const refused = await cli(["runs", "start", yaml, ...bad], { url: server.url });
+      expect(refused.code).toBe(2);
+      expect(parsed({ ...refused, stdout: refused.stderr }).code).toBe("invalid_argument");
+      expect(refused.stderr).not.toContain("published");
+      expect(treeDigest(libraryDir(server))).toEqual([]);
+    }
   });
 
   test("--wait ends with the run's own status as the exit code", async () => {
