@@ -17,6 +17,8 @@ export interface FlagSpec {
   /** May be given more than once; `many()` returns them in order. */
   repeat?: boolean;
   choices?: readonly string[];
+  /** A one-dash spelling people type a hundred times, such as `-o` for `--out`. */
+  short?: string;
 }
 
 export interface ArgSpec {
@@ -78,8 +80,31 @@ function flagTable(table: readonly CommandSpec[]): Map<string, FlagSpec> {
   return flags;
 }
 
+/**
+ * The flags of one command: the global ones plus its own. Two commands may spell the same flag and
+ * mean different things by it, and `tokens add --scope read|write` and `runs files --scope
+ * outputs|work|logs|all` do exactly that, so what a flag accepts is read from the command being run
+ * and never from the global table.
+ */
+function commandFlags(spec: CommandSpec): Map<string, FlagSpec> {
+  const flags = new Map<string, FlagSpec>();
+  for (const flag of GLOBAL_FLAGS) flags.set(flag.name, flag);
+  for (const flag of spec.flags ?? []) flags.set(flag.name, flag);
+  return flags;
+}
+
+/** The one-dash spellings, `-o` and `-h`, mapped back to the flag they name. */
+function shortFlags(table: readonly CommandSpec[]): Map<string, string> {
+  const shorts = new Map<string, string>([["-h", "help"]]);
+  for (const spec of [...GLOBAL_FLAGS, ...table.flatMap((command) => command.flags ?? [])]) {
+    if (spec.short !== undefined) shorts.set(spec.short, spec.name);
+  }
+  return shorts;
+}
+
 export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]): Parsed {
   const known = flagTable(table);
+  const shorts = shortFlags(table);
   const flags = new Map<string, string | string[]>();
   const positional: string[] = [];
   let onlyPositional = false;
@@ -97,6 +122,20 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
     }
     if (token === "-h") {
       flags.set("help", "true");
+      continue;
+    }
+    // A one-dash flag is the same flag with a shorter spelling; anything else that starts with a dash
+    // is a positional argument that happens to look odd, and is left for the command to complain about.
+    if (token.startsWith("-") && !token.startsWith("--") && token.length > 1 && shorts.has(token)) {
+      const spec = known.get(shorts.get(token)!)!;
+      if (spec.value === undefined) {
+        set(flags, spec, "true");
+        continue;
+      }
+      const next = argv[i + 1];
+      if (next === undefined) throw usage(`"${token}" needs a value`);
+      set(flags, spec, next);
+      i += 1;
       continue;
     }
     if (!token.startsWith("--")) {
@@ -176,6 +215,7 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
   }
 
   const declared = spec.args ?? [];
+  const local = commandFlags(spec);
   const required = declared.filter((arg) => !arg.optional).length;
   if (rest.length < required || rest.length > declared.length) {
     const shape = declared.map((arg) => (arg.optional ? `[${arg.name}]` : arg.name)).join(" ");
@@ -190,7 +230,7 @@ export function parseArgs(argv: readonly string[], table: readonly CommandSpec[]
     }
   }
   for (const [name, value] of flags) {
-    const spec2 = known.get(name)!;
+    const spec2 = local.get(name)!;
     if (spec2.choices === undefined) continue;
     const values = Array.isArray(value) ? value : [value];
     for (const one of values) {
@@ -297,8 +337,9 @@ function commandHelp(spec: CommandSpec): string {
     lines.push("flags:");
     for (const flag of flags) {
       const value = flag.value === undefined ? "" : flag.value === "int" ? " <n>" : " <value>";
+      const short = flag.short === undefined ? "" : `${flag.short}, `;
       const choices = flag.choices === undefined ? "" : ` [${flag.choices.join("|")}]`;
-      lines.push(`  --${flag.name}${value}`.padEnd(28) + flag.help + choices);
+      lines.push(`  ${short}--${flag.name}${value}`.padEnd(34) + flag.help + choices);
     }
   }
   return lines.join("\n");
