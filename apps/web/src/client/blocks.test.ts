@@ -10,7 +10,7 @@
 // reads the stylesheet the server serves and checks that the rule hiding the detail reads the very
 // class name the code just set. If either half is renamed, the two stop matching and this fails.
 
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { buildAssets } from "../assets.ts";
@@ -51,6 +51,10 @@ const HALF_GONE = blockSource("half-gone", decls("inputs", [["text", "string"]])
 /** Versions the list names and the store cannot open, which is what BASHR-36 asks the screen to survive. */
 const LOST: Record<string, number[]> = { "half-gone": [2] };
 
+/** A block whose v2 fails for a reason that is not "gone", which is the other half of the same ask. */
+const SULK = blockSource("sulk", decls("inputs", [["text", "string"]]), "");
+const BROKEN: Record<string, number[]> = { sulk: [2] };
+
 const meta = (name: string, version: number, size: number) => ({
   name,
   version,
@@ -73,20 +77,28 @@ const LIBRARY: Record<string, Record<number, string>> = {
   new: { 1: CALLED_NEW },
   accent: { 1: ACCENTED },
   "half-gone": { 1: HALF_GONE },
+  sulk: { 1: SULK },
 };
 
+/** What the screen has posted, which is how "nothing was published" gets proved. */
+const posted: string[] = [];
+
 /** The three routes this screen asks about; everything else is a 404 the way apps/api answers it. */
-async function answer(href: string): Promise<Response> {
+async function answer(href: string, init?: RequestInit): Promise<Response> {
   const parts = new URL(href).pathname.split("/").filter((part) => part !== "");
+  if (init?.method === "POST" && parts.join("/") === "v1/blocks") {
+    posted.push(String(init.body ?? ""));
+    return json(meta("posted", 2, 1), 201);
+  }
   const name = parts[2] ?? "";
   const block = LIBRARY[name];
   if (parts[0] !== "v1" || parts[1] !== "blocks" || block === undefined) {
     return json({ code: "block_not_found", message: `block "${name}" has no versions` }, 404);
   }
   // The store lists a block's versions oldest first, and the client's `latest()` is the last of them.
-  const versions = [...new Set([...Object.keys(block).map(Number), ...(LOST[name] ?? [])])].toSorted(
-    (a, b) => a - b,
-  );
+  const versions = [
+    ...new Set([...Object.keys(block).map(Number), ...(LOST[name] ?? []), ...(BROKEN[name] ?? [])]),
+  ].toSorted((a, b) => a - b);
   if (parts.length === 3) {
     return json({
       name,
@@ -95,11 +107,15 @@ async function answer(href: string): Promise<Response> {
     });
   }
   const wanted = Number(parts[3]);
+  if (parts[4] === "content" && (BROKEN[name] ?? []).includes(wanted)) {
+    return json({ code: "internal", message: "the store is having a moment" }, 500);
+  }
   if (parts[4] === "content" && block[wanted] !== undefined) return asText(block[wanted]!);
   return json({ code: "block_version_not_found", message: `block "${name}" has no version ${parts[3]}` }, 404);
 }
 
-(globalThis as unknown as Record<string, unknown>).fetch = (href: string | URL) => answer(href.toString());
+(globalThis as unknown as Record<string, unknown>).fetch = (href: string | URL, init?: RequestInit) =>
+  answer(href.toString(), init);
 
 // ---------- opening a path ----------
 
@@ -127,6 +143,13 @@ const lib = (view: FakeElement): FakeElement => {
 const classes = (view: FakeElement): string[] => (lib(view).getAttribute("class") ?? "").split(/\s+/).filter(Boolean);
 
 const text = (view: FakeElement): string => view.textContent;
+
+/** A link by the words on it, which is how a person finds one on a screen. */
+const linkLabeled = (view: FakeElement, label: string): FakeElement | undefined =>
+  view.querySelectorAll("a").find((link) => link.textContent === label);
+
+/** One turn of the event loop, which is how long a promise the screen is waiting on takes to land. */
+const tick = (): Promise<void> => new Promise((done) => setTimeout(done, 0));
 
 /** The size column of the version rows, in the order the screen lists them (newest first). */
 /** Which blocks the list on screen names. */
@@ -261,6 +284,13 @@ describe("the contract table", () => {
 });
 
 describe("the block writer", () => {
+  // A draft lives in this tab's sessionStorage, which outlives a render. Each test starts with an
+  // empty one so the writer opens where it is supposed to.
+  beforeEach(() => {
+    sessionStorage.clear();
+    posted.length = 0;
+  });
+
   test("nothing on the writer carries a style attribute", async () => {
     // The CSP the server sends is `style-src 'self'`, so an inline style is dropped and the label
     // sits out of line with the buttons it names.
@@ -290,7 +320,66 @@ describe("the block writer", () => {
   test("and pressing it says nothing changed, instead of landing on v1 with no message", async () => {
     const view = await open("/blocks/count-words/edit");
     view.querySelector("form")!.fire("submit");
+    // The writer asks the library what these bytes would become before it lets itself post, so the
+    // answer is a microtask away rather than synchronous with the click.
+    await tick();
     expect(text(view)).toContain("Nothing has changed: v1 is already these exact bytes.");
+    expect(posted).toEqual([]);
+  });
+
+  test("a new block whose name the library already has is not offered as version 1", async () => {
+    // The whole of it: /blocks-new never asked whether the name in the header was taken, so a file
+    // declaring count-words was labelled "Publish v1" while the store was going to answer v2.
+    const view = await open("/blocks-new");
+    const area = view.querySelector("textarea")!;
+    area.value = COUNT_WORDS;
+    area.fire("input");
+    await tick();
+
+    expect(text(view)).toContain("New version of count-words");
+    expect(publishLabel(view)).toBe("Unchanged, still v1");
+
+    view.querySelector("form")!.fire("submit");
+    await tick();
+    expect(text(view)).toContain("Nothing has changed: v1 is already these exact bytes.");
+    expect(posted).toEqual([]);
+  });
+
+  test("a name the library has never had is still version one", async () => {
+    const view = await open("/blocks-new");
+    const area = view.querySelector("textarea")!;
+    area.value = COUNT_WORDS.replace(/count-words/g, "count-syllables");
+    area.fire("input");
+    await tick();
+
+    expect(text(view)).toContain("New block");
+    expect(publishLabel(view)).toBe("Publish v1");
+  });
+
+  test("text typed into the writer is still there when the screen is rebuilt", async () => {
+    // A reload, or a walk to the Runs screen and back, used to open the writer at the template again
+    // with the half-written block gone and no message about it.
+    const view = await open("/blocks-new");
+    const area = view.querySelector("textarea")!;
+    area.value = "#!/bin/bash\n# name: unfinished\n# still thinking about the rest of this\n";
+    area.fire("input");
+
+    const away = await open("/blocks");
+    expect(text(away)).toContain("count-words");
+    const back = await open("/blocks-new");
+    expect(back.querySelector("textarea")!.value).toBe(
+      "#!/bin/bash\n# name: unfinished\n# still thinking about the rest of this\n",
+    );
+    expect(text(back)).toContain("This is what you had written here, not what the library has.");
+  });
+
+  test("a block whose newest version cannot be read starts from the one that can, and says so", async () => {
+    const view = await open("/blocks/half-gone/edit");
+
+    expect(text(view)).toContain("v2 is listed and its bytes could not be read, so this starts from v1.");
+    expect(view.querySelector("textarea")!.value).toBe(HALF_GONE);
+    // The store's newest is still v2, so the next one is v3 whatever the writer started from.
+    expect(publishLabel(view)).toBe("Publish v3");
   });
 });
 
@@ -315,6 +404,46 @@ describe("what a version is allowed to be said", () => {
     expect(rows.map((row) => row[0])).toEqual(["v2", "v1"]);
     expect(rows[0]![1]).toBe("no stored file");
     expect(rows[1]![1]).toBe(`${new Intl.NumberFormat().format(bytes(HALF_GONE))} bytes`);
+    // The card for the unreadable version says it cannot speak for the file, and does not draw a
+    // contract or an empty source in its place.
+    expect(text(view)).toContain("unreadable");
+    expect(text(view)).toContain("does not have its bytes");
+    // The section is there and says the file is missing; nothing is drawn in its place that could be
+    // mistaken for the block, which is what an empty `<pre>` would have been.
+    expect(view.querySelectorAll("pre").length).toBe(0);
+    // The version that can be read is one click away, and the list is not on fire.
+    expect(linkLabeled(view, "Read v1 instead")).toBeDefined();
+
+    const v1 = await open("/blocks/half-gone/1");
+    expect(text(v1)).toContain("Source of v1");
+    expect(text(v1)).toContain("half-gone");
+  });
+
+  test("one version failing for a reason that is not 'gone' does not take the block down", async () => {
+    // It used to be: only one code was caught, and everything else was rethrown to the whole screen.
+    const view = await open("/blocks/sulk/2");
+
+    expect(versionRows(view).map((row) => row[0])).toEqual(["v2", "v1"]);
+    expect(text(view)).toContain("unreadable");
+    expect(text(view)).toContain("the store is having a moment");
+    expect(linkLabeled(view, "Read v1 instead")).toBeDefined();
+  });
+
+  test("a version address that is not a number is not the newest version wearing a hat", async () => {
+    // `Number("1.0")` is 1, so /blocks/count-words/1.0 used to open v1 under an address that said
+    // something else. Only a plain decimal is a version.
+    for (const address of ["1.0", "0x1", "+1", "1e0"]) {
+      const view = await open(`/blocks/count-words/${address}`);
+      expect(text(view)).toContain(`No version ${address} of count-words`);
+      expect(text(view)).not.toContain("Source of");
+    }
+  });
+
+  test("an address with more in it than a version says so", async () => {
+    const view = await open("/blocks/count-words/1/anything");
+
+    expect(text(view)).toContain("Nothing at this address");
+    expect(text(view)).not.toContain("Source of");
   });
 
   test("an address for version 99 is not quietly the newest version instead", async () => {

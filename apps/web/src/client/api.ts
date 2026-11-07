@@ -242,7 +242,12 @@ async function send(
 async function errorOf(response: Response): Promise<ApiError> {
   let body: { code?: string; message?: string; path?: string; file?: string } = {};
   try {
-    body = (await response.clone().json()) as typeof body;
+    const read: unknown = await response.clone().json();
+    // `null`, `"not found"`, `[]`: JSON that parses but is not the SPEC 5 object. Handing one of
+    // those to ApiError used to throw here, outside the caller's reach, so the one thing that was
+    // certain — the token is refused — never got through to the place that clears it.
+    if (read !== null && typeof read === "object" && !Array.isArray(read)) body = read as typeof body;
+    else if (typeof read === "string" && read !== "") body = { message: read };
   } catch {
     body = { message: `The server answered ${response.status} with no error object.` };
   }

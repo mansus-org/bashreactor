@@ -325,6 +325,10 @@ class FakeStorage {
   removeItem(key: string): void {
     this.items.delete(key);
   }
+
+  clear(): void {
+    this.items.clear();
+  }
 }
 
 /** What a test needs to see: that a graph stopped watching its stage when its screen went away. */

@@ -326,7 +326,9 @@ async function render(options: { focus: boolean }): Promise<void> {
   leaving = new AbortController();
   const signal = leaving.signal;
   const route = routeNow();
-  document.title = route.parts.length === 0 ? "Bashreactor" : `${route.parts.join(" ")} — Bashreactor`;
+  // The writer's address is not a name, so the tab does not read like one either.
+  const words = route.parts[0] === "blocks-new" ? ["New block"] : route.parts;
+  document.title = route.parts.length === 0 ? "Bashreactor" : `${words.join(" ")} — Bashreactor`;
 
   if (session.token === "") {
     renderGate("The token is what every call to /v1 carries. Nothing is stored on this device until you check it.");
@@ -402,6 +404,11 @@ session.onUnauthorized = (error) => {
   // The gate's own check already shows the server's words in the gate, and re-rendering it here
   // would wipe what the reader is typing.
   if (gateIsShown) return;
+  // Whatever was drawing when the token died has to be told to stop, and told before the gate goes
+  // up: a run page left running finishes over the gate with an error card of its own, and its poller
+  // goes on asking with an empty bearer — whose late 401 would then clear a token typed since.
+  leaving?.abort();
+  renderCount++;
   renderGate(
     hadWorked
       ? "A call came back 401, so this token is no longer accepted. It has been cleared from this browser: sign in with one that works."

@@ -14,7 +14,14 @@ export { editBlocked } from "./yaml-edit.js";
 
 export interface LibraryVersion {
   version: number;
-  source: string;
+  /**
+   * The file's own text, or null when the library has the row for this version but not its bytes.
+   * Nothing may read a null as an empty file: it is a version that could not be read, and it has to
+   * keep saying so wherever it appears.
+   */
+  source: string | null;
+  /** Why the bytes could not be read, in the API's own words. Set whenever `source` is null. */
+  unreadable?: string;
 }
 
 export interface LibraryEntry {
@@ -358,6 +365,10 @@ export function analyze(text: string, library: Library): Read {
           const version = entry.versions.find((v) => v.version === ref.version);
           if (version === undefined) {
             problems.push(problem("block_not_found", line, `The library has no version ${ref.version} of ${ref.name}; it has up to ${latest(entry).version}.`, id));
+          } else if (version.source === null) {
+            // The row is there and the file is not. Parsing an empty file in its place would call
+            // this block one that reads nothing, which is a different lie.
+            problems.push(problem("block_not_found", line, `The library has ${ref.name}@${ref.version} but not its bytes: ${version.unreadable ?? "it could not be read"}.`, id));
           } else {
             step.version = ref.version;
             step.contract = parseBlock(version.source);
@@ -367,7 +378,7 @@ export function analyze(text: string, library: Library): Read {
           // step cannot run as written. The contract still draws, from the newest version.
           const current = latest(entry);
           step.version = current.version;
-          step.contract = parseBlock(current.source);
+          if (current.source !== null) step.contract = parseBlock(current.source);
           problems.push(
             problem("block_not_found", line, `${uses} is a file beside the pipeline, and the API runs blocks from the library. The library has ${libraryRef(ref.name, current.version)}.`, id),
           );
