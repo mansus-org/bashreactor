@@ -24,6 +24,22 @@ const tab = new Map<string, string>();
   removeItem: (key: string) => void tab.delete(key),
   clear: () => tab.clear(),
 };
+
+// The stand-in browser has no events on `document` or `window`, and no dialog box. The editor guards
+// leaving with all three, so these record what it registered and what the reader was asked.
+const pageEvents: { type: string; handler: (event: unknown) => void }[] = [];
+const windowEvents: { type: string; handler: (event: unknown) => void }[] = [];
+const asked: string[] = [];
+let answers: boolean[] = [];
+
+const fakeWindow = (globalThis as unknown as Record<string, unknown>).window as Record<string, unknown>;
+(dom.document as unknown as Record<string, unknown>).addEventListener = (type: string, handler: (event: unknown) => void) =>
+  void pageEvents.push({ type, handler });
+fakeWindow.addEventListener = (type: string, handler: (event: unknown) => void) => void windowEvents.push({ type, handler });
+fakeWindow.confirm = (message: string) => {
+  asked.push(message);
+  return answers.shift() ?? true;
+};
 const served = serveModules(["app", "api", "dom", "yaml", "model", "graph", "editor", "runs", "blocks", "logs"]);
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { renderPipeline } = (await import(join(served, "editor.js"))) as typeof import("./editor.ts");
@@ -109,6 +125,14 @@ const calls: string[] = [];
 const started: StartBody[] = [];
 let storedYaml = PINNED;
 
+/** What `POST /v1/pipelines/validate` answers. The editor's own checks are live as you type; this is
+ *  the API's report on the bytes it was sent, which is the half of the problems list #21 is about. */
+let validationReport: { valid: boolean; issues: { code: string; message: string; path?: string }[] } = {
+  valid: true,
+  issues: [],
+};
+const validated: string[] = [];
+
 /** A held door, for the tests that need an answer to arrive after the reader has already left. */
 class Gate {
   readonly held: Promise<void>;
@@ -153,6 +177,16 @@ async function answer(href: string, init?: RequestInit): Promise<Response> {
     return json({ ...meta("word-report", parts[3] === "latest" ? 2 : Number(parts[3])), yaml: storedYaml, parsed: {} });
   }
 
+  if (init?.method === "POST" && parts[1] === "pipelines" && parts[2] === "validate") {
+    validated.push(String((JSON.parse(String(init.body)) as { yaml: string }).yaml));
+    return json(validationReport);
+  }
+
+  // Any other name is one the store has never heard of, which is what the API says about it.
+  if (parts[1] === "pipelines" && parts[2] !== undefined) {
+    return json({ code: "pipeline_not_found", message: `pipeline "${parts[2]}" has no versions` }, 404);
+  }
+
   if (parts[1] === "blocks" && parts[2] !== undefined) {
     const versions = BLOCKS[parts[2]];
     if (versions === undefined) return json({ code: "block_not_found", message: `block "${parts[2]}" has no versions` }, 404);
@@ -190,10 +224,16 @@ function navigateAway(view: FakeElement, title: string): void {
 
 beforeEach(() => {
   started.length = 0;
+  validated.length = 0;
   blockGate = openGate();
   pipelineGate = openGate();
   refusePipeline = false;
+  validationReport = { valid: true, issues: [] };
   tab.clear();
+  pageEvents.length = 0;
+  windowEvents.length = 0;
+  asked.length = 0;
+  answers = [];
 });
 
 async function open(yaml: string, signal: AbortSignal = new AbortController().signal): Promise<FakeElement> {
@@ -204,6 +244,56 @@ async function open(yaml: string, signal: AbortSignal = new AbortController().si
   renderPipeline(view as unknown as HTMLElement, route, signal);
   await settle();
   return view;
+}
+
+/** The same screen at another address, for the routes this file does not open by default. */
+async function openAt(path: string, signal: AbortSignal = new AbortController().signal): Promise<FakeElement> {
+  calls.length = 0;
+  session.identity = { name: "test", scope: "admin", admin: true };
+  const view = dom.document.createElement("div");
+  renderPipeline(
+    view as unknown as HTMLElement,
+    { path, parts: path.split("/").filter((part) => part !== ""), query: new URLSearchParams() },
+    signal,
+  );
+  await settle();
+  return view;
+}
+
+const stampOf = (view: FakeElement): string => view.querySelector(".ed__yaml .bar .stamp")?.textContent ?? "";
+const openError = (view: FakeElement): FakeElement | undefined => view.querySelector('[id="open-error"]') ?? undefined;
+const visibleHelp = (view: FakeElement): string[] => view.querySelectorAll(".help").filter((node) => !node.hidden).map((node) => node.textContent);
+
+/** What the router would answer: a link in the chrome, seen first by whatever is watching. */
+function clickLink(href: string): { prevented: boolean; stopped: boolean } {
+  const link = dom.document.createElement("a");
+  link.setAttribute("href", href);
+  link.setAttribute("data-link", "");
+  dom.document.body.append(link);
+  let prevented = false;
+  let stopped = false;
+  const event = {
+    target: link,
+    preventDefault: () => void (prevented = true),
+    stopImmediatePropagation: () => void (stopped = true),
+  };
+  for (const entry of pageEvents.filter((recorded) => recorded.type === "click")) entry.handler(event);
+  return { prevented, stopped };
+}
+
+/** Whether the screen told the browser this tab has work in it. */
+function unloadTold(): boolean {
+  let told = false;
+  for (const entry of windowEvents.filter((recorded) => recorded.type === "beforeunload")) {
+    entry.handler({ preventDefault: () => void (told = true) });
+  }
+  return told;
+}
+
+function choose(view: FakeElement, id: string, value: string): void {
+  const control = view.querySelector(`[id="${id}"]`)!;
+  control.value = value;
+  control.fire("change");
 }
 
 const button = (view: FakeElement, label: string): FakeElement | undefined =>
@@ -668,5 +758,282 @@ describe("a typed value in the inspector follows the input's declared type", () 
     typeInto(view, "f-attempts", "3");
     expect(yamlOf(view)).toContain('timeout: "90"');
     expect(yamlOf(view)).toContain("max_attempts: 3");
+  });
+});
+
+// ---------- the API's report, which is about the bytes it was given (finding #21) ----------
+
+/** What the API answers for a file input given a string. The editor's own checks never see it. */
+const FILE_AS_TEXT = `name: stale-case
+description: One step whose file input was given a string.
+
+steps:
+  a:
+    uses: check-corpus@1
+    with:
+      corpus: not-a-file
+`;
+
+const FILE_REPORT = {
+  valid: false,
+  issues: [{ code: "type_mismatch", message: "a file value cannot be written in YAML", path: "steps.a.with.corpus" }],
+};
+
+describe("an API report that stops describing the text", () => {
+  test("stops blocking the moment the line it named goes away", async () => {
+    validationReport = FILE_REPORT;
+    const view = await open(FILE_AS_TEXT);
+
+    button(view, "Validate")!.fire("click");
+    await settle();
+    expect(stampOf(view)).toContain("1 problem");
+    expect(view.querySelectorAll(".problems__list li").length).toBe(1);
+    expect(button(view, "Save version")!.disabled).toBe(true);
+    expect(button(view, "Start a run")!.disabled).toBe(true);
+    expect(visibleHelp(view).some((line) => line.startsWith("Fix the problem"))).toBe(true);
+
+    // The reader deletes the line the report was about. Nothing else should be asked of them.
+    typeYaml(view, PINNED);
+    await settle(); // the new document names a block the library had no reason to fetch yet
+    expect(stampOf(view)).toBe("valid");
+    expect(view.querySelectorAll(".problems__list li").length).toBe(0);
+    expect(button(view, "Save version")!.disabled).toBe(false);
+    expect(button(view, "Start a run")!.disabled).toBe(false);
+    expect(visibleHelp(view).some((line) => line.startsWith("Fix the problem"))).toBe(false);
+  });
+
+  test("is still the report while the text it describes is on screen", async () => {
+    validationReport = FILE_REPORT;
+    const view = await open(FILE_AS_TEXT);
+    button(view, "Validate")!.fire("click");
+    await settle();
+    expect(validated.length).toBe(1);
+    expect(stampOf(view)).toContain("1 problem");
+    // A re-render that changes nothing changes nothing: the report still stands.
+    button(view, "Validate")!.fire("click");
+    await settle();
+    expect(stampOf(view)).toContain("1 problem");
+  });
+});
+
+// ---------- the id Add step suggests (finding #23) ----------
+
+const addDialog = (view: FakeElement): FakeElement => view.querySelector('dialog[aria-labelledby="add-title"]')!;
+const suggestedId = (view: FakeElement): string => addDialog(view).querySelector('[id="add-id"]')!.value;
+
+/** SPEC 1.1, the rule the API will apply to whatever the dialog offers. */
+const STEP_ID_RULE = /^[a-z][a-z0-9_]{0,63}$/;
+
+const ALREADY_SUGGESTED = `name: twice
+description: A step already has the id the block name would suggest.
+
+steps:
+  check_corpus:
+    uses: check-corpus@1
+`;
+
+describe("the step id Add step suggests", () => {
+  test("turns the block name's hyphens into underscores, and passes the step id rule", async () => {
+    const view = await open(PINNED);
+    button(view, "Add step")!.fire("click");
+    expect(addDialog(view).querySelector('[id="add-uses"]')!.value).toBe("check-corpus");
+    expect(suggestedId(view)).toBe("check_corpus");
+    expect(STEP_ID_RULE.test(suggestedId(view))).toBe(true);
+
+    addDialog(view).querySelector("form")!.fire("submit");
+    await settle();
+    expect(yamlOf(view)).toContain("  check_corpus:");
+    // The step still has to be wired up, which is a problem of its own. What must not be there is a
+    // complaint about the id the dialog chose.
+    const problems = view.querySelectorAll(".problems__list li").map((row) => row.textContent);
+    expect(problems.some((row) => row.includes("step id"))).toBe(false);
+    expect(problems.some((row) => row.includes("check-corpus"))).toBe(false);
+  });
+
+  test("counts a step that already has the id with an underscore, not a hyphen", async () => {
+    const view = await open(ALREADY_SUGGESTED);
+    button(view, "Add step")!.fire("click");
+    expect(suggestedId(view)).toBe("check_corpus_2");
+    expect(STEP_ID_RULE.test(suggestedId(view))).toBe(true);
+  });
+
+  test("refuses a hyphen typed by hand, and writes nothing", async () => {
+    const view = await open(PINNED);
+    button(view, "Add step")!.fire("click");
+    const id = addDialog(view).querySelector('[id="add-id"]')!;
+    id.value = "check-corpus";
+    id.fire("input");
+    addDialog(view).querySelector("form")!.fire("submit");
+    expect(addDialog(view).open).toBe(true);
+    expect(addDialog(view).querySelector(".form-error")!.hidden).toBe(false);
+    expect(yamlOf(view)).not.toContain("check-corpus:");
+  });
+});
+
+// ---------- leaving with work in progress (finding #24) ----------
+
+const MY_EDIT = `${PINNED}# my edit\n`;
+
+describe("leaving with unsaved changes", () => {
+  test("asks before a link takes the reader away, and stays when the answer is no", async () => {
+    const view = await open(PINNED);
+    typeYaml(view, MY_EDIT);
+    answers = [false];
+
+    const outcome = clickLink("/app/runs");
+    expect(asked.length).toBe(1);
+    expect(outcome.prevented).toBe(true);
+    expect(outcome.stopped).toBe(true);
+  });
+
+  test("hands the click to the router when the answer is yes", async () => {
+    const view = await open(PINNED);
+    typeYaml(view, MY_EDIT);
+    answers = [true];
+
+    const outcome = clickLink("/app/runs");
+    expect(asked.length).toBe(1);
+    expect(outcome.prevented).toBe(false);
+    expect(outcome.stopped).toBe(false);
+  });
+
+  test("says nothing when the document is the record", async () => {
+    await open(PINNED);
+    expect(clickLink("/app/runs").prevented).toBe(false);
+    expect(asked.length).toBe(0);
+  });
+
+  test("tells the browser the tab has work in it, and stops when it does not", async () => {
+    const view = await open(PINNED);
+    expect(unloadTold()).toBe(false);
+    typeYaml(view, MY_EDIT);
+    expect(unloadTold()).toBe(true);
+    typeYaml(view, PINNED);
+    expect(unloadTold()).toBe(false);
+  });
+
+  test("keeps the work in the tab, so coming back brings it back", async () => {
+    const leaving = new AbortController();
+    const view = await open(PINNED, leaving.signal);
+    typeYaml(view, MY_EDIT);
+    expect(status(view)).toBe("Unsaved changes.");
+
+    leaving.abort(); // what the router does to a screen on its way out
+    const back = await open(PINNED);
+    expect(yamlOf(back)).toBe(MY_EDIT);
+    expect(status(back)).toContain("Unsaved changes");
+  });
+
+  test("keeps one document's work off another, and forgets it once it is stored", async () => {
+    const view = await open(PINNED);
+    typeYaml(view, MY_EDIT);
+    expect(tab.size).toBe(1);
+
+    button(view, "Discard changes")!.fire("click");
+    expect(yamlOf(view)).toBe(PINNED);
+    expect(status(view)).toBe("Stored as v2, unchanged.");
+    expect(tab.size).toBe(0);
+    expect((await open(PINNED)).querySelector('[id="doc"]')!.value).toBe(PINNED);
+  });
+});
+
+// ---------- what the line under the title claims (finding #31, the editor half) ----------
+
+const BLANK_TEMPLATE = "name: new-pipeline\ndescription: What this pipeline does.\n\nsteps:\n";
+
+describe("the line under the title", () => {
+  test("does not call a blank editor unsaved, before or after New pipeline", async () => {
+    const view = await openAt("/pipeline");
+    expect(yamlOf(view)).toBe(BLANK_TEMPLATE);
+    expect(status(view)).toBe("Not stored yet.");
+    button(view, "New pipeline")!.fire("click");
+    expect(status(view)).toBe("Not stored yet.");
+
+    typeYaml(view, `${BLANK_TEMPLATE}# one step to go\n`);
+    expect(status(view)).toBe("Unsaved changes.");
+  });
+});
+
+// ---------- a failed open (finding #32) ----------
+
+describe("a failed open", () => {
+  test("is one line beside the field that caused it, and the next attempt replaces it", async () => {
+    const view = await openAt("/pipeline");
+    const nameInput = view.querySelector('[id="open-name"]')!;
+    nameInput.value = "nope";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      button(view, "Open")!.fire("click");
+      await settle();
+    }
+
+    expect(view.querySelectorAll('[id="open-error"]').length).toBe(1);
+    expect(view.querySelectorAll(".state--error").length).toBe(0);
+    const slot = openError(view)!;
+    expect(slot.hidden).toBe(false);
+    expect(slot.textContent).toContain("pipeline_not_found");
+    expect(slot.textContent).toContain("nope");
+
+    nameInput.value = "word-report";
+    button(view, "Open")!.fire("click");
+    await settle();
+    expect(openError(view)!.hidden).toBe(true);
+    expect(status(view)).toBe("Stored as v2, unchanged.");
+  });
+});
+
+// ---------- the version in the address bar (finding #35) ----------
+
+/** What the router does to the address bar, which the test DOM cannot show on its own. */
+function watchAddress(): { urls: string[]; stop: () => void } {
+  const urls: string[] = [];
+  const real = globalThis.history;
+  (globalThis as unknown as Record<string, unknown>).history = {
+    pushState: () => {},
+    replaceState: (_data: unknown, _title: string, url?: string | null) => void urls.push(String(url)),
+  };
+  return { urls, stop: () => void ((globalThis as unknown as Record<string, unknown>).history = real) };
+}
+
+describe("the version in the address bar", () => {
+  test("follows the version that was picked", async () => {
+    const address = watchAddress();
+    try {
+      const view = await open(PINNED);
+      expect(view.querySelector('[id="open-version"]')!.value).toBe("2");
+      choose(view, "open-version", "1");
+      await settle();
+      expect(address.urls).toContain("/app/pipeline/word-report/1");
+    } finally {
+      address.stop();
+    }
+  });
+
+  test("does not move over unsaved work without asking", async () => {
+    const address = watchAddress();
+    try {
+      const view = await open(PINNED);
+      typeYaml(view, MY_EDIT);
+      answers = [false];
+      choose(view, "open-version", "1");
+      expect(asked.length).toBe(1);
+      expect(address.urls).toEqual([]);
+      expect(view.querySelector('[id="open-version"]')!.value).toBe("2");
+    } finally {
+      address.stop();
+    }
+  });
+
+  test("opens the version the route names", async () => {
+    await openAt("/pipeline/word-report/1");
+    expect(calls).toContain("/v1/pipelines/word-report/1");
+  });
+
+  test("says there is no such version, instead of asking the API for NaN", async () => {
+    const view = await openAt("/pipeline/word-report/abc");
+    expect(calls).toEqual([]);
+    expect(view.querySelectorAll(".state--error").length).toBe(0);
+    expect(openError(view)!.hidden).toBe(false);
+    expect(openError(view)!.textContent).toContain("no version");
+    expect(openError(view)!.textContent).toContain("abc");
   });
 });

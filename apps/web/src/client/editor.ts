@@ -535,6 +535,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
 
   /** A link that would take the router somewhere else, seen before the router does. */
   function leaveAttempt(event: Event): void {
+    if (gone()) return; // this screen is already off screen, and has no say over where the reader goes
     const link = (event.target as Element | null)?.closest?.("a[data-link]") as HTMLAnchorElement | null;
     if (link === null) return;
     if (!(link.getAttribute("href") ?? "").startsWith("/app")) return;
@@ -1172,6 +1173,9 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       { id: "add-uses" },
       names.map((name) => el("option", { value: name }, libraryRef(name, latest(library[name]!).version))),
     );
+    // The first block in the library is the one on offer, said out loud rather than left to whatever
+    // the browser picks for a select it has just filled.
+    usesSelect.value = names[0]!;
     const idInput = el("input", { id: "add-id", type: "text", spellcheck: "false", autocomplete: "off" });
     const error = el("p", { class: "form-error", role: "alert", hidden: true });
     const suggest = (): void => {
