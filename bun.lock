@@ -54,6 +54,7 @@
       "dependencies": {
         "@bashreactor/api": "workspace:*",
         "@bashreactor/core": "workspace:*",
+        "@bashreactor/mcp": "workspace:*",
         "yaml": "^2.8.0",
       },
     },
