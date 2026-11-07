@@ -1,6 +1,7 @@
 import manifest from "../package.json";
 import { resolveConfig, resolveVersion } from "./config.ts";
 import { resumeRunningRuns } from "./resume.ts";
+import { announceRetention } from "./retention.ts";
 import { startServer, stopOnSignals } from "./startup.ts";
 
 // A config the environment did not give us stays fatal, because there is nothing sane to fall back
@@ -15,6 +16,11 @@ if (api !== null) {
   if (config.adminHash === null) {
     console.log("bashreactor: /v1 is disabled, no admin token is set in the environment");
   }
+
+  // SPEC 6: the volume is a fixed size and a run never stops writing to it, so what happens to old
+  // runs is said out loud at startup either way. "Off" is the default and a legitimate answer — an
+  // operator trims from outside — but it must not be a silent one.
+  announceRetention(api.engine, config.retentionMs);
 
   // A rollout replaces the pod mid-run, so every run still marked `running` is taken up again before
   // anything else is served (SPEC 4.7). With no engine there is nothing to take up.

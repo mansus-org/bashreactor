@@ -4,7 +4,7 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { BashreactorError } from "@bashreactor/core";
+import { BashreactorError, parseDuration } from "@bashreactor/core";
 
 const DEFAULT_PORT = 8080;
 
@@ -25,6 +25,11 @@ export interface ApiConfig {
   enginePath: string;
   version: string;
   settleMs: number;
+  /**
+   * How long a run that has finished is kept before the server deletes it, in milliseconds; null
+   * when the server never removes anything on its own (SPEC 6, `BASHREACTOR_RETENTION`).
+   */
+  retentionMs: number | null;
 }
 
 export function resolvePort(env: Record<string, string | undefined>): number {
@@ -69,6 +74,36 @@ export function resolveAdminHash(env: Record<string, string | undefined>): strin
   return null;
 }
 
+/**
+ * `BASHREACTOR_RETENTION` (SPEC 6): how long a run that has finished is kept before the server
+ * deletes it, written in the SPEC 1.3 duration format (`7d`, `12h`, `90m`).
+ *
+ * Unset, empty, `off`, `none` and `0` all mean one thing, and it is the default: the server never
+ * deletes a run by itself. That is a decision rather than an omission — a run directory is the only copy of
+ * what a pipeline produced and nothing in v1 can tell which runs a person still wants — so the
+ * default is the one that fills up until someone says otherwise, and it says so at startup.
+ *
+ * A value that does not parse is fatal, the way a bad port is. Starting with retention that was asked
+ * for and not understood is how a deployment deletes the wrong year.
+ */
+export function resolveRetentionMs(env: Record<string, string | undefined>): number | null {
+  const raw = env.BASHREACTOR_RETENTION?.trim().toLowerCase();
+  // `0` is included with `off` because it is what a Helm value renders for "not set", and because
+  // the alternative reading — a retention of no time at all — is the worst possible one.
+  if (raw === undefined || raw === "" || raw === "off" || raw === "none" || raw === "0") return null;
+  const seconds = parseDuration(raw);
+  if (seconds === null) {
+    throw new BashreactorError(
+      "runtime_missing",
+      `BASHREACTOR_RETENTION must be a duration like 7d or 12h, or "off", got "${raw}"`,
+    );
+  }
+  // Anything under a second is the same instruction as `off`, and rounding it to zero would be the
+  // one reading worse than deleting nothing: deleting everything.
+  if (seconds < 1) return null;
+  return seconds * 1000;
+}
+
 export function resolveConfig(
   env: Record<string, string | undefined>,
   version: string,
@@ -84,6 +119,7 @@ export function resolveConfig(
     enginePath: env.PATH ?? process.env.PATH ?? "",
     version,
     settleMs: options.settleMs ?? DEFAULT_SETTLE_MS,
+    retentionMs: resolveRetentionMs(env),
   };
 }
 
