@@ -21,19 +21,18 @@ import type { State as DomState } from "./dom.ts";
 // ---------- the stand-in DOM ----------
 
 /**
- * Enough of a DOM for dom.ts and runs.ts to build a run screen: elements, attributes, text, and the
- * few properties the log pane reads while it scrolls. It is a stand-in and not a browser — nothing is
- * laid out, and no handler is ever fired — which is enough to answer what is asked here: what word and
- * what shape ended up in each stamp.
+ * Enough of a DOM for dom.ts and runs.ts to build a run screen: elements, attributes, text, the few
+ * properties the log pane reads while it scrolls, and the click a test needs to press a button. It is
+ * a stand-in and not a browser — nothing is laid out — but it does lose focus the way a browser does
+ * when the focused node is thrown away, because half of what is tested here is a rebuild.
  */
 class FakeElement {
   readonly tagName: string;
   readonly attrs = new Map<string, string>();
   readonly children: FakeElement[] = [];
+  readonly listeners = new Map<string, ((event: FakeEvent) => void)[]>();
   parent: FakeElement | null = null;
   value = "";
-  hidden = false;
-  disabled = false;
   scrollTop = 0;
   scrollHeight = 0;
   clientHeight = 0;
@@ -43,6 +42,32 @@ class FakeElement {
 
   constructor(tag: string) {
     this.tagName = tag.toUpperCase();
+  }
+
+  /** `hidden` and `disabled` are attributes that read as properties, in a browser and in dom.ts. */
+  private flag(name: string): boolean {
+    return this.attrs.has(name);
+  }
+
+  private setFlag(name: string, on: boolean): void {
+    if (on) this.attrs.set(name, "");
+    else this.attrs.delete(name);
+  }
+
+  get hidden(): boolean {
+    return this.flag("hidden");
+  }
+
+  set hidden(value: boolean) {
+    this.setFlag("hidden", value);
+  }
+
+  get disabled(): boolean {
+    return this.flag("disabled");
+  }
+
+  set disabled(value: boolean) {
+    this.setFlag("disabled", value);
   }
 
   get classList(): { add(name: string): void; remove(name: string): void; contains(name: string): boolean } {
@@ -73,8 +98,16 @@ class FakeElement {
     return name === "class" ? this.className : (this.attrs.get(name) ?? null);
   }
 
-  addEventListener(): void {
-    // The handlers are wired but never fired: nothing here clicks Follow or scrolls the log.
+  addEventListener(type: string, handler: (event: FakeEvent) => void): void {
+    const handlers = this.listeners.get(type) ?? [];
+    handlers.push(handler);
+    this.listeners.set(type, handlers);
+  }
+
+  /** Press it. `el` wired the handlers with `on…` attributes, so a click is all a test has to do. */
+  dispatchEvent(type: string, extra: Record<string, unknown> = {}): void {
+    const event: FakeEvent = { type, target: this, currentTarget: this, preventDefault: () => {}, ...extra };
+    for (const handler of this.listeners.get(type) ?? []) handler(event);
   }
 
   append(...nodes: (FakeElement | string)[]): void {
@@ -90,6 +123,7 @@ class FakeElement {
   }
 
   remove(): void {
+    loseFocusIf(this);
     this.parent?.children.splice(this.parent.children.indexOf(this), 1);
     this.parent = null;
   }
@@ -103,7 +137,10 @@ class FakeElement {
   }
 
   replaceChildren(...nodes: (FakeElement | string)[]): void {
-    for (const child of this.children) child.parent = null;
+    for (const child of this.children) {
+      loseFocusIf(child);
+      child.parent = null;
+    }
     this.children.length = 0;
     this.text = "";
     this.append(...nodes);
@@ -146,7 +183,43 @@ class FakeElement {
     return this.querySelectorAll(selector)[0] ?? null;
   }
 
-  focus(): void {}
+  /** A dialog is opened and closed by the cancel box; nothing here is drawn, so nothing has to happen. */
+  showModal(): void {}
+
+  close(): void {}
+
+  focus(): void {
+    setFocus(this);
+  }
+}
+
+/** What a handler gets: enough of an Event for the two handlers on this screen. */
+interface FakeEvent {
+  type: string;
+  target: FakeElement;
+  currentTarget: FakeElement;
+  preventDefault(): void;
+  [extra: string]: unknown;
+}
+
+let activeElement: FakeElement | null = null;
+
+function setFocus(node: FakeElement): void {
+  activeElement = node;
+}
+
+/**
+ * A browser drops focus to the body when the element holding it is taken out of the page, and that is
+ * the whole of one bug here, so the stand-in has to drop it too or every rebuild passes unnoticed.
+ */
+function loseFocusIf(node: FakeElement): void {
+  if (activeElement === null) return;
+  for (let at: FakeElement | null = activeElement; at !== null; at = at.parent) {
+    if (at === node) {
+      activeElement = null;
+      return;
+    }
+  }
 }
 
 interface Compound {
@@ -204,6 +277,9 @@ const storage = () => {
 const fakeDocument = {
   body: new FakeElement("body"),
   title: "",
+  get activeElement(): FakeElement {
+    return activeElement ?? this.body;
+  },
   createElement: (tag: string) => new FakeElement(tag),
   createElementNS: (_namespace: string, tag: string) => new FakeElement(tag),
   getElementById(id: string) {
@@ -241,8 +317,12 @@ for (const name of ["dom", "api", "logs", "runs"]) {
 writeFileSync(join(served, "app.js"), "export function navigate() {}\n");
 
 const { sign } = (await import(join(served, "dom.js"))) as typeof import("./dom.ts");
+const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { MAX_DRAWN_LINES } = (await import(join(served, "logs.js"))) as typeof import("./logs.ts");
 const { renderRuns } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
+
+// Most of what is tested here is a button, and a read-only token is never offered one.
+session.identity = { name: "tester", scope: "write", admin: false };
 
 const controllers: AbortController[] = [];
 
@@ -505,5 +585,451 @@ describe("a status this UI has never seen", () => {
     const view = await render(runFixture([step("render", "interrupted")], "interrupted"));
     expect(word(stampOf(view, "render"))).toBe("interrupted");
     expect(shape(stampOf(view, "render"))).toBe(signOf("interrupted"));
+  });
+});
+
+// ---------- a server you can talk back to ----------
+
+/** What the stand-in hands back in place of a `Response`. */
+interface FakeResponse {
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+}
+
+const reply = (body: unknown, status = 200): FakeResponse => ({
+  ok: status < 400,
+  status,
+  json: async () => body,
+});
+
+const byteLength = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * The server this page talks to: one run, its logs by byte offset, and the actions. A route is
+ * `METHOD /path`, and anything nobody asked for answers 500 with an error object, so a page that
+ * reads somewhere unexpected fails loudly instead of reading a hole.
+ */
+class FakeServer {
+  readonly run: Run;
+  /** Log bytes, keyed by step id, or by `step/attempt` when the attempts differ. */
+  logs: Record<string, string> = {};
+  /** How many bytes one answer holds, which is how a log takes more than one read. */
+  chunkBytes = 1_000_000;
+  /** Real milliseconds an answer takes, so a test can look at the page in the middle of a read. */
+  logDelayMs = 0;
+  readonly asked: string[] = [];
+  private dead = false;
+  private routes = new Map<string, () => FakeResponse>();
+
+  constructor(run: Run) {
+    this.run = run;
+  }
+
+  install(): void {
+    globals.fetch = (async (href: string, init?: { method?: string }) =>
+      this.answer(new URL(String(href), "http://runs.test"), init?.method ?? "GET")) as unknown as typeof fetch;
+  }
+
+  /** How often the run itself has been re-read; waiting for this is waiting for one poll. */
+  get polls(): number {
+    return this.asked.filter((entry) => entry === `GET ${this.runPath}`).length;
+  }
+
+  /** The process is gone: nothing answers, which is the `unreachable` the API reports. */
+  stop(): void {
+    this.dead = true;
+  }
+
+  live(): void {
+    this.dead = false;
+  }
+
+  /** An action refused, in the SPEC 5 shape the API answers it with. */
+  refuse(action: "cancel" | "retry" | "resume", code: string, message: string, status = 409): void {
+    this.routes.set(`POST ${this.runPath}/${action}`, () => reply({ code, message }, status));
+  }
+
+  /** An action that worked, answering with the run as it is after. */
+  allow(action: "cancel" | "retry" | "resume", after?: Run): void {
+    this.routes.set(`POST ${this.runPath}/${action}`, () => reply(after ?? this.run));
+  }
+
+  private get runPath(): string {
+    return `/v1/runs/${this.run.id}`;
+  }
+
+  private async answer(url: URL, method: string): Promise<FakeResponse> {
+    const key = `${method} ${url.pathname}`;
+    this.asked.push(key);
+    if (this.dead) throw new TypeError("connection refused");
+    const route = this.routes.get(key);
+    if (route !== undefined) return route();
+    if (key === `GET ${this.runPath}`) return reply(this.run);
+    const log = /^\/v1\/runs\/[^/]+\/logs\/([^/]+)\/(\d+)$/.exec(url.pathname);
+    if (log !== null) return this.logChunk(url, log[1]!, log[2]!);
+    return reply({ code: "internal_error", message: `nothing on this server answers ${key}` }, 500);
+  }
+
+  private async logChunk(url: URL, stepId: string, attemptNo: string): Promise<FakeResponse> {
+    if (this.logDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, this.logDelayMs));
+    const bytes = new TextEncoder().encode(this.logs[`${stepId}/${attemptNo}`] ?? this.logs[stepId] ?? "");
+    const offset = Number(url.searchParams.get("offset") ?? "0");
+    const piece = bytes.slice(offset, offset + this.chunkBytes);
+    return reply({
+      run: this.run.id,
+      step: stepId,
+      attempt: Number(attemptNo),
+      offset,
+      next_offset: offset + piece.length,
+      text: new TextDecoder().decode(piece),
+      truncated: offset + piece.length < bytes.length,
+    });
+  }
+}
+
+/** Opens one run and leaves it open, because these tests are about what a poll does to the page. */
+let previous: AbortController | null = null;
+
+async function openRun(server: FakeServer): Promise<FakeElement> {
+  previous?.abort();
+  const view = new FakeElement("div");
+  const controller = new AbortController();
+  controllers.push(controller);
+  previous = controller;
+  server.install();
+  renderRuns(
+    view as unknown as HTMLElement,
+    { path: `/runs/${server.run.id}`, parts: ["runs", server.run.id], query: new URLSearchParams() },
+    controller.signal,
+  );
+  await waitFor("the steps to be drawn", () => {
+    const rows = view.querySelectorAll(".steprow");
+    return rows.length > 0 && rows.every((row) => row.querySelector(".steprow__stamp")?.textContent !== "");
+  });
+  return view;
+}
+
+/** Gives up with a message rather than hanging the suite. Polls are a second apart, so this waits. */
+async function waitFor(what: string, done: () => boolean): Promise<void> {
+  for (let turn = 0; turn < 400; turn++) {
+    if (done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+const click = (node: FakeElement): void => void node.dispatchEvent("click");
+const statusLine = (view: FakeElement): string => one(view.querySelector('[id="log-status"]'), "the log status line").textContent;
+const drawnLines = (view: FakeElement): string[] => view.querySelectorAll(".log__text").map((node) => node.textContent);
+const alarmOf = (view: FakeElement): FakeElement => one(view.querySelector(".alarm"), "the alarm");
+const attemptButtons = (view: FakeElement): FakeElement[] =>
+  one(view.querySelector(".attempts"), "the attempt picker").querySelectorAll("button");
+const attemptButton = (view: FakeElement, index: number): FakeElement =>
+  one(attemptButtons(view)[index] ?? null, `the attempt button number ${index + 1}`);
+const buttonNamed = (view: FakeElement, label: string): FakeElement =>
+  one(view.querySelectorAll("button").find((node) => node.textContent.trim() === label) ?? null, `the ${label} button`);
+
+// ---------- the runs these tests are about ----------
+
+/** A run that is working, with one step on its first attempt. */
+const LIVE = runFixture([step("fetch", "succeeded"), step("render", "running", ["fetch"])], "running");
+
+/** The same, but the running step is on its second attempt, so the picker has a choice to make. */
+const LIVE_RETRYING = (() => {
+  const live = runFixture([step("render", "running")], "running");
+  const retrying = live.steps["render"]!;
+  retrying.attempts = [attempt(1, "failed"), attempt(2, "running")];
+  retrying.attempts_used = 2;
+  return live;
+})();
+
+/** A finished run with two steps that both printed something. */
+const DONE = runFixture([step("fetch", "succeeded"), step("render", "succeeded", ["fetch"])], "succeeded");
+
+/** A step that failed twice, so its attempt picker has two buttons and the run is over. */
+const TWICE_FAILED = (() => {
+  const failed = runFixture([step("render", "failed")], "failed");
+  const twice = failed.steps["render"]!;
+  twice.attempts = [attempt(1, "failed"), attempt(2, "failed")];
+  twice.attempts_used = 2;
+  return failed;
+})();
+
+/** The report from the bug: six steps failed and the one that needed them never started. */
+const SIX_FAILED = runFixture(
+  [
+    step("fetch", "succeeded"),
+    ...["a", "b", "c", "d", "e", "f"].map((id) => step(id, "failed", ["fetch"])),
+    step("report", "skipped", ["a", "b", "c", "d", "e", "f"]),
+  ],
+  "failed",
+);
+
+// ---------- what a refused action does ----------
+
+describe("an action the server refuses", () => {
+  test("a refused resume stays on the page, in the server's own words, through a poll", async () => {
+    const server = new FakeServer(LIVE);
+    server.refuse("resume", "run_claimed", "Another engine holds this run.");
+    const view = await openRun(server);
+
+    const resume = buttonNamed(view, "Resume");
+    expect(resume.hidden).toBe(false);
+    click(resume);
+    await waitFor("the refusal to be drawn", () => !alarmOf(view).hidden);
+
+    const alarm = alarmOf(view);
+    expect(alarm.textContent).toContain("Resume refused");
+    expect(alarm.textContent).toContain("run_claimed");
+    expect(alarm.textContent).toContain("Another engine holds this run.");
+
+    // The bug was here: the next poll rendered the head, and the head hid the box in the same tick.
+    const polls = server.polls;
+    await waitFor("another poll", () => server.polls > polls);
+    expect(alarm.hidden).toBe(false);
+    expect(alarm.textContent).toContain("run_claimed");
+  });
+
+  test("dismiss takes the refusal away", async () => {
+    const server = new FakeServer(LIVE);
+    server.refuse("resume", "run_claimed", "Another engine holds this run.");
+    const view = await openRun(server);
+    const resume = buttonNamed(view, "Resume");
+    expect(resume.hidden).toBe(false);
+    click(resume);
+    await waitFor("the refusal to be drawn", () => !alarmOf(view).hidden);
+
+    click(one(alarmOf(view).querySelector('[data-action="dismiss"]'), "the Dismiss button"));
+    expect(alarmOf(view).hidden).toBe(true);
+  });
+
+  test("an action that works clears the refusal that came before it", async () => {
+    const server = new FakeServer(LIVE);
+    server.refuse("resume", "run_claimed", "Another engine holds this run.");
+    const view = await openRun(server);
+    const resume = buttonNamed(view, "Resume");
+    expect(resume.hidden).toBe(false);
+    click(resume);
+    await waitFor("the refusal to be drawn", () => !alarmOf(view).hidden);
+
+    server.allow("resume");
+    click(resume);
+    await waitFor("the alarm to clear", () => alarmOf(view).hidden);
+    expect(alarmOf(view).textContent).toBe("");
+  });
+
+  test("retry on a run that already succeeded says so, and stays said", async () => {
+    const server = new FakeServer(DONE);
+    server.refuse("retry", "run_not_retryable", "A run that succeeded is not retried.", 400);
+    const view = await openRun(server);
+
+    const retry = buttonNamed(view, "Retry");
+    expect(retry.hidden).toBe(false);
+    click(retry);
+    await waitFor("the refusal to be drawn", () => !alarmOf(view).hidden);
+
+    expect(alarmOf(view).textContent).toContain("Retry refused");
+    expect(alarmOf(view).textContent).toContain("run_not_retryable");
+    // Nothing is polled for a finished run, so nothing is waiting to hide the reason again.
+    await settle();
+    expect(alarmOf(view).hidden).toBe(false);
+  });
+});
+
+// ---------- what a poll does to the controls ----------
+
+describe("the controls of a live run", () => {
+  test("the jump box keeps what you typed and Cancel keeps focus across a poll", async () => {
+    const server = new FakeServer(LIVE);
+    const view = await openRun(server);
+    const box = one(view.querySelector('[id="run-jump"]'), "the run jump box");
+    const cancel = buttonNamed(view, "Cancel run");
+    box.value = "20261104T120000Z-deadbeef";
+    cancel.focus();
+    expect(fakeDocument.activeElement).toBe(cancel);
+
+    const polls = server.polls;
+    await waitFor("a poll", () => server.polls > polls);
+
+    expect(view.querySelector('[id="run-jump"]')).toBe(box);
+    expect(one(view.querySelector('[id="run-jump"]'), "the run jump box").value).toBe("20261104T120000Z-deadbeef");
+    expect(buttonNamed(view, "Cancel run")).toBe(cancel);
+    expect(fakeDocument.activeElement).toBe(cancel);
+  });
+
+  test("the attempt picker is the same two buttons every poll", async () => {
+    const server = new FakeServer(LIVE_RETRYING);
+    const view = await openRun(server);
+    const first = attemptButton(view, 0);
+    const second = attemptButton(view, 1);
+    expect(attemptButtons(view).map((node) => node.textContent)).toEqual(["1", "2"]);
+    expect(second.getAttribute("aria-pressed")).toBe("true");
+    first.focus();
+
+    const polls = server.polls;
+    await waitFor("a poll", () => server.polls > polls);
+
+    expect(attemptButtons(view).map((node) => node.textContent)).toEqual(["1", "2"]);
+    expect(attemptButton(view, 0)).toBe(first);
+    expect(attemptButton(view, 1)).toBe(second);
+    expect(fakeDocument.activeElement).toBe(first);
+  });
+
+  test("picking another attempt reads that attempt's bytes, and says which is pressed", async () => {
+    const server = new FakeServer(TWICE_FAILED);
+    server.logs = { "render/1": "the first try\n", "render/2": "the second try\n" };
+    const view = await openRun(server);
+    await waitFor("the newest attempt", () => drawnLines(view).join() === "the second try");
+    expect(attemptButton(view, 1).getAttribute("aria-pressed")).toBe("true");
+
+    click(attemptButton(view, 0));
+    await waitFor("attempt 1's log", () => drawnLines(view).join() === "the first try");
+
+    expect(attemptButton(view, 0).getAttribute("aria-pressed")).toBe("true");
+    expect(attemptButton(view, 1).getAttribute("aria-pressed")).toBe("false");
+    expect(statusLine(view)).toBe(`Read to byte ${byteLength("the first try\n")}.`);
+  });
+});
+
+// ---------- the line that says where the log is ----------
+
+describe("the line under the log", () => {
+  test("it moves with the cursor while a long log is still being read", async () => {
+    const server = new FakeServer(DONE);
+    server.logs = { render: "one line\nthen another\nlast one\n" };
+    server.chunkBytes = 10;
+    server.logDelayMs = 150;
+    const view = await openRun(server);
+
+    // The old line was written once, before any of the log had arrived, and never again.
+    await waitFor("the first chunk", () => drawnLines(view).length > 0);
+    expect(statusLine(view)).toBe("Read to byte 10; more of the log is waiting.");
+
+    await waitFor("the whole log", () => statusLine(view) === `Read to byte ${byteLength("one line\nthen another\nlast one\n")}.`);
+  });
+
+  test("switching steps starts the line again rather than going on from the step you left", async () => {
+    const server = new FakeServer(DONE);
+    server.logs = { fetch: "fetched three bytes\n", render: "rendered\n" };
+    server.logDelayMs = 200;
+    const view = await openRun(server);
+    await waitFor("render's log", () => statusLine(view) === `Read to byte ${byteLength("rendered\n")}.`);
+
+    click(rowOf(view, "fetch"));
+    // The pane belongs to fetch now and its bytes are still on the way; the line must not still be
+    // reporting where render left the cursor.
+    expect(statusLine(view)).toBe("Read to byte 0.");
+
+    await waitFor("fetch's log", () => statusLine(view) === `Read to byte ${byteLength("fetched three bytes\n")}.`);
+    expect(drawnLines(view)).toEqual(["fetched three bytes"]);
+  });
+});
+
+// ---------- when the server goes away ----------
+
+describe("a server that stops answering", () => {
+  test("the page says it lost the server, and stops saying it when the server comes back", async () => {
+    const server = new FakeServer(LIVE);
+    server.logs = { render: "hello\n" };
+    const view = await openRun(server);
+    await waitFor("the first log read", () => statusLine(view) === "Reading from byte 6.");
+
+    server.stop();
+    await waitFor("the page to notice", () => statusLine(view).includes("Lost the server, still trying."));
+    expect(statusLine(view)).toContain("unreachable");
+    // The last good poll stays on screen, which is why the line has to carry the bad news.
+    expect(one(view.querySelector('[id="panel-title"]'), "the panel title").textContent).toBe("render");
+
+    server.live();
+    await waitFor("a good poll", () => !statusLine(view).includes("Lost the server"));
+    expect(statusLine(view)).toBe("Reading from byte 6.");
+  });
+});
+
+// ---------- what the alarm says ----------
+
+describe("the alarm over the steps", () => {
+  test("it names every step that failed, each one a way to its log", async () => {
+    const server = new FakeServer(SIX_FAILED);
+    const view = await openRun(server);
+    const alarm = alarmOf(view);
+
+    expect(alarm.hidden).toBe(false);
+    expect(one(alarm.querySelector(".h2"), "the alarm's title").textContent).toBe("6 steps failed");
+    expect(alarm.querySelectorAll("[data-log-step]").map((node) => node.textContent)).toEqual([
+      "a",
+      "b",
+      "c",
+      "d",
+      "e",
+      "f",
+    ]);
+    expect(alarm.textContent).toContain("exit_nonzero: the script exited 1");
+  });
+
+  test("the retry button is labelled with what a retry does, which is more than the failed steps", async () => {
+    const server = new FakeServer(SIX_FAILED);
+    const view = await openRun(server);
+    const alarm = alarmOf(view);
+
+    // SPEC 4.6: retry sets every failed, skipped and cancelled step back to pending.
+    expect(one(alarm.querySelector('[data-action="retry-all"]'), "the retry button").textContent).toBe("Retry 7 steps");
+    expect(alarm.textContent).toContain("Retry sets 6 failed steps, 1 skipped step back to pending");
+  });
+
+  test("one failed step is named, not counted", async () => {
+    const server = new FakeServer(FAILED_RUN);
+    const view = await openRun(server);
+    const alarm = alarmOf(view);
+
+    expect(one(alarm.querySelector(".h2"), "the alarm's title").textContent).toBe("render failed");
+    expect(alarm.querySelectorAll("[data-log-step]").map((node) => node.textContent)).toEqual(["render"]);
+    expect(one(alarm.querySelector('[data-action="retry-all"]'), "the retry button").textContent).toBe("Retry 2 steps");
+  });
+
+  test("a failed step's name in the alarm points the pane at its log and puts the focus on its row", async () => {
+    const server = new FakeServer(SIX_FAILED);
+    const view = await openRun(server);
+    expect(one(view.querySelector('[id="panel-title"]'), "the panel title").textContent).toBe("a");
+
+    click(one(alarmOf(view).querySelector('[data-log-step="c"]'), "the link to c's log"));
+    await waitFor("the pane to move to c", () => one(view.querySelector('[id="panel-title"]'), "the panel title").textContent === "c");
+
+    expect(rowOf(view, "c").getAttribute("aria-selected")).toBe("true");
+    expect(fakeDocument.activeElement).toBe(rowOf(view, "c"));
+  });
+});
+
+// ---------- following a log that cannot grow ----------
+
+describe("following a log", () => {
+  test("a finished run does not offer to follow or pause a log that cannot grow", async () => {
+    const server = new FakeServer(DONE);
+    server.logs = { render: "rendered\n" };
+    const view = await openRun(server);
+    await waitFor("the log", () => drawnLines(view).length > 0);
+
+    expect(buttonNamed(view, "Follow").disabled).toBe(true);
+    expect(buttonNamed(view, "Pause").disabled).toBe(true);
+  });
+
+  test("a live run offers both", async () => {
+    const server = new FakeServer(LIVE);
+    server.logs = { render: "hello\n" };
+    const view = await openRun(server);
+    await waitFor("the log", () => drawnLines(view).length > 0);
+
+    expect(buttonNamed(view, "Follow").disabled).toBe(false);
+    expect(buttonNamed(view, "Pause").disabled).toBe(false);
+  });
+
+  test("a step that has never started has nothing to pause", async () => {
+    const server = new FakeServer(runFixture([step("build", "pending")], "running"));
+    const view = await openRun(server);
+
+    expect(statusLine(view)).toBe("Not started.");
+    expect(buttonNamed(view, "Pause").disabled).toBe(true);
+    expect(buttonNamed(view, "Follow").disabled).toBe(false);
   });
 });

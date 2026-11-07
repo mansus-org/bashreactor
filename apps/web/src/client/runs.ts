@@ -247,17 +247,17 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   });
   const cancelButton = el(
     "button",
-    { class: "btn", type: "button", "data-action": "cancel", hidden: true, onclick: () => cancelDialog.showModal() },
+    { class: "btn", type: "button", hidden: true, onclick: () => cancelDialog.showModal() },
     "Cancel run",
   );
   const resumeButton = el(
     "button",
-    { class: "btn", type: "button", "data-action": "resume", hidden: true, onclick: () => void act("resume") },
+    { class: "btn", type: "button", hidden: true, onclick: () => void act("resume") },
     "Resume",
   );
   const retryButton = el(
     "button",
-    { class: "btn", type: "button", "data-action": "retry", hidden: true, onclick: () => void act("retry") },
+    { class: "btn", type: "button", hidden: true, onclick: () => void act("retry") },
     "Retry",
   );
   const readOnly = el("span", { class: "stamp stamp--type", hidden: true }, "read only");
@@ -435,7 +435,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
         ? `refused ${refused.kind} ${refused.error.code}`
         : failed.map((stepId) => `${stepId} ${run.steps[stepId]!.failure?.code ?? ""}`).join(" · ");
     alarm.hidden = key === "";
-    say(alarm, key, () => (refused !== null ? refusalBox(refused) : failureBox(failed)));
+    say(alarm, key, () => (refused !== null ? refusalBox(refused) : failed.length === 0 ? [] : failureBox(failed)));
   }
 
   /** The server said no to an action, and its own words stay up until they are dismissed or beaten. */
@@ -579,7 +579,6 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       {
         class: "btn",
         type: "button",
-        "data-attempt": String(n),
         "aria-pressed": "false",
         onclick: () => {
           attempt = n;
