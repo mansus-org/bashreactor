@@ -459,6 +459,43 @@ describe("runs logs --follow", () => {
     expect(followed.stdout).not.toContain("==>");
     expect(followed.stderr).toMatch(/==> attempt 1 <==[\s\S]*==> attempt 2 <==/);
     expect(followed.stderr).toContain(`run ${id} succeeded`);
+
+    // Under --json there is no marker to read: each chunk says which attempt it is from, and the
+    // chunks of both attempts join up to the whole log.
+    const json = await cli(["runs", "logs", id, "flaky", "--follow", "--interval", "100", "--json"], {
+      url: server.url,
+    });
+    expect(json.stderr).toBe("");
+    const chunks = json.stdout.trim().split("\n").map((line) => JSON.parse(line));
+    expect(new Set(chunks.map((chunk) => chunk.attempt))).toEqual(new Set([1, 2]));
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(
+      "attempt 1 starting\n" +
+        "attempt 1 stopping, asking to be retried\n" +
+        "attempt 2 starting\n" +
+        "attempt 2 carrying on\n",
+    );
+  });
+
+  test("a retried step that is already finished still prints every attempt", async () => {
+    server = await startServer();
+    await library();
+    await store("flaky-run", FLAKY_PIPELINE);
+
+    const started = await cli(["runs", "start", "flaky-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+    expect(await statusOf(id)).toBe("succeeded");
+
+    // Nothing is live any more, so the wait is over the moment it starts. That is no reason to drop
+    // the attempts before the last one: the step's log is all of them (SPEC 4.8).
+    const followed = await cli(["runs", "logs", id, "flaky", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(0);
+    expect(followed.stdout).toBe(
+      "attempt 1 starting\n" +
+        "attempt 1 stopping, asking to be retried\n" +
+        "attempt 2 starting\n" +
+        "attempt 2 carrying on\n",
+    );
+    expect(followed.stderr).toMatch(/==> attempt 1 <==[\s\S]*==> attempt 2 <==/);
   });
 
   test("--attempt pins one attempt, with --follow and without", async () => {

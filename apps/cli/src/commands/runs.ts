@@ -221,17 +221,20 @@ export const runCommands: CommandSpec[] = [
         // the 404 come back rather than inventing one here.
         if (record === undefined) await drain(1);
 
-        const next = pinned === undefined ? nextAttempt(record, attempt) : undefined;
-        if (next !== undefined) {
+        // Walk every attempt the step has, in order, before deciding whether the wait is over: a
+        // step that was already final when --follow started still has all of its attempts to print.
+        // `nextAttempt` answers undefined for a step that has no attempt yet (SPEC 4.4: it has not
+        // started), which is a wait and not the API's `attempt_not_found`.
+        for (;;) {
+          const next = pinned === undefined ? nextAttempt(record, attempt) : undefined;
+          if (next === undefined) break;
           // Read the tail of the attempt being left before anything of the new one is printed.
           if (attempt !== undefined) await drain(attempt);
           attempt = next;
           offset = 0;
           note(`==> attempt ${next} <==`);
+          await drain(next);
         }
-        // A step that has no attempt yet has not started (SPEC 4.4): there is nothing to read, and
-        // waiting is the whole of what is left to do.
-        if (attempt !== undefined) await drain(attempt);
 
         const status = record?.status;
         const stepIsFinal = status !== undefined && FINAL_STEP_STATUSES.includes(status);
