@@ -91,6 +91,9 @@ const classes = (view: FakeElement): string[] => (lib(view).getAttribute("class"
 
 const text = (view: FakeElement): string => view.textContent;
 
+/** The stylesheet the server ships, which is where the layout rules this screen depends on live. */
+const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+
 // ---------- which pane is on screen ----------
 
 describe("which pane the blocks screen shows", () => {
@@ -153,11 +156,59 @@ describe("which pane the blocks screen shows", () => {
 // ---------- the two halves name the same thing ----------
 
 test("the class renderBlocks sets is the class the 980 px rule reads", async () => {
-  const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
   const rule = /\.lib:not\(\.([\w-]+)\)\s*\.detail\s*\{[^}]*display:\s*none/.exec(sheet);
   expect(rule).not.toBeNull();
 
   const closed = classes(await open("/blocks"));
   const opened = classes(await open("/blocks/count-words"));
   expect(opened.filter((name) => !closed.includes(name))).toEqual([rule![1]!]);
+});
+
+// ---------- the contract table, and the writer ----------
+//
+// A block's input and output names are the thing a person reads a contract for, and they are the
+// longest words in their column: `total_words`, `corpus`. The table was squeezing them to `corpu/s`
+// at desktop width, and the writer's "Start from" label carried a `style` attribute the app's own
+// CSP drops. Both are rules in the stylesheet the server ships, so that is what is read here — the
+// same two halves as the pane-switching test above: the code's classes, and the rule that reads them.
+
+/** The body of one rule, written out with this exact selector. */
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const found = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(sheet);
+  if (found === null) throw new Error(`style.css has no rule whose selector is exactly ${selector}`);
+  return found[1]!;
+}
+
+/** Every element the screen put on the page that carries an inline style. */
+const styled = (view: FakeElement): string[] =>
+  [...view.descendants()].filter((node) => node.getAttribute("style") !== null).map((node) => `${node.tagName.toLowerCase()}[${node.getAttribute("style")}]`);
+
+describe("the contract table", () => {
+  test("a name keeps its whole word, however narrow the table gets", () => {
+    // `overflow-wrap: anywhere` counts a broken word as the column's minimum width, so the table
+    // took the name column down to `corpu/s`. `break-word` only breaks once the line is out of room.
+    expect(ruleBody(".table tbody th")).toMatch(/overflow-wrap:\s*break-word/);
+  });
+
+  test("the names are row headers, which is the cell the rule sizes", async () => {
+    const view = await open("/blocks/count-words");
+    expect(view.querySelectorAll(".table tbody th").map((node) => node.textContent)).toEqual(["text", "words"]);
+  });
+});
+
+describe("the block writer", () => {
+  test("nothing on the writer carries a style attribute", async () => {
+    // The CSP the server sends is `style-src 'self'`, so an inline style is dropped and the label
+    // sits out of line with the buttons it names.
+    expect(styled(await open("/blocks/new"))).toEqual([]);
+  });
+
+  test("the label beside the template buttons is the class that zeroes its margin", async () => {
+    const view = await open("/blocks/new");
+    const label = view.querySelector(".row .label");
+    expect(label?.textContent).toBe("Start from");
+    expect(label?.classList.contains("label--inline")).toBe(true);
+    expect(ruleBody(".label--inline")).toMatch(/margin:\s*0/);
+  });
 });

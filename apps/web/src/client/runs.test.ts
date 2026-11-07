@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAssets } from "../assets.ts";
-import type { Attempt, Run, RunStep } from "./api.ts";
+import type { Attempt, Run, RunStep, RunSummary } from "./api.ts";
 import type { State as DomState } from "./dom.ts";
 
 // ---------- the stand-in DOM ----------
@@ -1070,5 +1070,126 @@ describe("following a log", () => {
     expect(statusLine(view)).toBe("Not started.");
     expect(buttonNamed(view, "Pause").disabled).toBe(true);
     expect(buttonNamed(view, "Follow").disabled).toBe(false);
+  });
+});
+
+// ---------- the words on the page, and the box they have to fit in ----------
+//
+// Everything above is what the screen says; this is whether it still fits when what it says is the
+// length real things are. A run id is 26 characters, a pipeline description can be one unbroken
+// 300-character word, and the app serves `style-src 'self'`, which drops an inline `style` attribute
+// on the floor with a console error. None of that is a screenshot: it is the shape of the markup and
+// the rule in the stylesheet the server ships, so that is what is asserted here. The browser half —
+// that the id lands on one line, that the page does not scroll sideways — was checked by hand at
+// 1440 px and 390 px; the rules that make it happen are what these tests hold in place.
+
+const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+
+/** The body of one rule, written out with this exact selector. */
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const found = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(sheet);
+  if (found === null) throw new Error(`style.css has no rule whose selector is exactly ${selector}`);
+  return found[1]!;
+}
+
+/** A run in the list, which is what `GET /v1/runs` answers with and less than a whole run. */
+function summary(id: string, status: string): RunSummary {
+  return { id, pipeline: "word-report", status, created_at: T0, finished_at: T1, cancel_requested_at: null };
+}
+
+/** The list screen: one read, and the rows it answers with. */
+async function renderList(runs: RunSummary[]): Promise<FakeElement> {
+  const view = new FakeElement("div");
+  const controller = new AbortController();
+  controllers.push(controller);
+  globals.fetch = (async () => ({ ok: true, status: 200, json: async () => runs })) as unknown as typeof fetch;
+  renderRuns(view as unknown as HTMLElement, { path: "/runs", parts: ["runs"], query: new URLSearchParams() }, controller.signal);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort();
+  return view;
+}
+
+/** Every element the screen put on the page that carries an inline style. */
+const styled = (view: FakeElement): string[] =>
+  [...view.descendants()].filter((node) => node.attrs.has("style")).map((node) => `${node.tagName.toLowerCase()}[${node.getAttribute("style")}]`);
+
+describe("a run's name", () => {
+  test("the display word is Run and the id is set under it in the code face", async () => {
+    const view = await render(runFixture([step("build", "succeeded")], "succeeded"));
+
+    const title = one(view.querySelector(".title"), "the run's heading");
+    expect(title.textContent.startsWith("Run ")).toBe(true);
+
+    const id = one(title.querySelector(".title__id"), "the run id inside the heading");
+    expect(id.textContent).toBe("20261104T101500Z-3fa9c2d1");
+    // The code face is what makes an id read as a string, and it comes from the class, not a font
+    // the heading happens to inherit.
+    expect(id.classList.contains("mono")).toBe(true);
+  });
+
+  test("the id is smaller than the smallest the display heading ever gets", () => {
+    const idSize = Number(/font-size:\s*([\d.]+)rem/.exec(ruleBody(".title__id"))?.[1]);
+    const displayFloor = Number(/font-size:\s*clamp\(\s*([\d.]+)rem/.exec(ruleBody(".title"))?.[1]);
+    expect(idSize).toBeGreaterThan(0);
+    expect(idSize).toBeLessThan(displayFloor);
+  });
+
+  test("the id still breaks at its own hyphen rather than in the middle of a group of digits", () => {
+    expect(ruleBody(".title__id")).toMatch(/overflow-wrap:\s*break-word/);
+  });
+});
+
+describe("a run in the list", () => {
+  test("the row says its state once: the stamp, with no second sign beside it", async () => {
+    const view = await renderList([summary("20261104T101500Z-3fa9c2d1", "failed")]);
+
+    const row = one(view.querySelector(".runrow"), "a row in the run list");
+    expect(row.querySelectorAll(".sign--large").length).toBe(0);
+    expect(row.querySelectorAll(".stamp").length).toBe(1);
+    expect(word(one(row.querySelector(".stamp"), "the row's stamp"))).toBe("failed");
+  });
+
+  test("the stylesheet leaves no column for a sign in front of the stamp", () => {
+    expect(ruleBody(".runrow")).toMatch(/grid-template-columns:\s*minmax\(0, ?1fr\) auto/);
+  });
+});
+
+describe("text longer than the box it is in", () => {
+  test("a description that is one long word breaks inside its own box", () => {
+    // A pipeline's `description:` is whatever the file says it is. Without this the page scrolled
+    // sideways: 2635 px of page in a 1440 px window.
+    expect(ruleBody(".lead")).toMatch(/overflow-wrap:\s*(anywhere|break-word)/);
+  });
+
+  test("the graph gives a port name the whole width of its step", () => {
+    // Two columns of port names inside a step whose width the graph sets from the room its columns
+    // leave behind is how `total_words` came out as `total_wor/ds` at 1440 px. One column, and the
+    // mark on each side is what still says which way the name runs.
+    expect(sheet).not.toMatch(/\.node__ports\s*\{[^}]*grid-template-columns/);
+    expect(ruleBody(".stage--flow .port--out")).toContain("text-align: right");
+  });
+});
+
+describe("the app's own content security policy", () => {
+  test("no module the browser runs puts a style attribute on an element", () => {
+    // The CSP the server sends is `style-src 'self'`: an inline style is dropped, so the control it
+    // was styling sits out of line and the console fills up once per poll.
+    const offenders: string[] = [];
+    for (const [name, asset] of buildAssets().files) {
+      if (!name.startsWith("assets/") || !name.endsWith(".js")) continue;
+      if (/\bstyle:\s*["']/.test(new TextDecoder().decode(asset.data))) offenders.push(name);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  test("neither run screen leaves a style attribute on the page", async () => {
+    const view = await render(runFixture([step("build", "succeeded")], "succeeded"));
+    expect(styled(view)).toEqual([]);
+    expect(styled(await renderList([summary("20261104T101500Z-3fa9c2d1", "failed")]))).toEqual([]);
+  });
+
+  test("a label beside its buttons is a class, and the class zeroes the margin", () => {
+    expect(ruleBody(".label--inline")).toMatch(/margin:\s*0/);
   });
 });

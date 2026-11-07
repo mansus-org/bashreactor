@@ -348,7 +348,7 @@ function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
     ? el(
         "div",
         { class: "row", role: "group", "aria-label": "Start from a template" },
-        el("span", { class: "label", style: "margin:0" }, "Start from"),
+        el("span", { class: "label label--inline" }, "Start from"),
         ...Object.keys(STARTERS).map((runtime) =>
           el(
             "button",

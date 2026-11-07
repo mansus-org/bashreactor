@@ -129,6 +129,14 @@ main:focus { outline: none; }
   font-size: clamp(3rem, 7vw, 5.5rem); line-height: 0.88; letter-spacing: 0.01em;
   overflow-wrap: anywhere;
 }
+/* A run id is a string to read, not a headline: the display word is "Run" and the id sits under it
+   in the code face, where it is one line instead of two 88 px ones and breaks at its own hyphen
+   rather than in the middle of a group of digits. The code face has no condensed cut, so it takes
+   the width back from the display face it sits under. */
+.title__id {
+  display: block; font-size: 1.25rem; font-weight: 700; font-stretch: normal; line-height: 1.3;
+  letter-spacing: 0; overflow-wrap: break-word;
+}
 .h2 {
   margin: 0;
   font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
@@ -136,9 +144,14 @@ main:focus { outline: none; }
   overflow-wrap: anywhere;
 }
 .h3 { margin: 0 0 6px; font-size: 1.0625rem; font-weight: 800; }
-.lead { max-width: 62ch; font-size: 1.125rem; }
+/* A description is whatever the file says it is. One unbroken 300-character word in a pipeline's
+   `description:` used to set the page sideways, because the box would not shrink below the word. */
+.lead { max-width: 62ch; font-size: 1.125rem; overflow-wrap: anywhere; }
 .help { max-width: 62ch; font-size: 0.9375rem; }
 .label { display: block; margin-bottom: 6px; font-weight: 700; font-size: 0.9375rem; }
+/* A label that sits beside the buttons it names has nothing under it to stand off. This is a class
+   and not a `style` attribute because the app's own CSP drops inline style. */
+.label--inline { margin: 0; }
 .mono { font-family: var(--font-code); font-variant-ligatures: none; }
 
 .state { max-width: 62ch; margin: 20px 0; }
@@ -280,7 +293,10 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 .node__meta { font-size: 0.875rem; }
 .node__problem { margin-top: 2px; }
 .node__ports { display: grid; gap: 2px; margin-top: 6px; }
-.stage--flow .node__ports { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 6px; }
+/* One column of ports, not one per side. The graph sets a step's width from the room its columns
+   leave behind, and two columns of names inside that width is how `total_words` came out as
+   `total_wor/ds` at desktop width. The mark on each side still says which way the name runs. */
+.stage--flow .ports + .ports { margin-top: 6px; }
 .port {
   position: relative; display: block;
   font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.5;
@@ -486,8 +502,10 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 
 .attempts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 
-/* A run in the picker: the same dithered row as a step, with the state sign in front. */
-.runrow { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; background: var(--dots); color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
+/* A run in the picker: the same dithered row as a step, with its state stamped at the end. */
+/* The stamp carries the shape and the word, so the row does not need a second, larger sign in front
+   of it: at 70 px one run took a tenth of the screen. */
+.runrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; background: var(--dots); color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
 .runrow:hover .runrow__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
 .runrow[aria-current="true"] { background: var(--ink); color: var(--paper); }
 .runrow[aria-current="true"]:focus-visible { outline-color: var(--paper); }
@@ -528,7 +546,9 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 .table { width: 100%; border-collapse: collapse; font-size: 0.9375rem; }
 .table th, .table td { padding: 8px 12px 8px 0; text-align: left; vertical-align: top; background: var(--dots); }
 .table thead th { font-weight: 800; }
-.table tbody th { font-family: var(--font-code); font-weight: 700; overflow-wrap: anywhere; }
+/* `anywhere` lets the table squeeze the name column down to one letter, because it counts a broken
+   word as the column's minimum width. A name is the thing being read: it keeps its whole word. */
+.table tbody th { font-family: var(--font-code); font-weight: 700; overflow-wrap: break-word; }
 .table td:last-child { padding-right: 0; }
 @media (max-width: 640px) {
   .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
