@@ -68,7 +68,7 @@ answer differently:
 | 422 | every definition and starting code (`pipeline_yaml_invalid`, `pipeline_schema_invalid`, `block_header_malformed`, `block_schema_invalid`, `unknown_*`, `missing_input`, `type_mismatch`, `expression_invalid`, `dependency_cycle`, `file_input_not_found`, `env_missing`) and a request body that does not fit |
 | 500 | `internal_error`, `store_migration_failed`, `store_closed` |
 | 501 | `not_implemented`, for a route this task has not built yet |
-| 503 | `runtime_missing` (a block runtime binary is missing, no admin token is configured, or the API never started), `store_locked` |
+| 503 | `runtime_missing` (a block runtime binary is missing, no admin token is configured, or the API never started) |
 
 Two rules that the code table alone cannot say:
 
@@ -78,12 +78,13 @@ Two rules that the code table alone cannot say:
   Looking up a thing that is not there is 404.
 - **A request body is an input document**, so an absent field is `missing_input`, an unknown one is
   `unknown_input` and a wrong one is `type_mismatch`, each with `path` naming the field. That is the
-  spec's own vocabulary for exactly this, and SPEC 5 has no code of its own for a bad request.
+  spec's own vocabulary for exactly this. `bad_request` is for the request that could not be read as
+  written at all, before any document is in it.
 
-`unauthenticated`, `forbidden`, `token_not_found`, `pipeline_not_found`, `not_found`,
-`method_not_allowed`, `bad_request` and `internal_error` are this API's codes, not the spec's: SPEC
-section 5 has none for them. They are the open item at the bottom. `file_not_found` is the spec's
-(SPEC 4.10).
+Every code here is in SPEC section 5. The ones this API had to invent for failures the other packages
+cannot see — `unauthenticated`, `forbidden`, `token_not_found`, `pipeline_not_found`, `not_found`,
+`method_not_allowed`, `bad_request`, `internal_error` — are listed there now, so the CLI and the MCP
+server print the same word for the same failure. `file_not_found` is the spec's (SPEC 4.10).
 
 ## Routes
 
@@ -274,9 +275,6 @@ has every binary SPEC 2.6 demands, so they do not depend on what happens to be i
 
 ## Open items
 
-- **SPEC 5 needs codes** for `unauthenticated`, `forbidden`, `pipeline_not_found`, `token_not_found`,
-  `not_found`, `method_not_allowed`, `bad_request` and `internal_error`. Until it has them this API
-  answers with its own, listed above.
 - **The engine should take a block resolver.** Then `src/staging.ts` and its JSON re-emission go
   away and a library reference resolves the way the spec describes it.
 - **No route lists every block or every pipeline.** `packages/store` has no `listBlockNames()` or

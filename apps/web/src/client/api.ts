@@ -223,7 +223,7 @@ async function send(
     response = await fetch(url(path, options.query), { method, headers, body, cache: "no-store" });
   } catch {
     throw new ApiError(0, {
-      code: "unreachable",
+      code: "api_unreachable",
       message: `${session.base} did not answer. Check the address, and that this server is running.`,
     });
   }

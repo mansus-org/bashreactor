@@ -3,9 +3,9 @@
 // thing. A tool never rewrites an error into a sentence — it hands back the object and the client
 // reads `code`.
 //
-// Four codes here are not in SPEC section 5, and the API already uses three of them for the same
-// reason: the spec has none for auth or for a server that broke. `api_unreachable` is this server's
-// own, for the one failure mode it has that the API cannot answer for.
+// Every code here is in SPEC section 5. `unauthenticated`, `forbidden` and `internal_error` mean
+// what the API means by them, and `api_unreachable` is the one failure the API cannot answer for:
+// it is not answering at all.
 
 import { BashreactorError } from "@bashreactor/core";
 
@@ -15,9 +15,6 @@ export interface ErrorObject {
   path?: string;
   file?: string;
 }
-
-/** Codes this server answers with that SPEC section 5 does not list. */
-export type McpExtraCode = "unauthenticated" | "forbidden" | "internal_error" | "api_unreachable";
 
 export function errorObject(
   code: string,

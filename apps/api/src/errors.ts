@@ -2,36 +2,14 @@
 // SPEC section 5's error object — `{ code, message, path?, file? }` — and the status follows from
 // the code alone.
 //
-// SPEC section 5 lists no code for "you are not logged in", "wrong scope", "no such pipeline" or
-// "the server broke", so the API adds the ones marked below and passes through the store's own
-// codes. They are listed in README.md and are the open item this package leaves for the spec.
+// Every code here is in SPEC section 5, so a client switching on `code` gets one vocabulary out of
+// all three surfaces. The definition, starting and step-failure codes come from `packages/core`,
+// the store raises its own and they pass through with the code untouched, and the rest —
+// `unauthenticated`, `forbidden`, `not_found`, `method_not_allowed`, `bad_request`,
+// `internal_error` — are this API's answers to the failures the other two packages cannot see.
 
 import { BashreactorError } from "@bashreactor/core";
 import { StoreError } from "@bashreactor/store";
-
-/** Codes outside SPEC section 5 that this API answers with. */
-export type ApiExtraCode =
-  | "unauthenticated"
-  | "forbidden"
-  | "token_not_found"
-  | "pipeline_not_found"
-  | "not_found"
-  | "method_not_allowed"
-  | "bad_request"
-  | "file_not_found"
-  | "internal_error";
-
-/** Store codes with no SPEC section 5 equivalent, passed through unchanged. */
-export type StorePassthroughCode =
-  | "invalid_argument"
-  | "already_exists"
-  | "step_not_found"
-  | "attempt_not_found"
-  | "artifact_not_found"
-  | "version_conflict"
-  | "store_locked"
-  | "store_migration_failed"
-  | "store_closed";
 
 const STATUS_BY_CODE: Record<string, number> = {
   // The request itself could not be read: a path that is not a sequence of decodable segments.
@@ -76,7 +54,6 @@ const STATUS_BY_CODE: Record<string, number> = {
   method_not_allowed: 405,
   not_implemented: 501,
   runtime_missing: 503,
-  store_locked: 503,
   internal_error: 500,
   store_migration_failed: 500,
   store_closed: 500,

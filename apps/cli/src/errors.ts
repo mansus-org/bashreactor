@@ -6,7 +6,7 @@ export const EXIT_OK = 0;
 export const EXIT_FAILURE = 1;
 export const EXIT_USAGE = 2;
 
-/** SPEC section 5's body. `code` is a string because the CLI adds codes the spec has none for. */
+/** SPEC section 5's body. */
 export interface ErrorBody {
   code: string;
   message: string;
@@ -15,13 +15,8 @@ export interface ErrorBody {
 }
 
 /**
- * Codes this CLI answers with that SPEC section 5 does not list:
- *
- * - `invalid_argument` — the command line itself was wrong. The store already uses this code for
- *   an argument that cannot be right, and the API maps it to 422, so it is the house vocabulary.
- *
- * Everything else — `unauthenticated`, `forbidden`, `pipeline_not_found`, `internal_error` — comes
- * from the API's own list (apps/api/README.md) and is passed through untouched.
+ * SPEC 5's `invalid_argument`, spelled once: the command line itself was wrong. The store answers
+ * the same code for an argument that cannot be right, and the API maps it to 422.
  */
 export const USAGE_CODE = "invalid_argument";
 
@@ -69,9 +64,13 @@ export function apiFailure(body: ErrorBody): CliError {
   return new CliError(body.code, body.message, { path: body.path, file: body.file, exit: EXIT_FAILURE });
 }
 
-/** No API to talk to: the server is not there, rather than refusing the request. */
+/**
+ * No API to talk to: the server is not there, rather than refusing the request. SPEC 5's
+ * `api_unreachable`, the same code the MCP server and the web UI use for this — `runtime_missing`
+ * would say "install a runtime", which is not the problem.
+ */
 export function unreachable(where: string, reason: string): CliError {
-  return new CliError("runtime_missing", `cannot reach the API at ${where}: ${reason}`, {
+  return new CliError("api_unreachable", `cannot reach the API at ${where}: ${reason}`, {
     exit: EXIT_FAILURE,
   });
 }

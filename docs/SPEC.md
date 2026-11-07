@@ -1081,6 +1081,11 @@ compared in tests. `path` is the dotted path from the document root to the offen
 indexes as numbers. `file` is the file concerned, where there is one. For a block header, `path` is the
 key in the pipeline that referenced it, per [section 3.9](#39-what-is-invalid).
 
+Every code any client can print is in this table, and every code here comes out of a call site
+somewhere. The definition, starting and step-failure codes are the closed set `packages/core` types
+failures and validation issues against; the access, request and server codes are what the transport
+adds, and are nothing a block can fail with.
+
 | Code | When |
 | --- | --- |
 | **Definition** | |
@@ -1105,9 +1110,36 @@ key in the pipeline that referenced it, per [section 3.9](#39-what-is-invalid).
 | `run_not_active` | Cancel or resume on a run that is not `running`. |
 | `run_not_retryable` | Manual retry on a run that is `running` or `succeeded`. |
 | `run_claimed` | Resume on a run with a live claim. |
-| `runtime_missing` | [Section 2.6](#26-runtime-contract). The engine refuses to start. |
+| `runtime_missing` | [Section 2.6](#26-runtime-contract). The engine refuses to start, or a server is missing configuration it cannot come up without. Not a network failure: that is `api_unreachable`. |
 | `file_not_found` | [Section 4.10](#410-reading-a-runs-files). No file of this run is at that path, or it is only reachable through a link. |
+| `pipeline_not_found` | No pipeline of that name and version. `latest` is a version, so `nope` and `nope@latest` miss the same way. |
+| `step_not_found` | The run is there; that step is not one of its steps ([section 4.10](#410-reading-a-runs-files)). |
+| `attempt_not_found` | The step is there; that attempt never ran. An attempt of a step that has not run yet is this, not `not_found`. |
+| `token_not_found` | No token of that name to read, revoke or list. |
 | `not_implemented` | Not built yet (`AGENTS.md`). |
+| **Access** | |
+| `unauthenticated` | No token came with the request, or the one that came is not one this API knows. A token problem, not a server problem. |
+| `forbidden` | The token is known and simply does not carry what this needs: a read token asked to write, a non-admin token asked for the admin token's routes or tools. Not retryable with the same token. |
+| **The request** | |
+| `bad_request` | The request could not be read as written: a path segment that is not decodable percent-encoded UTF-8, a body that is not the shape the request claimed. |
+| `invalid_argument` | An argument the caller had to get right and did not: a CLI command line, a call into the store whose input fails validation. Not a pipeline or a run input — those are the codes above, which name the field. |
+| `not_found` | Nothing answers at that path at all. Not the thing asked for — the whole path. A path this API has is `run_not_found`, `pipeline_not_found` or `block_not_found`. |
+| `method_not_allowed` | The path is one this API has; the verb put to it is not. |
+| **The server** | |
+| `internal_error` | Something broke that no other code describes. Every client falls back to it, so it is the one code that can appear without the failure having been understood. |
+| `api_unreachable` | A client got no answer out of the API: connection refused, DNS failure, timeout, a connection closed mid-request. The API did not refuse the request, it never received one. The message names the URL tried. This is the only code for "the server is not there", in all three clients. |
+| `store_closed` | The store is closed; nothing further can be read from it or written to it. |
+| `store_migration_failed` | The store's schema could not be brought to the version this build needs. |
+| **The store's own**, passed through with the code untouched | |
+| `already_exists` | Writing it would overwrite something already there: a run id, an attempt number, an artifact of that step and attempt. |
+| `version_conflict` | What a run recorded about a block version does not match what the store holds for that version. |
+| `artifact_not_found` | No artifact of that name for that step and attempt. |
+
+The last three are raised in `packages/store/src/store.ts`, and the API passes a store error through
+with its code untouched, so a client has to treat them as its own. `store_migration_failed` and
+`store_closed` come out at startup and after shutdown; `already_exists`, `version_conflict` and
+`artifact_not_found` come from the store's run and artifact write path, which no route calls yet.
+They are listed here so that the first client to meet one meets a code that is in the spec.
 
 ---
 
