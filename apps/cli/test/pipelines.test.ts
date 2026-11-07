@@ -164,6 +164,23 @@ describe("pipelines", () => {
     expect(parsed(listed).latest).toBe(1);
   });
 
+  // The name is read from the file before it is sent, so a file that declares a name the spec
+  // forbids is refused here with the code the API would have answered, and nothing is posted.
+  test("a block file whose header is broken is refused before anything is published", async () => {
+    server = await startServer();
+    const before = treeDigest(libraryDir(server));
+    const path = pipelineDir("badblock", `name: bad-block\nsteps:\n  greet:\n    uses: ./oops.sh\n`, {
+      "oops.sh": HELLO_BLOCK.replace("name: hello", "name: Not_A_Name"),
+    });
+
+    const added = await cli(["pipelines", "add", "bad-block", path], { url: server.url });
+    expect(added.code).toBe(1);
+    const failure = parsed({ ...added, stdout: added.stderr });
+    expect(failure.code).toBe("block_schema_invalid");
+    expect(failure.file).toContain("oops.sh");
+    expect(treeDigest(libraryDir(server))).toEqual(before);
+  });
+
   test("the rewrite keeps the file's own bytes and points only the reference at the library", async () => {
     server = await startServer();
     const path = pipelineDir("quoted", DOUBLE_QUOTED, { "hello.sh": HELLO_BLOCK });
