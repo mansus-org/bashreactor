@@ -69,9 +69,19 @@ afterAll(async () => {
 /** A signed-in page at the given size, with the watcher listening from the first request. */
 async function screen(viewport: Viewport, path = "/app/"): Promise<{ page: Page; watch: ReturnType<typeof watch> }> {
   const opened = await openPage(browser, viewport);
-  await signIn(opened.page, app);
+  await signIn(opened.page, app, opened.watch);
   if (path !== "/app/") await goto(opened.page, app, path);
   return opened;
+}
+
+/** Change part of what is in the YAML pane, which is what an edit is. */
+function replaceInYaml(page: Page, from: string, to: string): Promise<unknown> {
+  return page.evaluate((before: string, after: string) => {
+    const pane = document.querySelector("textarea#doc") as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+    setter?.call(pane, pane.value.replace(before, after));
+    pane.dispatchEvent(new Event("input", { bubbles: true }));
+  }, from, to);
 }
 
 /** Replace the YAML pane's contents the way a paste does, and let the app see the input event. */
@@ -123,12 +133,17 @@ suite("the app over the wire", () => {
   );
 
   test(
-    "every asset the page asks for is served",
+    "the page's own files all come back",
     async () => {
-      // The asset table is the browser's whole filesystem: one missing module and the screen sits on
-      // "Loading." forever, which no typecheck can see.
+      // The asset table is the browser's whole filesystem: one module the table does not know about
+      // is a 404, the ES module graph stops, and the screen sits on "Loading." forever. No typecheck
+      // can see that, and neither can a DOM stand-in that never asks for a file.
       const { page, watch: pageWatch } = await screen(DESKTOP);
-      expect(await page.evaluate(() => document.querySelectorAll("#view .gate, #view .head").length)).toBeGreaterThan(0);
+      const asked = pageWatch.assets.map((row) => row.url.replace(`${app.base}/app/assets/`, ""));
+      for (const file of ["app.js", "api.js", "editor.js", "style.css", "fonts/atkinson-next.woff2"]) {
+        expect(asked).toContain(file);
+      }
+      expect(pageWatch.assets.filter((row) => row.status !== 200 && row.status !== 304)).toEqual([]);
       expect(pageWatch.problems()).toEqual([]);
       await page.close();
     },
@@ -203,12 +218,7 @@ for (const viewport of VIEWPORTS) {
         const { page, watch: pageWatch } = await screen(viewport, "/app/pipeline/shout-report");
         await waitFor(page, ".node");
 
-        await page.evaluate(() => {
-          const pane = document.querySelector("textarea#doc") as HTMLTextAreaElement;
-          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
-          setter?.call(pane, pane.value.replace("default: hello", "default: changed"));
-          pane.dispatchEvent(new Event("input", { bubbles: true }));
-        });
+        await replaceInYaml(page, "default: hello", "default: changed");
         await page.waitForFunction(() => document.querySelector('p.help[role="status"]')?.textContent === "Unsaved changes.");
 
         await press(page, "Start a run");

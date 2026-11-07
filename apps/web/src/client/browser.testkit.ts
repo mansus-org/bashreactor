@@ -72,6 +72,8 @@ export interface Watch {
   readonly pageErrors: string[];
   /** Every response of 400 or worse, with its URL. */
   readonly http: { status: number; url: string }[];
+  /** Every response for a file under `/app/assets/`, which is the browser's whole filesystem. */
+  readonly assets: { status: number; url: string }[];
   /**
    * Everything that has to be empty for a screen to pass. `expectedHttp` is the list of status codes
    * the test itself asked for — a refused action answers 409, and the browser logs that like any
@@ -83,6 +85,7 @@ export interface Watch {
 export function watch(page: Page): Watch {
   const pageErrors: string[] = [];
   const http: { status: number; url: string }[] = [];
+  const assets: { status: number; url: string }[] = [];
 
   page.on("pageerror", (error) => pageErrors.push(`uncaught: ${error instanceof Error ? error.message : String(error)}`));
   page.on("console", (message) => {
@@ -96,12 +99,14 @@ export function watch(page: Page): Watch {
   });
   page.on("requestfailed", (request) => pageErrors.push(`request failed: ${request.url()} ${request.failure()?.errorText ?? ""}`));
   page.on("response", (response) => {
+    if (response.url().includes("/app/assets/")) assets.push({ status: response.status(), url: response.url() });
     if (response.status() >= 400) http.push({ status: response.status(), url: response.url() });
   });
 
   return {
     pageErrors,
     http,
+    assets,
     problems: (expectedHttp = []) => {
       const out = [...pageErrors];
       for (const failure of http) {
@@ -119,6 +124,9 @@ export function watch(page: Page): Watch {
 export async function openPage(browser: Browser, viewport: Viewport): Promise<{ page: Page; watch: Watch }> {
   const page = await browser.newPage();
   await page.setViewport({ width: viewport.width, height: viewport.height });
+  // Shorter than bun's own per-test timeout, so a screen that never drew is reported as the screen
+  // that never drew, with what the page said, and not as a harness timeout.
+  page.setDefaultTimeout(15_000);
   return { page, watch: watch(page) };
 }
 
@@ -277,12 +285,19 @@ export async function waitForRun(app: TestApp, id: string): Promise<SeededRun> {
 }
 
 /** Sign in through the gate, the way a person does: type the token, press the button. */
-export async function signIn(page: Page, app: TestApp): Promise<void> {
+export async function signIn(page: Page, app: TestApp, pageWatch?: Watch): Promise<void> {
   await page.goto(`${app.base}/app/`, { waitUntil: "networkidle0" });
-  await page.waitForSelector("#gate-token", { visible: true });
+  const gate = await page.waitForSelector("#gate-token", { visible: true, timeout: 10_000 }).catch(() => null);
+  if (gate === null) {
+    // The usual reason is the asset table: a module it does not know about is a 404, the ES module
+    // graph stops, and `#view` never gets past "Loading."
+    const said = pageWatch === undefined ? "nothing recorded" : pageWatch.problems().join("\n");
+    throw new Error(`the gate never drew on ${app.base}/app/. What the page said:\n${said}`);
+  }
   await page.type("#gate-token", app.token);
   await page.click(".gate__form button[type=submit]");
-  await page.waitForSelector(".nav:not([hidden])", { visible: true });
+  const nav = await page.waitForSelector(".nav:not([hidden])", { visible: true, timeout: 10_000 }).catch(() => null);
+  if (nav === null) throw new Error(`signing in as ${app.token.slice(0, 6)}... left the nav hidden on ${app.base}/app/`);
 }
 
 /** Go somewhere in the app and wait until the screen has stopped drawing. */
