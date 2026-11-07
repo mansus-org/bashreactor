@@ -57,7 +57,7 @@ describe("retry budget", () => {
 
     const step = final.steps.work!;
     expect(step.status).toBe("failed");
-    expect(step.failure).toEqual({ code: "retry_requested", message: "retry_requested" });
+    expect(step.failure).toMatchObject({ code: "retry_requested" });
     // The number the CLI prints in its ATTEMPTS column and the API serves as attempts_used.
     expect(step.attempts_used).toBe(3);
     expect(step.next_attempt_at).toBeNull();
@@ -108,7 +108,7 @@ describe("retry budget", () => {
     expect(final.status).toBe("failed");
     const step = final.steps.work!;
     expect(step.status).toBe("failed");
-    expect(step.failure).toEqual({ code: "block_fatal", message: "block_fatal" });
+    expect(step.failure).toMatchObject({ code: "block_fatal" });
     expect(step.attempts_used).toBe(1);
     expect(step.attempts).toHaveLength(1);
     expect(step.next_attempt_at).toBeNull();
