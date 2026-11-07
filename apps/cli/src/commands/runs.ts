@@ -51,8 +51,10 @@ export const runCommands: CommandSpec[] = [
           throw usage(`"--version" chooses a stored pipeline's version; "${target}" is a file`);
         }
         const file = readPipelineFile(target);
+        // The whole command line is read before anything is published: a typo in `--input` must not
+        // leave blocks in the library behind, because the run it was asked for never happened.
+        const inputs = readInputs(pairs, declaredTypes(quietlyParse(file.source)?.inputs), ctx.cwd);
         const prepared = await publishRelativeBlocks(ctx.client, file, (line) => ctx.printer.note(line));
-        const inputs = readInputs(pairs, declaredTypes(quietlyParse(prepared.source)?.inputs), ctx.cwd);
         body = { yaml: prepared.yaml, inputs };
         label = prepared.path;
       } else {

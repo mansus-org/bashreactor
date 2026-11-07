@@ -57,7 +57,7 @@ token and passes back whatever the API says.
 | `blocks add <name> <file>` | `POST /v1/blocks/:name/versions` | write |
 | `pipelines ls <name>` | `GET /v1/pipelines/:name` | read |
 | `pipelines get <name>` | `GET /v1/pipelines/:name/:version` | read |
-| `pipelines validate <file>` | `POST /v1/pipelines/validate` | read |
+| `pipelines validate <file>` | nothing: the file is checked here | none, or read for a `name@version` |
 | `pipelines add <name> <file>` | `POST /v1/pipelines/:name/versions` | write |
 | `runs ls` | `GET /v1/runs` | read |
 | `runs start <pipeline\|file.yaml>` | `POST /v1/runs` | write |
@@ -211,28 +211,41 @@ status, which is what a CI step wants.
 SPEC 3.4 resolves `uses: ./count-words.sh` against the directory holding the pipeline file, and the
 API stages the YAML it is given into a directory of its own (apps/api/README.md, "Staging"), so a
 relative reference from your laptop points at nothing there. The API has no route that takes a
-directory, so `runs start`, `pipelines validate` and `pipelines add` close the gap with the two
-routes that do exist: they publish each block beside the file into the library and rewrite the
-reference to the `name@version` the library answered with. The references are found by parsing the
-file, not by matching lines, so `uses: "./x.sh"` and `a: { uses: ./x.sh }` are as good as the bare
-form (SPEC 3.1). Only the scalar after `uses:` is replaced; every other byte of the file, comments,
-blank lines and the quoting of every other value included, is sent as it was.
+directory, so `runs start` and `pipelines add` close the gap with the two routes that do exist: they
+publish each block beside the file into the library and rewrite the reference to the `name@version`
+the library answered with. The references are found by parsing the file, not by matching lines, so
+`uses: "./x.sh"` and `a: { uses: ./x.sh }` are as good as the bare form (SPEC 3.1). Only the scalar
+after `uses:` is replaced; every other byte of the file, comments, blank lines and the quoting of
+every other value included, is sent as it was. A block is published under the name its header
+declares, which SPEC 2.3 says need not be the filename.
 
 The consequence is worth stating: what gets stored or started is the rewritten document, so a run
 records `count-words@2` rather than `./count-words.sh`. The command says what it published, on
 stderr:
 
 ```
-$ bashreactor pipelines validate docs/examples/word-report.yaml
+$ bashreactor pipelines add word-report docs/examples/word-report.yaml
 published docs/examples/generate-corpus.sh as generate-corpus@1
 published docs/examples/check-corpus.sh as check-corpus@1
 published docs/examples/count-words.sh as count-words@1
 published docs/examples/render-report.sh as render-report@1
+stored word-report@1  9f2c1a7d3b04
+```
+
+`pipelines validate` does none of this. SPEC 3.9 says validation "runs over the pipeline and the
+headers of all blocks it references, and creates nothing", so it is checked here, over the file on
+your disk, with the same validator the engine runs: a `uses: ./block.sh` is read from beside the
+file and a `name@version` is read from the library with one GET. That needs no write token, and a
+file whose blocks are all beside it needs no token at all.
+
+```
+$ bashreactor pipelines validate docs/examples/word-report.yaml
 valid  docs/examples/word-report.yaml
 ```
 
-A pipeline that already uses library references is sent untouched. A `uses:` whose file is not there
-is left alone, so the answer is the engine's own `block_not_found` and not a message invented here.
+A pipeline that already uses library references is sent untouched by `add` and `runs start`. A
+`uses:` whose file is not there is left alone, so the answer is the engine's own `block_not_found`
+and not a message invented here.
 
 ## Worked example
 
@@ -245,7 +258,7 @@ export BASHREACTOR_URL=http://127.0.0.1:8080
 export BASHREACTOR_TOKEN=$BASHREACTOR_ADMIN_TOKEN
 
 bashreactor pipelines validate docs/examples/word-report.yaml
-# valid  docs/examples/word-report.yaml        (after publishing the four blocks, on stderr)
+# valid  docs/examples/word-report.yaml        (nothing is published: SPEC 3.9)
 
 bashreactor runs start docs/examples/word-report.yaml --input lines=300 --input seed=11 --input title=Other
 ```

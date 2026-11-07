@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HELLO_BLOCK, cli, lines, parsed, startServer } from "./helpers.ts";
+import { HELLO_BLOCK, cli, lines, parsed, sha256Hex, startServer } from "./helpers.ts";
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
 const files: string[] = [];
@@ -68,6 +68,38 @@ describe("blocks", () => {
     const result = await cli(["blocks", "add", "other", path], { url: server.url });
     expect(result.code).toBe(1);
     expect(parsed({ ...result, stdout: result.stderr }).code).toBe("block_schema_invalid");
+  });
+
+  // SPEC 2: the identity of a version is the SHA-256 of the file's exact bytes, and SPEC 2.2: the
+  // body is opaque bytes. A block that is not valid UTF-8 used to be rewritten on the way up, so the
+  // hash on the record was not the hash of the file that was read.
+  test("a block whose bytes are not UTF-8 is stored byte for byte", async () => {
+    server = await startServer();
+    const bytes = Buffer.concat([
+      Buffer.from(
+        `#!/usr/bin/env bash\n# ---\n# name: binary-body\n# description: Ends with bytes no terminal can show.\n# ---\n\necho hi\n: "`,
+      ),
+      Buffer.from([0xff, 0xfe, 0x00, 0x80, 0xc3]),
+      Buffer.from(`"\n`),
+    ]);
+    const path = file("binary-body.sh", "");
+    writeFileSync(path, bytes);
+
+    // The test is only worth writing if a rewrite would show up: decoding the file as UTF-8 text
+    // and back is not the same file.
+    expect(sha256Hex(bytes)).not.toBe(sha256Hex(new TextDecoder().decode(bytes)));
+
+    const added = await cli(["blocks", "add", "binary-body", path], { url: server.url });
+    expect(added.code).toBe(0);
+    expect(added.stdout).toContain(`added binary-body@1  ${bytes.length} bytes`);
+
+    const got = await cli(["blocks", "get", "binary-body", "--json"], { url: server.url });
+    expect(parsed(got).sha256).toBe(sha256Hex(bytes));
+    expect(parsed(got).size).toBe(bytes.length);
+
+    const content = await cli(["blocks", "content", "binary-body"], { url: server.url, raw: true });
+    expect(content.code).toBe(0);
+    expect(Buffer.from(content.stdoutBytes!).equals(bytes)).toBe(true);
   });
 
   test("a file that is not there is exit 2, and a block that is not there is exit 1", async () => {

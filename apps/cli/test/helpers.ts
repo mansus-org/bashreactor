@@ -2,7 +2,8 @@
 // reaches into the API's functions: the server is started the way apps/api/test/server.test.ts
 // starts it, because the CLI's contract is HTTP and the CLI package must not import the API.
 
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -82,6 +83,12 @@ export async function startServer(): Promise<Server> {
 
 export interface Result {
   stdout: string;
+  /**
+   * stdout exactly as it arrived, for a command whose answer is bytes rather than text. Only filled
+   * in for `cli(..., { raw: true })`, because decoding a block's bytes to compare them would be the
+   * very thing such a test is checking.
+   */
+  stdoutBytes?: Uint8Array;
   stderr: string;
   code: number;
 }
@@ -92,7 +99,7 @@ export interface Result {
  */
 export async function cli(
   args: readonly string[],
-  options: { url?: string | null; token?: string | null; env?: Record<string, string> } = {},
+  options: { url?: string | null; token?: string | null; env?: Record<string, string>; raw?: boolean } = {},
 ): Promise<Result> {
   const home = mkdtempSync(join(tmpdir(), "bashreactor-cli-home-"));
   const env: Record<string, string> = {
@@ -110,13 +117,16 @@ export async function cli(
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, stderr, code] = await Promise.all([
-    new Response(proc.stdout).text(),
+  const [raw, stderr, code] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
   rmSync(home, { recursive: true, force: true });
-  return { stdout, stderr, code };
+  const bytes = new Uint8Array(raw);
+  const result: Result = { stdout: new TextDecoder().decode(bytes), stderr, code };
+  if (options.raw) result.stdoutBytes = bytes;
+  return result;
 }
 
 /** The one JSON value a command printed, whatever it was. */
@@ -127,6 +137,36 @@ export function parsed(result: Result): any {
 /** Every line of a stream, without the trailing newline. */
 export function lines(text: string): string[] {
   return text.replace(/\n$/, "").split("\n");
+}
+
+/** The library's own directory on the server, where every published block version is written. */
+export function libraryDir(server: Server): string {
+  return join(server.home, "store", "blocks");
+}
+
+/**
+ * Every file under `dir`, as `path  sha256` lines, so a command that promises to create nothing can
+ * be checked against the whole directory rather than against a guess at what it might have made.
+ * A directory that is not there reads as empty.
+ */
+export function treeDigest(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const found: string[] = [];
+  const walk = (current: string, prefix: string): void => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const path = join(current, entry.name);
+      const name = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) walk(path, name);
+      else found.push(`${name}  ${sha256Hex(readFileSync(path))}`);
+    }
+  };
+  walk(dir, "");
+  return found.toSorted();
+}
+
+/** The SHA-256 a test compares against what the server recorded, as lowercase hex. */
+export function sha256Hex(bytes: Uint8Array | string): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 /** A PATH with every binary SPEC 2.6 demands, so a test does not depend on what is installed. */
