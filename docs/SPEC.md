@@ -846,6 +846,11 @@ hours of unrelated, healthy work.
 Each step counts `attempts_used`. An attempt that ends `succeeded` or `failed` adds 1. One that ends
 `interrupted` or `cancelled` adds nothing.
 
+So the count is of attempts that have *ended*, not of attempts that have started: a step whose first
+attempt is running reads `attempts_used: 0` with that attempt already in `attempts`, `running`, and
+every client prints that `0` for a step you can see working. It is not a bug, and it is what makes an
+interrupted or cancelled attempt cost no budget.
+
 When an attempt fails with a code that can retry ([section 2.8](#28-exit-codes-and-errors)) and
 `attempts_used < max_attempts`, the step goes to `waiting_retry`, with `next_attempt_at` computed by
 [section 3.5](#35-retry) and written to `run.json`, so a restart honours the wait. It is cleared when the
