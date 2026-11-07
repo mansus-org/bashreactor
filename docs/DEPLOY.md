@@ -75,7 +75,17 @@ and Sealed Secrets has decrypted it.
 
 ## What a human still has to do, in order
 
-Everything below needs the cluster or Argo CD; none of it can be done from a worktree.
+The four things this task was opened for, and where each stands:
+
+| Step | Status | How you can tell |
+| --- | --- | --- |
+| Argo CD Application | **done** | the `mansus-apps` generator picked the repo up; `/healthz` answers `sha-<sha>` |
+| Router for the host | **done** | Traefik routes `/` Prefix to the Service; the site answers over HTTPS |
+| TLS | **done** | cert-manager issued `bashreactor-tls`; the name check passes |
+| The secret | **done, and it is not the last thing** | the sealed hash is applied and decrypts: live `/v1/whoami` answers 401, not 503 |
+
+What is left is smaller than that list, and it is still nothing a worktree can do. Everything below
+needs the cluster or Argo CD.
 
 1. **Merge, and let the image roll.** `.github/workflows/deploy.yml` tags `sha-<newest>` and
    `latest`; Image Updater picks it up within two minutes. Check where it landed:
