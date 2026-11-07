@@ -35,6 +35,18 @@ description: What this pipeline does.
 steps:
 `;
 
+/** SPEC 1.1: a step id starts with a lowercase letter and takes only lowercase letters, digits and `_`. */
+const STEP_ID = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * The version a route asks for. `undefined` is the newest one; anything that is not a whole number
+ * from 1 up is no version at all, and asking the API for `NaN` is not how to say that.
+ */
+function routeVersion(raw: string | undefined): number | "latest" | null {
+  if (raw === undefined || raw === "") return "latest";
+  return /^[1-9][0-9]*$/.test(raw) ? Number(raw) : null;
+}
+
 /** The token in the box is a read-only token, so nothing here may be clicked. */
 const readOnly = () => !canWrite();
 
@@ -204,9 +216,12 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   let versions: { version: number; created_at: string }[] = [];
   let issues: { issue: ValidationIssue; line: number | null }[] = [];
   let validated = false;
-  // The bytes the record holds, or null for a document that was never stored. "Unchanged" is a
-  // comparison against it, not a flag, so typing, undoing and retyping the original all read true.
-  let baseline: string | null = BLANK;
+  // The bytes the record holds, or the blank template for a document that was never stored.
+  // "Unchanged" is a comparison against it, not a flag, so typing, undoing and retyping the
+  // original all read true.
+  let baseline = BLANK;
+  // Whether what is on screen came out of this tab's own draft rather than off the record.
+  let restored = false;
   let undoStack: string[] = [];
   let undoKey: string | null = null;
   let flashed: Record<string, string> = {};
@@ -221,6 +236,26 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   /** Only then may a run name the stored version: anything else has to carry the YAML on screen. */
   const runsStored = (): boolean => openName !== null && unchanged();
 
+  /**
+   * Work in progress lives in this tab until it is stored (#24): moving to another screen used to
+   * take it with the page. It is keyed by what is open, so one document's edits never land on
+   * another when the reader comes back.
+   */
+  const draftKey = (): string => `bashreactor.draft.${openName ?? "new"}.${openVersion}`;
+  function keepDraft(): void {
+    if (unchanged() || text === BLANK) sessionStorage.removeItem(draftKey());
+    else sessionStorage.setItem(draftKey(), text);
+  }
+
+  /** The edits this tab had for what is open now, put back on screen and said out loud. */
+  function restoreDraft(): void {
+    const saved = sessionStorage.getItem(draftKey());
+    if (saved === null || saved === text) return;
+    setText(saved, { source: "load" });
+    restored = true;
+    announce("The unsaved edits this tab had are back on screen.");
+  }
+
   // ---------- skeleton ----------
 
   const title = el("h1", { class: "title" });
@@ -234,25 +269,35 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     placeholder: "word-report",
     "aria-describedby": "open-name-help",
   });
-  const openButton = el("button", { class: "btn", type: "button", onclick: () => void openPipeline(openNameInput.value.trim(), "latest") }, "Open");
+  const openButton = el("button", { class: "btn", type: "button", onclick: () => void openChosen() }, "Open");
+  const openError = el("p", { class: "form-error", id: "open-error", role: "alert", hidden: true });
   const versionSelect = el("select", {
     id: "open-version",
     "aria-label": "Version of this pipeline",
     hidden: true,
     onchange: (event) => {
       const value = (event.target as HTMLSelectElement).value;
-      void openPipeline(openName ?? "", value === "latest" ? "latest" : Number(value));
+      if (openName === null) return;
+      if (!confirmLeave()) {
+        versionSelect.value = String(openVersion);
+        return;
+      }
+      // The address bar says which version is open, so a reload or a bookmark comes back here.
+      navigate(`/pipeline/${openName}/${value}`, { replace: true });
     },
   });
   const newButton = el("button", {
     class: "btn",
     type: "button",
     onclick: () => {
+      if (!confirmLeave()) return;
       openName = null;
+      openVersion = "latest";
       versions = [];
       issues = [];
       validated = false;
-      baseline = null;
+      versionSelect.hidden = true;
+      baseline = BLANK;
       setText(BLANK, { source: "new" });
     },
   }, "New pipeline");
@@ -268,6 +313,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     "aria-label": "Pipeline graph. Up and Down walk the steps, Right goes to a step this one feeds, Left to a step it waits for.",
   });
   const undoButton = el("button", { class: "btn", type: "button", disabled: true, onclick: undo }, "Undo");
+  const discardButton = el("button", { class: "btn", type: "button", hidden: true, onclick: discardChanges }, "Discard changes");
   const addButton = el("button", { class: "btn", type: "button", onclick: openAddDialog }, "Add step");
   const pinButton = el("button", { class: "btn", type: "button", hidden: true, onclick: pinAll }, "Use library versions");
   const inspector = el("section", { class: "inspector", id: "inspector", "aria-labelledby": "inspector-title" });
@@ -295,6 +341,13 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     graph.destroy();
   });
 
+  // Leaving must be a choice the person made, not something that happens to them (#24). The router
+  // owns the address bar, so this catches the two ways out of a screen that a screen can see coming:
+  // a link clicked here, and the tab going away. Back and forwards are the router's to guard.
+  // Both listeners go away with the screen, because they are registered with its own signal.
+  document.addEventListener("click", leaveAttempt, { capture: true, signal });
+  window.addEventListener("beforeunload", unload, { signal });
+
   view.replaceChildren(
     el(
       "div",
@@ -308,6 +361,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
           { class: "field" },
           el("label", { class: "label", for: "open-name" }, "Stored pipeline"),
           el("div", { class: "row" }, openNameInput, openButton, versionSelect),
+          openError,
           el(
             "p",
             { class: "help", id: "open-name-help" },
@@ -334,7 +388,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         el(
           "section",
           { "aria-labelledby": "graph-title" },
-          el("div", { class: "bar" }, el("h2", { class: "h2", id: "graph-title" }, "Graph"), el("div", { class: "row" }, undoButton, pinButton, addButton)),
+          el("div", { class: "bar" }, el("h2", { class: "h2", id: "graph-title" }, "Graph"), el("div", { class: "row" }, undoButton, discardButton, pinButton, addButton)),
           stageNote,
           stage,
           el(
@@ -376,6 +430,13 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
 
   function setText(next: string, options: { source?: string; select?: string | null } = {}): void {
     const { source = "yaml", select: nextSelect } = options;
+    if (next !== text) {
+      // The API's report is about the bytes it was given (#21). Once they have changed it proves
+      // nothing about what is on screen, so it stops being a problem the reader has to clear.
+      issues = [];
+      validated = false;
+      restored = false;
+    }
     text = next;
     if (source !== "yaml") textarea.value = text;
     analysis = analyze(text, library);
@@ -387,6 +448,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       if (selected === null && analysis.order.length > 0) selected = analysis.order[0]!;
     }
     render(source);
+    // A load is the record arriving, or a draft going back where it came from: neither is news.
+    if (source !== "load" && source !== "init") keepDraft();
     void ensureLibrary();
     scheduleFlash();
   }
@@ -404,7 +467,9 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       ? openName === null
         ? "Not stored yet."
         : `Stored as v${versions.find((v) => v.version === (openVersion === "latest" ? versions[0]?.version : openVersion))?.version ?? ""}, unchanged.`
-      : "Unsaved changes.";
+      : restored
+        ? "Unsaved changes, brought back from earlier in this tab."
+        : "Unsaved changes.";
 
     stageNote.hidden = !stale;
     if (!analysis.ok) {
@@ -437,6 +502,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     pinButton.hidden = fixable === 0;
     pinButton.disabled = readOnly();
     pinButton.textContent = fixable === 1 ? "Use the library version" : `Use library versions (${fixable})`;
+    // The way out of a document that is not the record, which is also how a draft gets thrown away.
+    discardButton.hidden = readOnly() || unchanged();
 
     renderYaml();
     renderProblems();
@@ -453,6 +520,64 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       graph.flash([...changed, ...added]);
       flashed = now;
     }, 300);
+  }
+
+  // ---------- leaving, and throwing work away ----------
+
+  /**
+   * Whether the reader may replace what is on screen. Unsaved work is not thrown away silently: the
+   * tab keeps it, so coming back brings it back, but the person still has to be the one who decides.
+   */
+  function confirmLeave(): boolean {
+    if (unchanged()) return true;
+    return window.confirm("You have unsaved changes. Carry on? This tab keeps them, so coming back brings them back.");
+  }
+
+  /** A link that would take the router somewhere else, seen before the router does. */
+  function leaveAttempt(event: Event): void {
+    const link = (event.target as Element | null)?.closest?.("a[data-link]") as HTMLAnchorElement | null;
+    if (link === null) return;
+    if (!(link.getAttribute("href") ?? "").startsWith("/app")) return;
+    if (confirmLeave()) return;
+    // The router answers this same click, so it must not see it at all.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function unload(event: BeforeUnloadEvent): void {
+    if (unchanged()) return;
+    // A browser will show its own words for this; there is nothing to gain by writing them.
+    event.preventDefault();
+    event.returnValue = "";
+  }
+
+  /** The Open field's own button, which replaces the document and so has to ask first. */
+  function openChosen(): void {
+    const name = openNameInput.value.trim();
+    if (name === "" || !confirmLeave()) return;
+    void openPipeline(name, "latest");
+  }
+
+  function discardChanges(): void {
+    undoStack.push(text);
+    undoKey = null;
+    undoButton.disabled = false;
+    setText(baseline, { source: "discard" });
+    announce("Changes thrown away, and the record is on screen again. Undo brings yours back.");
+  }
+
+  /**
+   * The one place a failed open is shown (#32): beside the field that caused it, and replaced by the
+   * next attempt rather than added to the pile.
+   */
+  function showOpenError(error: { code?: string; message?: string } | null): void {
+    if (error === null) {
+      openError.hidden = true;
+      openError.textContent = "";
+      return;
+    }
+    openError.hidden = false;
+    openError.textContent = `${error.code ?? "internal_error"}: ${error.message ?? "the server answered with no message."}`;
   }
 
   // ---------- the library, which is the API's ----------
@@ -925,6 +1050,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   async function openPipeline(name: string, version: number | "latest"): Promise<void> {
     if (name === "") return;
     busy = true;
+    showOpenError(null);
     status.textContent = `Opening ${name}.`;
     try {
       const list = await api.pipelines(name);
@@ -945,13 +1071,12 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       );
       versionSelect.value = String(wanted);
       setText(record.yaml, { source: "load" });
+      restoreDraft();
       announce(`${name} version ${wanted} opened.`);
     } catch (error) {
       if (gone()) return;
       versionSelect.hidden = true;
-      view.prepend(
-        errorBox(error instanceof ApiError ? error : { code: "internal_error", message: String(error) }, el("a", { class: "btn", href: "/app/", "data-link": "" }, "The entry page")),
-      );
+      showOpenError(error instanceof ApiError ? error : { code: "internal_error", message: String(error) });
       status.textContent = "";
     } finally {
       busy = false;
@@ -988,6 +1113,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     status.textContent = `Storing ${name}.`;
     // Typing goes on while the request is out, and only what was sent is on the record.
     const sent = text;
+    // The draft is filed under the version that was open when it was written; storing moves that.
+    const wasKey = draftKey();
     try {
       const record = await api.savePipeline(name, sent);
       if (gone()) return;
@@ -1003,6 +1130,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       );
       versionSelect.value = String(record.version);
       openNameInput.value = name;
+      sessionStorage.removeItem(wasKey);
+      keepDraft();
       status.textContent = `Stored as v${record.version}.`;
       announce(`${name} stored as version ${record.version}.`);
       navigate(`/pipeline/${name}/${record.version}`, { replace: true });
@@ -1047,9 +1176,11 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const error = el("p", { class: "form-error", role: "alert", hidden: true });
     const suggest = (): void => {
       if (!analysis.ok) return;
-      const base = usesSelect.value;
+      // A block name is `a-z0-9-` and a step id is `a-z0-9_` (SPEC 1.1), so the name has to be
+      // translated rather than copied: suggesting `check-corpus` would offer an id the rule refuses.
+      const base = usesSelect.value.replace(/-/g, "_").slice(0, 64);
       let candidate = base;
-      for (let n = 2; analysis.ok && analysis.byId[candidate] !== undefined; n++) candidate = `${base}-${n}`;
+      for (let n = 2; analysis.ok && analysis.byId[candidate] !== undefined; n++) candidate = `${base}_${n}`.slice(0, 64);
       idInput.value = candidate;
     };
     usesSelect.addEventListener("change", suggest);
@@ -1066,9 +1197,9 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
             const model = analysis;
             if (!model.ok) return;
             const id = idInput.value.trim();
-            if (!/^[a-z][\w-]*$/.test(id)) {
+            if (!STEP_ID.test(id)) {
               error.hidden = false;
-              error.textContent = "A step id starts with a lowercase letter and has only letters, numbers, - and _.";
+              error.textContent = "A step id starts with a lowercase letter and has only lowercase letters, numbers and _. A hyphen belongs to a block name, not a step.";
               idInput.focus();
               return;
             }
@@ -1176,11 +1307,22 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
 
   textarea.value = text;
   const name = route.parts[1];
-  const version = route.parts[2];
-  if (name !== undefined) {
-    void openPipeline(name, version === undefined ? "latest" : Number(version));
-  } else {
+  const version = routeVersion(route.parts[2]);
+  if (name === undefined) {
     setText(BLANK, { source: "init" });
+    restoreDraft();
+  } else if (version === null) {
+    // `/pipeline/word-report/abc` is not version NaN (#35): there is no such version, and that is
+    // said here instead of asking the API for a number the route never gave.
+    setText(BLANK, { source: "init" });
+    openNameInput.value = name;
+    showOpenError({
+      code: "type_mismatch",
+      message: `${name} has no version "${route.parts[2] ?? ""}". Versions are whole numbers, starting at 1.`,
+    });
+    status.textContent = `Nothing opened for ${name}.`;
+  } else {
+    void openPipeline(name, version);
   }
   flashed = analysis.ok ? Object.fromEntries(analysis.steps.map((step) => [step.id, JSON.stringify(step.raw)])) : {};
 }

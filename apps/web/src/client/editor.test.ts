@@ -13,6 +13,17 @@ import { blockSource, decls, installDom, observedStages, serveModules, uninstall
 import type { Route } from "./app.ts";
 
 const dom = installDom({ href: "http://x/app/pipeline/word-report" });
+
+// The editor keeps work in progress in `sessionStorage`, which the stand-in browser gives every test
+// in this file at once. This is the same store with a `clear`, so one test's draft cannot be the next
+// one's surprise.
+const tab = new Map<string, string>();
+(globalThis as unknown as Record<string, unknown>).sessionStorage = {
+  getItem: (key: string) => tab.get(key) ?? null,
+  setItem: (key: string, value: string) => void tab.set(key, value),
+  removeItem: (key: string) => void tab.delete(key),
+  clear: () => tab.clear(),
+};
 const served = serveModules(["app", "api", "dom", "yaml", "model", "graph", "editor", "runs", "blocks", "logs"]);
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { renderPipeline } = (await import(join(served, "editor.js"))) as typeof import("./editor.ts");
@@ -182,6 +193,7 @@ beforeEach(() => {
   blockGate = openGate();
   pipelineGate = openGate();
   refusePipeline = false;
+  tab.clear();
 });
 
 async function open(yaml: string, signal: AbortSignal = new AbortController().signal): Promise<FakeElement> {
