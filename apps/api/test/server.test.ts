@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ADMIN_TOKEN } from "./helpers.ts";
 
-// The scaffold's contract with the deploy: the image answers /healthz with its version, keeps 501 at
-// /, and stops on SIGTERM. This runs main.ts as a real process over a real socket, because that is
-// what the CI image job does.
+// The scaffold's contract with the deploy: the image answers /healthz with its version, sends / to
+// the app, and stops on SIGTERM. This runs main.ts as a real process over a real socket, because that
+// is what the CI image job does.
 async function serve(env: Record<string, string>): Promise<{ port: string; stop(): Promise<void> }> {
   const proc = Bun.spawn([process.execPath, join(import.meta.dir, "../src/main.ts")], {
     env: { ...process.env, PORT: "0", ...env },
@@ -45,8 +45,11 @@ describe("the server process", () => {
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual({ status: "ok", version: "ci-test" });
 
-      // A path with no route is 404 now; `/` is not a route either.
-      expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(404);
+      // A person who types the host into a browser is sent to the UI, which the image mounts at /app.
+      // Manual, because the standalone API has no UI to land on.
+      const root = await fetch(`http://127.0.0.1:${server.port}/`, { redirect: "manual" });
+      expect(root.status).toBe(302);
+      expect(root.headers.get("location")).toBe(`http://127.0.0.1:${server.port}/app/`);
 
       const disabled = await fetch(`http://127.0.0.1:${server.port}/v1/runs`);
       expect(disabled.status).toBe(503);

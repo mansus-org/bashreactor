@@ -1,7 +1,7 @@
 // The mount, over HTTP, against a real API in the same process — which is exactly how it is deployed:
 // one socket, `/app` answered here and everything else handed to the API. The API's own contract is
-// re-probed here on purpose: the 501 at `GET /` is what the CI image job checks, and the UI must not
-// disturb it.
+// re-probed here on purpose: what `GET /` and `GET /healthz` answer is what the CI image job checks,
+// and the UI must not disturb it.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -61,9 +61,11 @@ describe("the mount", () => {
   test("leaves every route the API already had exactly as it was", async () => {
     const app = mount();
     try {
-      const root = await app.call("GET", "/");
-      expect(root.status).toBe(404);
-      expect(((await root.json()) as { code: string }).code).toBe("not_found");
+      // The CI image job probes this redirect; the UI lives under /app, so `/` has somewhere to send
+      // a person who typed the host into a browser. Read by hand, because `call` would follow it.
+      const root = await fetch(`${app.base}/`, { redirect: "manual" });
+      expect(root.status).toBe(302);
+      expect(root.headers.get("location")).toBe(`${app.base}/app/`);
 
       const health = await app.call("GET", "/healthz");
       expect(health.status).toBe(200);
@@ -84,6 +86,7 @@ describe("the mount", () => {
     try {
       const post = await app.call("POST", "/app/anything", { body: {} });
       expect(post.status).toBe(404);
+      expect(((await post.json()) as { code: string }).code).toBe("not_found");
     } finally {
       app.close();
     }

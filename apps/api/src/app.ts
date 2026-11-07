@@ -16,6 +16,9 @@ import type { Access, Identity } from "./auth.ts";
 import { stagePipeline } from "./staging.ts";
 import { TokenStore } from "./tokens.ts";
 
+// Where the web UI is mounted, by apps/web/src/index.ts. `GET /` sends a person there.
+const APP_PATH = "/app";
+
 const MAX_LOG_TEXT_BYTES = 1 << 20;
 
 export interface ApiDependencies {
@@ -256,6 +259,12 @@ export function createApi(deps: ApiDependencies): Api {
   async function dispatch(request: Request, who: { name: string }): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter((part) => part !== "");
+
+    if (request.method === "GET" && url.pathname === "/") {
+      // One process serves both, and the UI is mounted at /app: a person who types the host into a
+      // browser wants the app, not an error object. 302 and not 301 so a mount that moves is fixable.
+      return Response.redirect(new URL(`${APP_PATH}/`, url).href, 302);
+    }
 
     if (url.pathname === "/healthz") {
       if (request.method !== "GET") {

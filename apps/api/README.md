@@ -23,7 +23,8 @@ With no admin token at all the server still starts and still answers `/healthz`,
 route is 503: an unset token is not a reason for a pod to fail its probe.
 
 `GET /healthz` is unauthenticated and answers `{"status":"ok","version":"…"}`. That, and `GET /`
-answering 501, is the contract the CI image job probes; both still hold.
+redirecting to `/app/` (where the web UI is mounted in the image), is the contract the CI image job
+probes; both still hold.
 
 If the API could not be built at all — a `$BASHREACTOR_HOME` the uid cannot write, a store that will
 not open — the server still listens: `/healthz` answers 200 with
@@ -111,7 +112,8 @@ section 5 has none for them. They are the open item at the bottom.
 | `GET` | `/v1/runs/:id/logs/:step/:attempt` | read | the log from `?offset=`, plus the new offset |
 
 A path this API does not have is 404 `not_found`; a path it does have, with a method it does not take,
-is 405 `method_not_allowed` naming the methods it takes.
+is 405 `method_not_allowed` naming the methods it takes. `GET /` is not a route: it redirects to
+`/app/`, where the image mounts the web UI.
 
 An id in a path is checked before it is used: a run id must match SPEC 4.2's shape
 (`20261104T101500Z-3fa9c2d1`) and a block or pipeline name must match SPEC 1.1's, because the engine

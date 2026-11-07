@@ -48,8 +48,10 @@ test("the web entry serves the app and the API from one port, and stops on SIGTE
     expect(health.status).toBe(200);
     expect(await health.json()).toEqual({ status: "ok", version: "ci-web" });
 
-    // A path with no route is 404, and `/` is not a route of the API underneath the UI.
-    expect((await fetch(`http://127.0.0.1:${server.port}/`)).status).toBe(404);
+    // `/` reaches the app: the redirect the deploy probe used to expect now lands on the UI.
+    const root = await fetch(`http://127.0.0.1:${server.port}/`);
+    expect(root.status).toBe(200);
+    expect(root.url).toBe(`http://127.0.0.1:${server.port}/app/`);
 
     const app = await fetch(`http://127.0.0.1:${server.port}/app/`);
     expect(app.status).toBe(200);

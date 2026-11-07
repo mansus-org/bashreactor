@@ -11,6 +11,12 @@ describe("the surface every surface must keep", () => {
     expect(await response.json()).toEqual({ status: "ok", version: "test-version" });
   });
 
+  test("GET / sends a person who typed the host into a browser to the app", async () => {
+    const response = await server.call("GET", "/", { token: null });
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("http://bashreactor.test/app/");
+  });
+
   test("a path this API does not have is 404 not_found, not 501", async () => {
     for (const [method, path] of [
       ["GET", "/api/runs"],
