@@ -95,9 +95,9 @@ Per command:
 | `--version <n\|latest>` | `blocks get`, `blocks content`, `pipelines get`, `runs start` | which version; the default is `latest` |
 | `--input <name>=<value>` | `runs start` | a run input, repeatable; read with the text form of SPEC 1.2 against the type the pipeline declares |
 | `--wait` | `runs start` | poll until the run is final, and exit with its status |
-| `--attempt <n>` | `runs logs` | which attempt to read; the default is the step's last one |
+| `--attempt <n>` | `runs logs` | which attempt to read; the default is the step's last one, and `--follow` without it reads them all, in order |
 | `--offset <n>` | `runs logs` | the byte offset to start at; the default is 0 |
-| `--follow` | `runs logs` | keep reading until the step is final |
+| `--follow` | `runs logs` | keep reading until the step or the run is final; exit 1 unless the step succeeded |
 | `--interval <ms>` | `runs logs --follow`, `runs start --wait` | how long between polls; the default is 1000 |
 | `--scope read\|write` | `tokens add` | what the token may do |
 
@@ -129,7 +129,7 @@ wire and say so:
   `{name, version, sha256, content}`, with `version` resolved to a number even when you asked for
   `latest`.
 - `runs logs --follow --json` prints one JSON object per chunk, newline-delimited, each with its own
-  `offset` and `next_offset`.
+  `attempt`, `offset` and `next_offset` — which is how a JSON reader is told an attempt has begun.
 
 Notes about what a command did on your behalf (publishing a block, the next log offset) go to
 stderr in both modes, so stdout stays the answer.
@@ -180,9 +180,14 @@ pt 1: stopping after 120 lines, asking for a retry
 next offset 98
 ```
 
-`--follow` polls by offset until the step reaches a final status, then exits with the run's own
-status: 0 for `succeeded` (and for a step that finished while the run carries on), 1 for `failed` or
-`cancelled`. There is no websocket: the offset is the cursor, and a follower that dies loses nothing.
+`--follow` polls by offset until the step reaches a final status, or the run does. A step's log is
+its attempts' logs in order (SPEC 4.8), so follow reads them that way: it drains the attempt it is
+on, marks the next one with `==> attempt N <==` on stderr and starts it at byte 0. `--attempt` pins
+one attempt and reads only that one, markers included. A step that has no attempt yet has not
+started, so follow waits rather than taking the API's `attempt_not_found`. The exit code is 0 when
+the step you followed succeeded and 1 when it ended any other way, even when the run around it is
+still `running` and has decided nothing yet. There is no websocket: the offset is the cursor, and a
+follower that dies loses nothing.
 
 ## Long runs
 
@@ -277,20 +282,26 @@ bashreactor runs logs 20261105T152616Z-4458ce1b generate --follow
 ```
 
 ```
+==> attempt 1 <==
 attempt 1: 0 of 300 lines already written
 attempt 1: stopping after 120 lines, asking for a retry
-next offset 98
+==> attempt 2 <==
+attempt 2: 120 of 300 lines already written
+attempt 2: corpus finished
+next offset 71
 run 20261105T152616Z-4458ce1b running
 ```
 
-The run is still going, because `generate` is only one of four steps. Follow the last one, and when
-it is final the run is final, so the exit code is the run's:
+The run is still going, because `generate` is only one of four steps, and the step you followed
+succeeded, so the exit code is 0. Follow the last one, and when it is final the run is final, so the
+exit code is the run's:
 
 ```bash
 bashreactor runs logs 20261105T152616Z-4458ce1b report --follow; echo $?
 ```
 
 ```
+==> attempt 1 <==
 render-report: 157 bytes
 next offset 25
 run 20261105T152616Z-4458ce1b succeeded

@@ -15,6 +15,19 @@ description: Fail with a plain non-zero exit.`,
 exit 3`,
 );
 
+// Exit 75 is EX_TEMPFAIL, which SPEC 2.8 reads as "retry me", so this step gets a second attempt
+// that carries on. The bytes each attempt writes name the attempt, so a test can tell them apart.
+const FLAKY_BLOCK = blockFile(
+  `name: flaky
+description: Ask for a retry on the first attempt, then carry on and succeed.`,
+  `echo "attempt $BR_ATTEMPT starting"
+if [ "$BR_ATTEMPT" = "1" ]; then
+  echo "attempt 1 stopping, asking to be retried"
+  exit 75
+fi
+echo "attempt 2 carrying on"`,
+);
+
 function write(name: string, content: string): string {
   const dir = mkdtempSync(join(tmpdir(), "bashreactor-cli-files-"));
   dirs.push(dir);
@@ -57,6 +70,7 @@ async function library(): Promise<string> {
     ["hello", HELLO_BLOCK],
     ["slow", SLOW_BLOCK],
     ["failing", FAIL_BLOCK],
+    ["flaky", FLAKY_BLOCK],
   ] as const) {
     const path = write(`${block[0]}.sh`, block[1]);
     const added = await cli(["blocks", "add", block[0], path], { url });
@@ -87,6 +101,57 @@ const FAILING_PIPELINE = `name: failing-run
 steps:
   boom:
     uses: failing@1
+`;
+
+// `delay: 1s` so the retry is due while a test is still watching; the default is 30s (SPEC 3.5).
+const FLAKY_PIPELINE = `name: flaky-run
+steps:
+  flaky:
+    uses: flaky@1
+    retry:
+      max_attempts: 2
+      delay: 1s
+`;
+
+/** `two` cannot start until `one` has slept, so it has no attempt for a while. */
+const WAITS_PIPELINE = `name: waits-run
+inputs:
+  seconds:
+    type: integer
+    default: 3
+steps:
+  one:
+    uses: slow@1
+    with:
+      seconds: \${{ inputs.seconds }}
+  two:
+    uses: hello@1
+    needs: [one]
+`;
+
+/** `boom` fails in a moment, `talk` keeps the run `running` for seconds after it. */
+const HALF_PIPELINE = `name: half-run
+inputs:
+  seconds:
+    type: integer
+    default: 20
+steps:
+  boom:
+    uses: failing@1
+  talk:
+    uses: slow@1
+    with:
+      seconds: \${{ inputs.seconds }}
+`;
+
+/** `after` is skipped the moment `boom` fails, and never has an attempt of its own. */
+const SKIPPED_PIPELINE = `name: skipped-run
+steps:
+  boom:
+    uses: failing@1
+  after:
+    uses: hello@1
+    needs: [boom]
 `;
 
 describe("runs start", () => {
@@ -369,6 +434,152 @@ steps:
     const result = await cli(["runs", "logs", id, "nope"], { url: server.url });
     expect(result.code).toBe(1);
     expect(parsed({ ...result, stdout: result.stderr }).code).toBe("step_not_found");
+  });
+});
+
+describe("runs logs --follow", () => {
+  test("reads every attempt of a step that retried, in order, marking each on stderr", async () => {
+    server = await startServer();
+    await library();
+    await store("flaky-run", FLAKY_PIPELINE);
+
+    const started = await cli(["runs", "start", "flaky-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    const followed = await cli(["runs", "logs", id, "flaky", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(0);
+    // Both attempts' bytes, in the order they were written (SPEC 4.8), and nothing of the reader's
+    // own on stdout: the boundary markers are notes, so they go to stderr.
+    expect(followed.stdout).toBe(
+      "attempt 1 starting\n" +
+        "attempt 1 stopping, asking to be retried\n" +
+        "attempt 2 starting\n" +
+        "attempt 2 carrying on\n",
+    );
+    expect(followed.stdout).not.toContain("==>");
+    expect(followed.stderr).toMatch(/==> attempt 1 <==[\s\S]*==> attempt 2 <==/);
+    expect(followed.stderr).toContain(`run ${id} succeeded`);
+
+    // Under --json there is no marker to read: each chunk says which attempt it is from, and the
+    // chunks of both attempts join up to the whole log.
+    const json = await cli(["runs", "logs", id, "flaky", "--follow", "--interval", "100", "--json"], {
+      url: server.url,
+    });
+    expect(json.stderr).toBe("");
+    const chunks = json.stdout.trim().split("\n").map((line) => JSON.parse(line));
+    expect(new Set(chunks.map((chunk) => chunk.attempt))).toEqual(new Set([1, 2]));
+    expect(chunks.map((chunk) => chunk.text).join("")).toBe(
+      "attempt 1 starting\n" +
+        "attempt 1 stopping, asking to be retried\n" +
+        "attempt 2 starting\n" +
+        "attempt 2 carrying on\n",
+    );
+  });
+
+  test("a retried step that is already finished still prints every attempt", async () => {
+    server = await startServer();
+    await library();
+    await store("flaky-run", FLAKY_PIPELINE);
+
+    const started = await cli(["runs", "start", "flaky-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+    expect(await statusOf(id)).toBe("succeeded");
+
+    // Nothing is live any more, so the wait is over the moment it starts. That is no reason to drop
+    // the attempts before the last one: the step's log is all of them (SPEC 4.8).
+    const followed = await cli(["runs", "logs", id, "flaky", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(0);
+    expect(followed.stdout).toBe(
+      "attempt 1 starting\n" +
+        "attempt 1 stopping, asking to be retried\n" +
+        "attempt 2 starting\n" +
+        "attempt 2 carrying on\n",
+    );
+    expect(followed.stderr).toMatch(/==> attempt 1 <==[\s\S]*==> attempt 2 <==/);
+  });
+
+  test("--attempt pins one attempt, with --follow and without", async () => {
+    server = await startServer();
+    await library();
+    await store("flaky-run", FLAKY_PIPELINE);
+
+    const started = await cli(["runs", "start", "flaky-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    const plain = await cli(["runs", "logs", id, "flaky", "--attempt", "1"], { url: server.url });
+    expect(plain.code).toBe(0);
+    expect(plain.stdout).toBe("attempt 1 starting\nattempt 1 stopping, asking to be retried\n");
+
+    const followed = await cli(["runs", "logs", id, "flaky", "--attempt", "1", "--follow", "--interval", "100"], {
+      url: server.url,
+    });
+    expect(followed.code).toBe(0);
+    expect(followed.stdout).toBe("attempt 1 starting\nattempt 1 stopping, asking to be retried\n");
+    expect(followed.stdout).not.toContain("attempt 2");
+    expect(followed.stderr).not.toContain("==>");
+    expect(followed.stderr).toContain(`run ${id} succeeded`);
+  });
+
+  test("waits for a step that has no attempt yet, then reads it", async () => {
+    server = await startServer();
+    await library();
+    await store("waits-run", WAITS_PIPELINE);
+
+    const started = await cli(["runs", "start", "waits-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    // `two` cannot start until `one` has slept, so there is no attempt 1 to read yet. That is a
+    // step that has not started (SPEC 4.4), not the API's `attempt_not_found`.
+    const followed = await cli(["runs", "logs", id, "two", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(0);
+    expect(followed.stdout).toBe("hello world\n");
+    expect(followed.stderr).toContain("==> attempt 1 <==");
+    expect(followed.stderr).not.toContain("attempt_not_found");
+    expect(followed.stderr).toContain(`run ${id} succeeded`);
+  });
+
+  test("stops waiting when the run goes final and the step never had an attempt", async () => {
+    server = await startServer();
+    await library();
+    await store("skipped-run", SKIPPED_PIPELINE);
+
+    const started = await cli(["runs", "start", "skipped-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    const followed = await cli(["runs", "logs", id, "after", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(1);
+    expect(followed.stdout).toBe("");
+    expect(followed.stderr).toContain("step after skipped");
+    expect(followed.stderr).toContain(`run ${id} failed`);
+  });
+
+  test("a step that failed while the run carries on exits non-zero and names the step", async () => {
+    server = await startServer();
+    await library();
+    await store("half-run", HALF_PIPELINE);
+
+    const started = await cli(["runs", "start", "half-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    const followed = await cli(["runs", "logs", id, "boom", "--follow", "--interval", "100"], { url: server.url });
+    // `talk` is still running, so the run has not decided anything yet. The step you followed failed,
+    // and that is the answer.
+    expect(followed.code).toBe(1);
+    expect(followed.stdout).toBe("about to fail\n");
+    expect(followed.stderr).toContain(`run ${id} running`);
+    expect(followed.stderr).toContain("step boom failed (exit_nonzero)");
+  });
+
+  test("a step the run does not have is still the API's answer, with --follow", async () => {
+    server = await startServer();
+    await library();
+    await store("hello-run", helloPipeline("hello-run"));
+    const started = await cli(["runs", "start", "hello-run", "--json"], { url: server.url });
+    const id = parsed(started).id as string;
+
+    const followed = await cli(["runs", "logs", id, "nope", "--follow", "--interval", "100"], { url: server.url });
+    expect(followed.code).toBe(1);
+    expect(parsed({ ...followed, stdout: followed.stderr }).code).toBe("step_not_found");
   });
 });
 

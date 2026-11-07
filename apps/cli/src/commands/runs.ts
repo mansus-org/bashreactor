@@ -9,7 +9,15 @@ import { elapsed, localTime } from "../output.ts";
 import { publishRelativeBlocks, readPipelineFile } from "../local.ts";
 import { declaredTypes, readInputs } from "../inputs.ts";
 import { INTERVAL_FLAG, VERSION_FLAG, versionOf } from "./flags.ts";
-import type { LogChunk, PipelineVersion, RunRecord, RunStatus, RunSummary, StepRecord } from "../types.ts";
+import type {
+  LogChunk,
+  PipelineVersion,
+  RunRecord,
+  RunStatus,
+  RunSummary,
+  StepRecord,
+  StepStatus,
+} from "../types.ts";
 import { FINAL_STEP_STATUSES } from "../types.ts";
 import type { Printer } from "../output.ts";
 
@@ -145,20 +153,28 @@ export const runCommands: CommandSpec[] = [
     summary: "print a step's log from an offset, and say the next offset",
     args: [{ name: "<run-id>" }, { name: "<step>" }],
     flags: [
-      { name: "attempt", help: "which attempt to read (default: the step's last one)", value: "int", min: 1 },
+      {
+        name: "attempt",
+        help: "which attempt to read (default: the last one; --follow reads them all, in order)",
+        value: "int",
+        min: 1,
+      },
       { name: "offset", help: "byte offset to start at (default 0)", value: "int", min: 0 },
-      { name: "follow", help: "keep reading until the step is final, then exit with the run's status" },
+      {
+        name: "follow",
+        help: "keep reading until the step or the run is final; exit 1 unless the step succeeded",
+      },
       INTERVAL_FLAG,
     ],
     run: async (ctx) => {
       const id = ctx.args[0]!;
       const step = ctx.args[1]!;
-      const attempt = ctx.flag("attempt") !== undefined ? Number(ctx.flag("attempt")) : await lastAttempt(ctx, id, step);
+      const pinned = ctx.flag("attempt");
       let offset = ctx.int("offset", 0);
+      let openLine = false;
 
       // The log is bytes, written as they are: no newline added, nothing re-read. Under --json the
       // chunk object is the answer instead, and its `text` field holds the same bytes.
-      let openLine = false;
       const write = (chunk: LogChunk): void => {
         offset = chunk.next_offset;
         if (ctx.printer.json) {
@@ -171,40 +187,67 @@ export const runCommands: CommandSpec[] = [
       };
       // The server cuts an answer at its own size and says so with `truncated`; one read is not the log.
       // Under --json that means one chunk object per read.
-      const drain = async (): Promise<void> => {
+      const drain = async (attempt: number): Promise<void> => {
         for (;;) {
           const chunk = await getLog(ctx, id, step, attempt, offset);
           write(chunk);
           if (!chunk.truncated) return;
         }
       };
+      // Everything that is not the log goes to stderr, and nothing at all goes there under --json,
+      // where the chunk objects already say which attempt and which bytes they are.
       const note = (text: string): void => {
+        if (ctx.printer.json) return;
         if (openLine) ctx.io.err("");
         openLine = false;
         ctx.printer.note(text);
       };
+      const getRun = (): Promise<RunRecord> => ctx.client.json<RunRecord>("GET", `/v1/runs/${encodeURIComponent(id)}`);
 
       if (!ctx.has("follow")) {
-        await drain();
-        if (!ctx.printer.json) note(`next offset ${offset}`);
+        await drain(pinned === undefined ? await lastAttempt(ctx, id, step) : Number(pinned));
+        note(`next offset ${offset}`);
         return 0;
       }
 
+      // SPEC 4.8: a step's log is its attempts' logs in order, so --follow reads them that way and
+      // marks each boundary on stderr. `--attempt` pins one attempt and reads only that one.
+      let attempt: number | undefined = pinned === undefined ? undefined : Number(pinned);
       const interval = ctx.int("interval", 1000);
       for (;;) {
-        await drain();
-        const run = await ctx.client.json<RunRecord>("GET", `/v1/runs/${encodeURIComponent(id)}`);
-        const status = run.steps[step]?.status;
-        if (status !== undefined && FINAL_STEP_STATUSES.includes(status)) {
-          // Anything written between the two reads is still part of the answer.
-          await drain();
-          if (!ctx.printer.json) {
-            note(`next offset ${offset}`);
-            note(`run ${id} ${run.status}`);
-          }
-          return exitForRun(run.status);
+        const run = await getRun();
+        const record = run.steps[step];
+        // A step the run never had is the API's answer, --follow or not, so ask for its log and let
+        // the 404 come back rather than inventing one here.
+        if (record === undefined) await drain(1);
+
+        // Walk every attempt the step has, in order, before deciding whether the wait is over: a
+        // step that was already final when --follow started still has all of its attempts to print.
+        // `nextAttempt` answers undefined for a step that has no attempt yet (SPEC 4.4: it has not
+        // started), which is a wait and not the API's `attempt_not_found`.
+        for (;;) {
+          const next = pinned === undefined ? nextAttempt(record, attempt) : undefined;
+          if (next === undefined) break;
+          // Read the tail of the attempt being left before anything of the new one is printed.
+          if (attempt !== undefined) await drain(attempt);
+          attempt = next;
+          offset = 0;
+          note(`==> attempt ${next} <==`);
+          await drain(next);
         }
-        await Bun.sleep(interval);
+
+        const status = record?.status;
+        const stepIsFinal = status !== undefined && FINAL_STEP_STATUSES.includes(status);
+        if (!stepIsFinal && run.status === "running") {
+          await Bun.sleep(interval);
+          continue;
+        }
+        // Anything written between the two reads is still part of the answer.
+        if (attempt !== undefined) await drain(attempt);
+        note(`next offset ${offset}`);
+        note(`run ${id} ${run.status}`);
+        if (stepIsFinal && status !== "succeeded") note(`step ${step} ${status}${why(record)}`);
+        return exitFor(run.status, status);
       }
     },
   },
@@ -230,6 +273,39 @@ function firstStep(run: RunRecord): string {
 /** A run that is still going is not a failure; one that ended badly is, whatever the HTTP said. */
 function exitForRun(status: RunStatus): number {
   return status === "failed" || status === "cancelled" ? 1 : 0;
+}
+
+/**
+ * The exit code for a followed step. A step that ended any other way than `succeeded` is a failure
+ * for the person who was watching it, even when the run around it is still going and has not
+ * decided anything yet.
+ */
+function exitFor(run: RunStatus, step: StepStatus | undefined): number {
+  if (step !== undefined && step !== "succeeded") return 1;
+  return exitForRun(run);
+}
+
+/** Why a step ended the way it did, from its own `failure` (SPEC 4.9), when it has one. The engine
+ * sets `message` to the code itself for a plain exit, so do not print the same word twice. */
+function why(record: StepRecord | undefined): string {
+  const failure = record?.failure;
+  if (failure === null || failure === undefined) return "";
+  return failure.message === failure.code
+    ? ` (${failure.code})`
+    : ` (${failure.code}: ${failure.message})`;
+}
+
+/**
+ * The attempt to start reading next, once --follow has moved past the ones before it: the first one
+ * the step has, or the one after the attempt being read as soon as that one has ended. `undefined`
+ * means there is nothing new yet, which while the step is not final is a wait and not an error.
+ */
+function nextAttempt(record: StepRecord | undefined, current: number | undefined): number | undefined {
+  const attempts = record?.attempts ?? [];
+  if (current === undefined) return attempts[0]?.n;
+  // Never leave an attempt that is still being written: its bytes are not all there yet.
+  if (attempts.some((entry) => entry.n === current && entry.status === "running")) return undefined;
+  return attempts.find((entry) => entry.n > current)?.n;
 }
 
 async function waitForRun(ctx: Ctx, id: string): Promise<RunRecord> {
