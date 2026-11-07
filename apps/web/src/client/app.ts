@@ -48,6 +48,13 @@ export function navigate(path: string, options: { replace?: boolean } = {}): voi
   void render({ focus: true });
 }
 
+/**
+ * Which nav item a route sits under. `/blocks-new` is the writer for a block that does not exist
+ * yet, and it is still the Blocks screen: a new block cannot live at `/blocks/new`, because `new`
+ * is a legal block name and that address belongs to the block called `new`.
+ */
+const SECTION: Record<string, string> = { "blocks-new": "blocks" };
+
 function setChrome(route: Route): void {
   const identity = session.identity;
   nav.hidden = identity === null;
@@ -75,7 +82,7 @@ function setChrome(route: Route): void {
       "Sign out",
     ),
   );
-  const section = route.parts[0] ?? "";
+  const section = SECTION[route.parts[0] ?? ""] ?? route.parts[0] ?? "";
   nav.querySelectorAll<HTMLAnchorElement>("a[data-link]").forEach((link) => {
     const name = (link.getAttribute("href") ?? "").slice(BASE.length + 1);
     if (name === section) link.setAttribute("aria-current", "page");
@@ -83,8 +90,15 @@ function setChrome(route: Route): void {
   });
 }
 
+/**
+ * Whether the gate is what is on screen. Its own check puts its own errors in its own box; a 401
+ * from anywhere else is the gate's to announce.
+ */
+let gateIsShown = false;
+
 /** The gate: the first screen, and the one a 401 comes back to. */
 function renderGate(message: string, error?: GateError): void {
+  gateIsShown = true;
   setChrome(routeNow());
   const base = el("input", {
     id: "gate-base",
@@ -302,15 +316,19 @@ const screens: Record<string, Screen> = {
   pipeline: renderPipeline,
   runs: renderRuns,
   blocks: renderBlocks,
+  "blocks-new": renderBlocks,
 };
 
 async function render(options: { focus: boolean }): Promise<void> {
+  gateIsShown = false;
   const mine = ++renderCount;
   leaving?.abort();
   leaving = new AbortController();
   const signal = leaving.signal;
   const route = routeNow();
-  document.title = route.parts.length === 0 ? "Bashreactor" : `${route.parts.join(" ")} — Bashreactor`;
+  // The writer's address is not a name, so the tab does not read like one either.
+  const words = route.parts[0] === "blocks-new" ? ["New block"] : route.parts;
+  document.title = route.parts.length === 0 ? "Bashreactor" : `${words.join(" ")} — Bashreactor`;
 
   if (session.token === "") {
     renderGate("The token is what every call to /v1 carries. Nothing is stored on this device until you check it.");
@@ -324,8 +342,15 @@ async function render(options: { focus: boolean }): Promise<void> {
       session.identity = await api.whoami();
     } catch (caught) {
       if (mine !== renderCount) return;
-      signOut();
-      renderGate("The server did not accept the token.", caught instanceof ApiError ? caught : undefined);
+      // A 401 has already been answered: `onUnauthorized` has cleared the token and put the gate up
+      // with the server's own reason, and a second gate would only overwrite it.
+      if (caught instanceof ApiError && caught.status === 401) return;
+      // Anything else — no server, a 500, a wrong path — says nothing about the token, so it stays
+      // where it is. Dropping good credentials because a socket timed out is its own kind of lie.
+      renderGate(
+        "Nothing has checked this token yet, and nothing about it has changed.",
+        caught instanceof ApiError ? caught : undefined,
+      );
       return;
     }
   }
@@ -355,6 +380,9 @@ async function render(options: { focus: boolean }): Promise<void> {
     await screen(view, route, signal);
   } catch (caught) {
     if (mine !== renderCount) return;
+    // A 401 has already been answered where it was raised; a second gate would wipe the first one's
+    // reason. This is the same rule as the token check above, one screen further down.
+    if (caught instanceof ApiError && caught.status === 401) return;
     view.replaceChildren(
       errorBox(caught instanceof ApiError ? caught : { code: "internal_error", message: String(caught) }),
     );
@@ -362,11 +390,31 @@ async function render(options: { focus: boolean }): Promise<void> {
   if (mine === renderCount && options.focus) view.focus();
 }
 
-/** A 401 is the server saying the token is gone: the gate is the only honest place to be. */
+/**
+ * A 401 is the server saying the token is gone, so it is cleared here and nowhere else: a refused
+ * token left in storage comes back on the next page load and asks the same question.
+ *
+ * The message says which of the two it was. A token this page had already used had it taken away;
+ * a token it never got through with was refused on arrival. "No longer" is the difference between
+ * a token you still have and a token you have to go and mint.
+ */
 session.onUnauthorized = (error) => {
-  session.identity = null;
-  session.token = "";
-  renderGate("A call came back 401, so this token is no longer accepted.", error);
+  const hadWorked = session.identity !== null;
+  signOut();
+  // The gate's own check already shows the server's words in the gate, and re-rendering it here
+  // would wipe what the reader is typing.
+  if (gateIsShown) return;
+  // Whatever was drawing when the token died has to be told to stop, and told before the gate goes
+  // up: a run page left running finishes over the gate with an error card of its own, and its poller
+  // goes on asking with an empty bearer — whose late 401 would then clear a token typed since.
+  leaving?.abort();
+  renderCount++;
+  renderGate(
+    hadWorked
+      ? "A call came back 401, so this token is no longer accepted. It has been cleared from this browser: sign in with one that works."
+      : "The server refused that token, and it has been cleared from this browser. Nothing else was changed.",
+    error,
+  );
 };
 
 document.addEventListener("click", (event) => {

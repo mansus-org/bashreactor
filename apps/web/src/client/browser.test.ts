@@ -385,16 +385,15 @@ suite("the pages that set an inline style", () => {
     60_000,
   );
 
-  test.skip(
+  test(
     "the block writer opens without the app refusing its own style",
     async () => {
-      // SKIPPED, AND IT FAILS IF YOU UN-SKIP IT. The same defect as the test above, at
-      // apps/web/src/client/blocks.ts:351: `style: "margin:0"` on the "Start from" label, which the
-      // CSP drops the same way. BASHR-30 owns blocks.ts.
-      const { page, watch: pageWatch } = await screen(DESKTOP, "/app/blocks/new");
+      // Used to be skipped for two reasons. The inline `style: "margin:0"` on the "Start from" label
+      // is gone, so the CSP has nothing left to refuse; and the writer moved to /blocks-new, so the
+      // page no longer asks the API for a block called "new" and takes a 404 for its trouble.
+      const { page, watch: pageWatch } = await screen(DESKTOP, "/app/blocks-new");
       await waitFor(page, ".detail");
-      // 404 is the library saying there is no block called "new", which is how the writer route works.
-      expect(pageWatch.problems([404])).toEqual([]);
+      expect(pageWatch.problems()).toEqual([]);
       await page.close();
     },
     60_000,

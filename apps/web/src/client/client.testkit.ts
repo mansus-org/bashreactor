@@ -239,6 +239,9 @@ export class FakeElement {
 
   focus(): void {}
 
+  /** The app selects what a person typed so retyping is not needed; the fake only has to survive it. */
+  select(): void {}
+
   showModal(): void {
     this.open = true;
   }
@@ -321,6 +324,10 @@ class FakeStorage {
 
   removeItem(key: string): void {
     this.items.delete(key);
+  }
+
+  clear(): void {
+    this.items.clear();
   }
 }
 
