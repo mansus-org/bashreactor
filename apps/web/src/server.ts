@@ -11,6 +11,7 @@ import manifest from "../package.json";
 import { createApi, resolveConfig, resolveVersion, resumeRunningRuns, startServer, stopOnSignals } from "@bashreactor/api";
 import type { Api, ApiConfig } from "@bashreactor/api";
 import { mountApp } from "./index.ts";
+import { withForwardedScheme } from "./proxy.ts";
 
 const config = resolveConfig(process.env, resolveVersion(process.env, manifest.version));
 
@@ -19,7 +20,9 @@ const startup = startServer({
   build: (builtConfig: ApiConfig, log: (line: string) => void): Api => {
     const built = createApi({ config: builtConfig, log });
     const ui = mountApp((request) => built.fetch(request), { log });
-    return { ...built, fetch: async (request: Request) => await ui(request) };
+    // The scheme is put back before anything reads the URL, so the API's own `/` redirect is fixed
+    // by the same line and apps/api/ does not have to know it sits behind a proxy.
+    return { ...built, fetch: async (request: Request) => await ui(withForwardedScheme(request)) };
   },
 });
 const { api } = startup;

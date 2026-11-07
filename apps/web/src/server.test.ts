@@ -83,3 +83,28 @@ test("with no admin token the app still comes up, and /v1 says why it is closed"
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+// The cluster ends TLS at the proxy and its routers answer on https only, so a redirect that says
+// http sends the browser to a port nothing listens on. This is the difference between the site being
+// up and it being reachable.
+test("behind a proxy that ends TLS, the redirects keep the visitor on the scheme they came in on", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bashreactor-web-main-"));
+  const server = await serve({ BASHREACTOR_HOME: home, BASHREACTOR_ADMIN_TOKEN: ADMIN, BASHREACTOR_VERSION: "ci-web" });
+  const proxied = { "x-forwarded-proto": "https" };
+  try {
+    const root = await fetch(`http://127.0.0.1:${server.port}/`, { headers: proxied, redirect: "manual" });
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe(`https://127.0.0.1:${server.port}/app/`);
+
+    const app = await fetch(`http://127.0.0.1:${server.port}/app`, { headers: proxied, redirect: "manual" });
+    expect(app.status).toBe(301);
+    expect(app.headers.get("location")).toBe(`https://127.0.0.1:${server.port}/app/`);
+
+    // With no header the process is not behind anything, and it keeps saying what it sees.
+    const plain = await fetch(`http://127.0.0.1:${server.port}/`, { redirect: "manual" });
+    expect(plain.headers.get("location")).toBe(`http://127.0.0.1:${server.port}/app/`);
+  } finally {
+    await server.stop();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
