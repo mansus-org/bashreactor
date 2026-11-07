@@ -1,0 +1,9 @@
+name: retry-once
+description: One step left with the default budget of a single attempt.
+
+steps:
+  work:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 75
+    timeout: 30s

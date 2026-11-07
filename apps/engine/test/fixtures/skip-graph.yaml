@@ -1,0 +1,56 @@
+name: skip-graph
+description: One step that fails for good, everything downstream of it, and a branch that carries on.
+
+max_parallel: 4
+
+steps:
+  root:
+    uses: ./exit-code.sh
+    with:
+      # 78 is block_fatal: one attempt, no retry, so the failure lands while its dependants wait.
+      exit_code: 78
+
+  independent:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+
+  left:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [root]
+
+  right:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [root]
+
+  leaf:
+    name: Two levels below the failure
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [left]
+
+  join:
+    name: One parent succeeded, one was skipped
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [right, independent]
+
+  late:
+    name: Becomes eligible only after the failure
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [independent]
+
+  referrer:
+    name: Depends on root through an expression and no needs
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+      note: ${{ steps.root.outputs.done }}
