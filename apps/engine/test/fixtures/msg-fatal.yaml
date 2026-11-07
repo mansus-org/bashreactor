@@ -1,0 +1,8 @@
+name: msg-fatal
+description: One step that exits 78, the block's own "do not bother".
+steps:
+  gate:
+    uses: ./msg-exit.sh
+    with:
+      code: 78
+    timeout: 30s

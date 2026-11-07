@@ -1,0 +1,6 @@
+name: msg-bad-utf8
+description: A step whose string output is not valid UTF-8.
+steps:
+  garbled:
+    uses: ./msg-bad-utf8.sh
+    timeout: 30s

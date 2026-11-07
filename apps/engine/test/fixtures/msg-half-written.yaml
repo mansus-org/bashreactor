@@ -1,0 +1,6 @@
+name: msg-half-written
+description: A step that exits 0 having written only its first output.
+steps:
+  partial:
+    uses: ./msg-half-written.sh
+    timeout: 30s

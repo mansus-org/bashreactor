@@ -1,0 +1,7 @@
+name: msg-sleep
+description: A step whose 3s timeout is far shorter than the work.
+steps:
+  sleeper:
+    uses: ./msg-sleep.sh
+    timeout: 3s
+    kill_grace: 1s

@@ -1,0 +1,6 @@
+name: msg-bad-integer
+description: A step whose integer output holds something that is not an integer.
+steps:
+  badint:
+    uses: ./msg-bad-integer.sh
+    timeout: 30s

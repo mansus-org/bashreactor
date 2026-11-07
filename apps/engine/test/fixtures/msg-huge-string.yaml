@@ -1,0 +1,6 @@
+name: msg-huge-string
+description: A step whose string output is over the limit.
+steps:
+  huge:
+    uses: ./msg-huge-string.sh
+    timeout: 30s
