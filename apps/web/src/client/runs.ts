@@ -58,6 +58,25 @@ function valueText(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+/** The SPEC 5 words for whatever went wrong, so one line reads the same wherever it came from. */
+function errorWords(error: unknown): string {
+  return error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+}
+
+/** The body `errorBox` draws, whether the server answered in an error or something else threw. */
+function errorBody(error: unknown): { code: string; message: string; path?: string; file?: string } {
+  return error instanceof ApiError ? error : { code: "internal_error", message: String(error) };
+}
+
+/** An action the server said no to, kept on the page until it is dismissed or an action works. */
+interface Refusal {
+  kind: string;
+  error: { code: string; message: string; path?: string; file?: string };
+}
+
+/** What `fill` takes, so a builder can name what it returns without a type dom.ts keeps to itself. */
+type Children = Parameters<typeof fill>[1];
+
 export function renderRuns(view: HTMLElement, route: Route, signal: AbortSignal): void {
   const id = route.parts[1];
   if (id === undefined) {
@@ -163,10 +182,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   } catch (error) {
     if (signal.aborted) return;
     view.replaceChildren(
-      errorBox(
-        error instanceof ApiError ? error : { code: "internal_error", message: String(error) },
-        el("a", { class: "btn btn--ink", href: "/app/runs", "data-link": "" }, "All runs"),
-      ),
+      errorBox(errorBody(error), el("a", { class: "btn btn--ink", href: "/app/runs", "data-link": "" }, "All runs")),
     );
     return;
   }
@@ -178,6 +194,13 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   let follow = true;
   let paused = false;
   let busy = false;
+  // The server's own words after it refused an action, in state of its own because renderHead runs on
+  // every poll and would otherwise hide the box in the same tick the refusal arrived in. Cleared by a
+  // dismiss or by an action that works.
+  let refused: Refusal | null = null;
+  // The last read that failed, shown until a read succeeds. A page that has stopped getting polls
+  // keeps drawing the last good one, so it has to say that it has.
+  let lastError: string | null = null;
   let programmaticScroll = false;
   // Finished lines of `log` that have been handled by renderLog, and how many of those were not drawn.
   let shown = 0;
@@ -192,15 +215,81 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
 
   const title = el("h1", { class: "title" });
   const bigSign = el("div", { class: "runhead__sign" });
-  const meta = el("div", { class: "runhead__meta" });
-  const tools = el("div", { class: "runhead__tools" });
+  // The head is built once and updated in place: it holds the link to the pipeline, and a head
+  // rebuilt every second drops your focus off it.
+  const metaStamp = el("span", {});
+  const metaStarted = el("span", {});
+  const metaElapsed = el("span", {});
+  const metaCancel = el("span", { hidden: true }, "cancel requested");
+  const meta = el(
+    "div",
+    { class: "runhead__meta" },
+    metaStamp,
+    el("a", { href: `/app/pipeline/${run.pipeline}`, "data-link": "" }, run.pipeline),
+    metaStarted,
+    metaElapsed,
+    metaCancel,
+  );
+  const jump = el("input", {
+    id: "run-jump",
+    type: "text",
+    value: run.id,
+    spellcheck: "false",
+    onkeydown: (event) => {
+      if ((event as KeyboardEvent).key !== "Enter") return;
+      event.preventDefault();
+      const value = (event.target as HTMLInputElement).value.trim();
+      if (value !== "") navigate(`/runs/${value}`);
+    },
+  });
+  const cancelButton = el(
+    "button",
+    { class: "btn", type: "button", hidden: true, onclick: () => cancelDialog.showModal() },
+    "Cancel run",
+  );
+  const resumeButton = el(
+    "button",
+    { class: "btn", type: "button", hidden: true, onclick: () => void act("resume") },
+    "Resume",
+  );
+  const retryButton = el(
+    "button",
+    { class: "btn", type: "button", hidden: true, onclick: () => void act("retry") },
+    "Retry",
+  );
+  const readOnly = el("span", { class: "stamp stamp--type", hidden: true }, "read only");
+  // The alarm's own retry, built once for the same reason: it says how many steps it will reset, and
+  // that number is what changes, not the button.
+  const alarmRetry = el("button", { class: "btn btn--ink", type: "button", "data-action": "retry-all", onclick: () => void act("retry") });
+  // Built once, for the reason the step rows give below: what you type in the jump box and the focus
+  // on these buttons do not survive a rebuild, and renderHead runs every second.
+  const tools = el(
+    "div",
+    { class: "runhead__tools" },
+    el("div", { class: "field" }, el("label", { class: "label", for: "run-jump" }, "Run"), jump),
+    el("a", { class: "btn", href: "/app/runs", "data-link": "" }, "All runs"),
+    cancelButton,
+    resumeButton,
+    retryButton,
+    readOnly,
+  );
   const params = el("dl", { class: "params", "aria-label": "Inputs of this run" });
   const alarm = el("section", { class: "alarm", "aria-labelledby": "alarm-title", hidden: true });
   const stepList = el("ul", { class: "steps", "aria-label": "Steps of this run, in the order the pipeline declares them" });
   const panelTitle = el("h2", { class: "h2", id: "panel-title" });
   const panelMeta = el("p", { class: "logpanel__meta" });
   const panelOutputs = el("dl", { class: "outputs" });
-  const attemptPicker = el("div", { class: "attempts", role: "group", "aria-label": "Attempt whose log this is" });
+  const noAttempt = el("span", { class: "help" }, "This step has never started, so there is no log yet.");
+  const attemptPicker = el(
+    "div",
+    { class: "attempts", role: "group", "aria-label": "Attempt whose log this is" },
+    el("span", { class: "label", style: "margin:0" }, "Attempt"),
+    noAttempt,
+  );
+  // One button per attempt number, made the first time that number is seen and hidden when the step
+  // on screen has no such attempt, because a rebuilt button loses your focus and a step gains
+  // attempts while you watch it.
+  const attemptButtons = new Map<number, HTMLButtonElement>();
   const followButton = el("button", { class: "btn", type: "button", "aria-pressed": "true", onclick: toggleFollow }, "Follow");
   const pauseButton = el("button", { class: "btn", type: "button", onclick: togglePause }, "Pause");
   const logStatus = el("p", { class: "logpanel__status", id: "log-status" });
@@ -257,6 +346,18 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     if (timer !== undefined) window.clearTimeout(timer);
   });
 
+  /**
+   * Rebuild a node only when what it says has changed. This screen re-renders every second, and a
+   * rebuilt node takes your focus and whatever you had typed in it with it; the step rows below are
+   * the precedent.
+   */
+  const said = new WeakMap<HTMLElement, string>();
+  function say(node: HTMLElement, key: string, build: () => Children): void {
+    if (said.get(node) === key) return;
+    said.set(node, key);
+    fill(node, build());
+  }
+
   function stepNote(step: RunStep): string {
     const runSteps = run.steps;
     if (step.status === "waiting_retry") {
@@ -282,82 +383,111 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   function renderHead(): void {
     title.textContent = `Run ${run.id}`;
     document.title = `Run ${run.id} — Bashreactor`;
-    bigSign.replaceChildren(sign(state(run.status), "sign sign--large"));
+    const stamp = state(run.status);
+    say(bigSign, stamp, () => [sign(stamp, "sign sign--large")]);
+    metaStamp.replaceChildren(stateStamp(stamp));
     const elapsed = ((run.finished_at !== null ? Date.parse(run.finished_at) : Date.now()) - Date.parse(run.created_at)) / 1000;
-    fill(meta, [
-      stateStamp(state(run.status)),
-      el("a", { href: `/app/pipeline/${run.pipeline}`, "data-link": "" }, run.pipeline),
-      el("span", {}, `started ${when(run.created_at)}`),
-      el("span", {}, run.finished_at !== null ? `took ${duration(elapsed)}` : `running for ${duration(elapsed)}`),
-      run.cancel_requested_at !== null ? el("span", {}, "cancel requested") : null,
-    ]);
-    params.replaceChildren(
-      ...Object.entries(run.inputs).map(([key, value]) => el("div", {}, el("dt", {}, key), el("dd", {}, valueText(value)))),
+    metaStarted.textContent = `started ${when(run.created_at)}`;
+    metaElapsed.textContent = run.finished_at !== null ? `took ${duration(elapsed)}` : `running for ${duration(elapsed)}`;
+    metaCancel.hidden = run.cancel_requested_at === null;
+
+    // A run's inputs are fixed when it starts (SPEC 4.9), so this is built once and then left alone.
+    say(params, JSON.stringify(run.inputs), () =>
+      Object.entries(run.inputs).map(([key, value]) => el("div", {}, el("dt", {}, key), el("dd", {}, valueText(value)))),
     );
 
-    tools.replaceChildren(
+    // The controls already exist; only what they allow changes. Rebuilding them every second is what
+    // made the jump box forget what you typed and dropped your focus off Cancel.
+    const live = run.status === "running";
+    const writable = canWrite();
+    cancelButton.hidden = !(writable && live);
+    resumeButton.hidden = !(writable && live);
+    retryButton.hidden = !(writable && !live);
+    readOnly.hidden = writable;
+    cancelButton.disabled = busy;
+    resumeButton.disabled = busy;
+    retryButton.disabled = busy;
+    alarmRetry.disabled = busy;
+
+    renderAlarm();
+  }
+
+  /** Every step the run left failed, in the order the pipeline declares them. */
+  function failedSteps(): string[] {
+    return Object.keys(run.steps).filter((stepId) => run.steps[stepId]!.status === "failed");
+  }
+
+  /** What a manual retry sets back to pending, which is more than the steps that failed (4.6). */
+  function retryScope(): string {
+    const parts: string[] = [];
+    for (const status of ["failed", "skipped", "cancelled"] as const) {
+      const count = Object.values(run.steps).filter((step) => step.status === status).length;
+      if (count > 0) parts.push(`${count} ${status} ${count === 1 ? "step" : "steps"}`);
+    }
+    return parts.join(", ");
+  }
+
+  function renderAlarm(): void {
+    const failed = failedSteps();
+    // The box says one thing at a time: a refusal outranks the failures it was about. Both are
+    // rebuilt only when the words change, so the focus on a button inside it survives a poll.
+    const key =
+      refused !== null
+        ? `refused ${refused.kind} ${refused.error.code}`
+        : failed.map((stepId) => `${stepId} ${run.steps[stepId]!.failure?.code ?? ""}`).join(" · ");
+    alarm.hidden = key === "";
+    say(alarm, key, () => (refused !== null ? refusalBox(refused) : failed.length === 0 ? [] : failureBox(failed)));
+  }
+
+  /** The server said no to an action, and its own words stay up until they are dismissed or beaten. */
+  function refusalBox(refusal: Refusal): Children {
+    const kind = refusal.kind.charAt(0).toUpperCase() + refusal.kind.slice(1);
+    return [
+      el("h2", { class: "h2", id: "alarm-title" }, `${kind} refused`),
+      errorBox(refusal.error),
+      el("div", { class: "row" }, el("button", { class: "btn", type: "button", "data-action": "dismiss", onclick: dismissRefusal }, "Dismiss")),
+    ];
+  }
+
+  function dismissRefusal(): void {
+    refused = null;
+    renderAlarm();
+  }
+
+  /** Every failed step by name, each one a way to its log, and a retry labelled with what it does. */
+  function failureBox(failed: string[]): Children {
+    const reset = Object.values(run.steps).filter((step) => ["failed", "skipped", "cancelled"].includes(step.status)).length;
+    alarmRetry.textContent = `Retry ${reset} ${reset === 1 ? "step" : "steps"}`;
+    return [
       el(
-        "div",
-        { class: "field" },
-        el("label", { class: "label", for: "run-jump" }, "Run"),
-        el("input", {
-          id: "run-jump",
-          type: "text",
-          value: run.id,
-          spellcheck: "false",
-          onkeydown: (event) => {
-            if ((event as KeyboardEvent).key !== "Enter") return;
-            event.preventDefault();
-            const value = (event.target as HTMLInputElement).value.trim();
-            if (value !== "") navigate(`/runs/${value}`);
-          },
-        }),
+        "h2",
+        { class: "h2", id: "alarm-title" },
+        failed.length === 1 ? `${failed[0]} failed` : `${failed.length} steps failed`,
       ),
-      el("a", { class: "btn", href: "/app/runs", "data-link": "" }, "All runs"),
-    );
-    if (canWrite()) {
-      if (run.status === "running") {
-        tools.append(
-          el("button", { class: "btn", type: "button", disabled: busy, onclick: () => cancelDialog.showModal() }, "Cancel run"),
-          el("button", { class: "btn", type: "button", disabled: busy, onclick: () => void act("resume") }, "Resume"),
-        );
-      } else {
-        tools.append(el("button", { class: "btn", type: "button", disabled: busy, onclick: () => void act("retry") }, "Retry"));
-      }
-    } else {
-      tools.append(
-        el("span", { class: "stamp stamp--type" }, "read only"),
-      );
-    }
-
-    const failed = Object.keys(run.steps).find((step) => run.steps[step]!.status === "failed");
-    alarm.hidden = failed === undefined;
-    if (failed !== undefined) {
-      const step = run.steps[failed]!;
-      alarm.replaceChildren(
-        el("h2", { class: "h2", id: "alarm-title" }, `${failed} failed`),
-        el("p", {}, step.failure !== null ? `${step.failure.code}: ${step.failure.message}` : "The step exited with an error."),
-        el(
-          "div",
+      ...failed.map((stepId) => {
+        const step = run.steps[stepId]!;
+        return el(
+          "p",
           { class: "row" },
-          canWrite()
-            ? el("button", { class: "btn btn--ink", type: "button", onclick: () => void act("retry") }, `Retry from ${failed}`)
-            : el("span", { class: "stamp stamp--type" }, "read only"),
-          el(
-            "button",
-            {
-              class: "btn",
-              type: "button",
-              onclick: () => {
-                choose(failed, true);
-                stepList.querySelector<HTMLButtonElement>(`[data-step="${CSS.escape(failed)}"]`)?.focus();
-              },
-            },
-            "Read its log",
-          ),
-        ),
-      );
-    }
+          el("button", { class: "btn", type: "button", "data-log-step": stepId, onclick: () => showLog(stepId) }, stepId),
+          el("span", {}, step.failure !== null ? `${step.failure.code}: ${step.failure.message}` : "The step exited with an error."),
+        );
+      }),
+      canWrite()
+        ? el(
+            "p",
+            { class: "help" },
+            `Retry sets ${retryScope()} back to pending and runs them again. The steps that succeeded keep their results, and the work directories are kept.`,
+          )
+        : null,
+      el("div", { class: "row" }, canWrite() ? alarmRetry : el("span", { class: "stamp stamp--type" }, "read only")),
+    ];
+  }
+
+  /** Point the pane at one step's log and put the focus on its row, which is where the alarm sends you. */
+  function showLog(stepId: string): void {
+    choose(stepId, true);
+    stepList.querySelector<HTMLButtonElement>(`[data-step="${CSS.escape(stepId)}"]`)?.focus();
   }
 
   /** One row per step, built once: the run polls every second and a rebuilt row loses your focus. */
@@ -409,50 +539,74 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     const step = run.steps[selected];
     if (step === undefined) return;
     panelTitle.textContent = selected;
-    panelMeta.replaceChildren(
+    say(panelMeta, `${step.name} ${step.block.name} ${step.block.uses} ${step.block.sha256}`, () => [
       step.name !== selected ? `${step.name}. ` : "",
       "Runs ",
       el("a", { href: `/app/blocks/${step.block.name}`, "data-link": "" }, `${step.block.name} (${step.block.uses})`),
       ". ",
       `sha256 ${step.block.sha256.slice(0, 12)}…`,
-    );
-
-    const attempts = attemptsOf(run, selected);
-    fill(attemptPicker, [
-      el("span", { class: "label", style: "margin:0" }, "Attempt"),
-      ...attempts.map((n) =>
-        el(
-          "button",
-          {
-            class: "btn",
-            type: "button",
-            "aria-pressed": String(n === attempt),
-            onclick: () => {
-              attempt = n;
-              log = emptyLog;
-              shown = 0;
-              renderPanel();
-              void readLog(true);
-            },
-          },
-          String(n),
-        ),
-      ),
-      attempts.length === 0 ? el("span", { class: "help" }, "This step has never started, so there is no log yet.") : null,
     ]);
+
+    // One button per attempt number, made once and updated in place: renderPanel runs on every poll,
+    // and a picker rebuilt under your cursor or your focus loses it.
+    const attempts = attemptsOf(run, selected);
+    noAttempt.hidden = attempts.length !== 0;
+    for (const n of attempts) {
+      const button = attemptButtons.get(n) ?? newAttemptButton(n);
+      button.hidden = false;
+      button.setAttribute("aria-pressed", String(n === attempt));
+    }
+    for (const [n, button] of attemptButtons) if (!attempts.includes(n)) button.hidden = true;
 
     const outputs = step.status === "succeeded" && step.outputs !== null ? Object.entries(step.outputs) : [];
     panelOutputs.hidden = outputs.length === 0;
-    panelOutputs.replaceChildren(
-      ...outputs.map(([name, value]) => el("div", {}, el("dt", {}, name), el("dd", { tabindex: "0" }, valueText(value)))),
+    say(panelOutputs, outputs.map(([name, value]) => `${name}=${valueText(value)}`).join(","), () =>
+      outputs.map(([name, value]) => el("div", {}, el("dt", {}, name), el("dd", { tabindex: "0" }, valueText(value)))),
     );
 
+    renderLogStatus();
+  }
+
+  function newAttemptButton(n: number): HTMLButtonElement {
+    const button = el(
+      "button",
+      {
+        class: "btn",
+        type: "button",
+        "aria-pressed": "false",
+        onclick: () => {
+          attempt = n;
+          log = emptyLog;
+          shown = 0;
+          renderPanel();
+          void readLog(true);
+        },
+      },
+      String(n),
+    );
+    attemptButtons.set(n, button);
+    attemptPicker.append(button);
+    return button;
+  }
+
+  /** The one line that says where the log cursor is, and whether anything can still arrive. */
+  function renderLogStatus(): void {
+    const step = run.steps[selected];
+    const started = (step?.attempts.length ?? 0) > 0;
+    // Nothing more can be written to a finished run's log, so offering to follow or pause it is a
+    // button that does nothing.
+    const finished = run.status !== "running";
+    followButton.disabled = finished;
+    // A pause made while the run was live still has to be undoable after it ends, or the pane is
+    // stuck on half a log with the only way out of it greyed off.
+    pauseButton.disabled = !started || (finished && !paused);
     followButton.setAttribute("aria-pressed", String(follow));
     pauseButton.textContent = paused ? "Resume reading" : "Pause";
-    pauseButton.disabled = attempts.length === 0;
-    if (attempts.length === 0) logStatus.textContent = "Not started.";
+
+    if (lastError !== null) logStatus.textContent = `Lost the server, still trying. ${lastError}`;
+    else if (!started) logStatus.textContent = "Not started.";
     else if (paused) logStatus.textContent = `Paused. Last read at byte ${log.offset}.`;
-    else if (run.status === "running" && step.status === "running") logStatus.textContent = `Reading from byte ${log.offset}.`;
+    else if (!finished && step?.status === "running") logStatus.textContent = `Reading from byte ${log.offset}.`;
     else if (log.truncated) logStatus.textContent = `Read to byte ${log.offset}; more of the log is waiting.`;
     else logStatus.textContent = `Read to byte ${log.offset}.`;
   }
@@ -532,10 +686,13 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
 
   function choose(stepId: string, byHand: boolean): void {
     if (run.steps[stepId] === undefined) return;
+    const moved = stepId !== selected;
     selected = stepId;
     const attempts = attemptsOf(run, stepId);
     const newest = attempts.at(-1) ?? 0;
-    if (newest !== attempt) {
+    // The pane holds one step's and one attempt's bytes, so pointing it at another step always starts
+    // it again: the old offset belongs to a log that is no longer on screen.
+    if (moved || newest !== attempt) {
       attempt = newest;
       log = emptyLog;
       shown = 0;
@@ -592,6 +749,10 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
         const chunk: LogChunk = await api.log(run.id, selected, attempt, first ? 0 : log.offset);
         if (signal.aborted || generation !== readGeneration || key !== `${selected}/${attempt}`) return;
         log = feedLog(first ? emptyLog : log, chunk);
+        // A read that worked is the end of a bad stretch, and the line under the log is the place
+        // that says how far the cursor has got, so both are said here and not only at the end.
+        lastError = null;
+        renderLogStatus();
         renderLog(first);
         first = false;
         if (!chunk.truncated || paused) break;
@@ -605,9 +766,11 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       if (error instanceof ApiError && (error.code === "attempt_not_found" || error.code === "step_not_found")) {
         log = emptyLog;
         renderLog(true);
+        renderLogStatus();
         return;
       }
-      logStatus.textContent = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+      lastError = errorWords(error);
+      renderLogStatus();
     }
   }
 
@@ -617,6 +780,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     try {
       const next = kind === "cancel" ? await api.cancelRun(run.id) : kind === "retry" ? await api.retryRun(run.id) : await api.resumeRun(run.id);
       run = next;
+      refused = null;
+      lastError = null;
       announce(`${run.id} ${kind} requested.`);
       if (kind === "retry") {
         log = emptyLog;
@@ -628,12 +793,10 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       renderPanel();
       startPolling();
     } catch (error) {
-      // run_not_active, run_claimed, run_not_retryable: the server's own words, on the run's own page.
-      alarm.hidden = false;
-      alarm.replaceChildren(
-        el("h2", { class: "h2", id: "alarm-title" }, `${kind} refused`),
-        errorBox(error instanceof ApiError ? error : { code: "internal_error", message: String(error) }),
-      );
+      // run_not_active, run_claimed, run_not_retryable: the server's own words, on the run's own
+      // page, and in state of their own, because the `finally` below renders the head and a head
+      // render that only looks at the run would hide the box in the same tick the refusal arrived.
+      refused = { kind, error: errorBody(error) };
     } finally {
       busy = false;
       renderHead();
@@ -648,8 +811,11 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       if (signal.aborted) return;
       changed = stateChanged(run, next);
       run = next;
+      lastError = null;
     } catch (error) {
-      if (error instanceof ApiError) logStatus.textContent = `${error.code}: ${error.message}`;
+      if (signal.aborted) return;
+      // The page goes on showing the last good poll, so it has to say that it stopped getting one.
+      lastError = errorWords(error);
     }
 
     const attempts = attemptsOf(run, selected);
