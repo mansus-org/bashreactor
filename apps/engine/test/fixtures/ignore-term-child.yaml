@@ -1,0 +1,8 @@
+name: ignore-term-child
+description: A step that ignores SIGTERM and leaves a child that does too; the cancel's grace must end the group.
+steps:
+  stubborn:
+    uses: ./ignore-term-child.sh
+    # Far away on purpose: it is the cancel's kill_grace that has to end this, never the timeout.
+    timeout: 60s
+    kill_grace: 1s

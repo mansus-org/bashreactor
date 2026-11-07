@@ -25,13 +25,13 @@ afterAll(() => {
 
 const text = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
 
-async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000): Promise<void> {
+async function waitFor(predicate: () => Promise<boolean>, timeoutMs = 15_000, message = "waitFor timed out"): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await Bun.sleep(25);
   }
-  throw new Error("waitFor timed out");
+  throw new Error(message);
 }
 
 interface Process {
@@ -71,10 +71,10 @@ async function waitForBlockPid(store: FsRunStore, runId: string, stepId: string)
  * The background child spawn-child.sh leaves behind, read out of the attempt's log. It is alive when
  * this returns, which is what makes "it is gone afterwards" mean something.
  */
-async function waitForBackgroundChild(store: FsRunStore, runId: string): Promise<Process> {
+async function waitForBackgroundChild(store: FsRunStore, runId: string, stepId: string): Promise<Process> {
   let found: Process = { pid: 0, pid_start: 0 };
   await waitFor(async () => {
-    const log = await store.readFile(runId, "steps/spawn/attempts/1/log");
+    const log = await store.readFile(runId, `steps/${stepId}/attempts/1/log`);
     const match = log === null ? null : /background pid (\d+)/.exec(text(log));
     if (match === null) return false;
     const pid = Number(match[1]);
@@ -95,7 +95,7 @@ describe("cancellation reaches the process group", () => {
     const driving = engine.drive(id);
 
     const block = await waitForBlockPid(store, id, "spawn");
-    const child = await waitForBackgroundChild(store, id);
+    const child = await waitForBackgroundChild(store, id, "spawn");
     expect(isGone(child)).toBe(false);
 
     await engine.cancel(id);
@@ -135,7 +135,7 @@ describe("cancellation reaches the process group", () => {
     const driving = engine.drive(id);
 
     const block = await waitForBlockPid(store, id, "spawn");
-    const child = await waitForBackgroundChild(store, id);
+    const child = await waitForBackgroundChild(store, id, "spawn");
 
     const final = await driving;
     expect(final.status).toBe("failed");
@@ -158,16 +158,11 @@ describe("cancellation reaches the process group", () => {
     await expect(engine.cancel(record.id)).rejects.toThrow(expect.objectContaining({ code: "run_not_active" }));
   }, 30_000);
 
-  // SKIPPED, AND IT FAILS IF YOU UN-SKIP IT. Finding from BASHR-41: a cancel of a block that ignores
-  // SIGTERM never escalates to SIGKILL on the cancel's own `kill_grace`. applyCancel sends the TERM
-  // and checkTimeouts only escalates for an attempt whose `timedOut` flag is set, so the block runs
-  // until the step's `timeout` fires and only then is killed: measured 61.1s here with kill_grace 1s
-  // and timeout 60s, and with the default 24h timeout a cancel would hold its slot for a day.
-  // SPEC 2.9 covers a cancel as well as a timeout, and 4.6 step 3 says to stop the attempt "as in
-  // section 2.9". The fix is one more escalation in checkTimeouts: a cancelled attempt whose
-  // sigtermAt + killGraceMs has passed gets the SIGKILL the timed-out branch already sends. It
-  // belongs in engine.ts, which PR #29 is editing, so it is not in this branch.
-  test.skip("a block that ignores SIGTERM is killed with its group once the cancel's grace is up", async () => {
+  // SPEC 2.9 and 4.6 step 3 cover a cancel as well as a timeout, so the SIGKILL that ends a block
+  // which ignores SIGTERM belongs to the cancel's own kill_grace. It used to belong to timeouts only,
+  // and this died at the 60s step timeout instead: measured 61.1s, and with the default 24h timeout a
+  // cancel would have held its slot for a day.
+  test("a block that ignores SIGTERM is killed with its group once the cancel's grace is up", async () => {
     const store = new FsRunStore(newRoot());
     const engine = new Engine({ store });
     const record = await engine.start(fixture("ignore-term.yaml"));
@@ -183,4 +178,48 @@ describe("cancellation reaches the process group", () => {
     expect(final.status).toBe("cancelled");
     expect(final.steps.stubborn!.attempts[0]!.status).toBe("cancelled");
   }, 30_000);
+
+  test("the cancel's own grace ends a block that ignores SIGTERM, not the step's timeout", async () => {
+    const store = new FsRunStore(newRoot());
+    const engine = new Engine({ store });
+    const record = await engine.start(fixture("ignore-term.yaml"));
+    const id = record.id;
+    const driving = engine.drive(id);
+    const block = await waitForBlockPid(store, id, "stubborn");
+
+    const cancelledAt = Date.now();
+    await engine.cancel(id);
+    // Wait past where the fix lands but stop short of the 60s timeout, so the assertion below is what
+    // fails on a regression rather than a generic wait. ignore-term.yaml is kill_grace 1s, timeout 60s.
+    await waitFor(() => Promise.resolve(isGone(block)), 45_000, "the block outlived the cancel's grace");
+    expect(Date.now() - cancelledAt).toBeLessThan(15_000);
+
+    const final = await driving;
+    const attempt = final.steps.stubborn!.attempts[0]!;
+    expect(attempt.status).toBe("cancelled");
+    expect(attempt.failure).toMatchObject({ code: "cancelled" });
+    // The same span read out of run.json, so the timing is the record's, not the test's own clock.
+    expect(Date.parse(attempt.finished_at!) - Date.parse(final.cancel_requested_at!)).toBeLessThan(15_000);
+  }, 90_000);
+
+  test("the SIGKILL a cancel escalates to takes the block's children with it", async () => {
+    const store = new FsRunStore(newRoot());
+    const engine = new Engine({ store });
+    const record = await engine.start(fixture("ignore-term-child.yaml"));
+    const id = record.id;
+    const driving = engine.drive(id);
+    const block = await waitForBlockPid(store, id, "stubborn");
+    const child = await waitForBackgroundChild(store, id, "stubborn");
+
+    await engine.cancel(id);
+    // The child ignores SIGTERM as the block does, so nothing short of the escalated SIGKILL to the
+    // group ends it: a fix that only ever signalled the leader would leave this running until the step
+    // fires its 60s timeout.
+    await waitFor(() => Promise.resolve(isGone(child)), 45_000, "the child outlived the cancel's grace");
+    expect(isGone(block)).toBe(true);
+
+    const final = await driving;
+    expect(final.status).toBe("cancelled");
+    expect(final.steps.stubborn!.attempts[0]!.status).toBe("cancelled");
+  }, 90_000);
 });

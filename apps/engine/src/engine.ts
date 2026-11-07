@@ -563,11 +563,16 @@ export class Engine {
     const now = Date.now();
     for (const attempt of state.active.values()) {
       if (attempt.finished) continue;
-      if (!attempt.timedOut && now >= attempt.deadline) {
+      // SPEC 2.9 and 4.6 step 3: a cancel starts the same grace clock a timeout does, so the
+      // escalation belongs to whichever of the two started it and a block that ignores SIGTERM dies
+      // on the cancel's `kill_grace` rather than waiting out a `timeout` that may be 24h away. A
+      // deadline reached during a cancel's grace must not restart that clock with a second TERM.
+      const stopping = attempt.timedOut || attempt.cancelled;
+      if (!stopping && now >= attempt.deadline) {
         attempt.timedOut = true;
         attempt.sigtermAt = now;
         sendGroupSignal(attempt.pid, "SIGTERM");
-      } else if (attempt.timedOut && !attempt.sigkilled && attempt.sigtermAt !== null && now >= attempt.sigtermAt + attempt.killGraceMs) {
+      } else if (stopping && !attempt.sigkilled && attempt.sigtermAt !== null && now >= attempt.sigtermAt + attempt.killGraceMs) {
         attempt.sigkilled = true;
         sendGroupSignal(attempt.pid, "SIGKILL");
       }
