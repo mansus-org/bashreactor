@@ -15,6 +15,8 @@ import { authenticate, authorize } from "./auth.ts";
 import type { Access, Identity } from "./auth.ts";
 import { stagePipeline } from "./staging.ts";
 import { TokenStore } from "./tokens.ts";
+import { archiveBody, buildManifest, fileResponse } from "./run-files.ts";
+import type { FileScope } from "./run-files.ts";
 
 // Where the web UI is mounted, by apps/web/src/index.ts. `GET /` sends a person there.
 const APP_PATH = "/app";
@@ -259,6 +261,46 @@ export function createApi(deps: ApiDependencies): Api {
     });
   });
 
+  // --- a run's files (BASHR-47) ---------------------------------------------
+  //
+  // Three read-only routes over one run's own directory. Everything that decides what a path may name
+  // lives in run-files.ts; these handlers only say which access is needed and where the run directory is.
+
+  route("GET", "/v1/runs/:id/files", "read", async ({ params, url }) => {
+    const id = runId(params.id!);
+    const record = await requiredRun(id);
+    const step = url.searchParams.get("step") ?? undefined;
+    const attempt = optionalAttempt(url);
+    requireStepAndAttempt(record, id, step, attempt);
+    return json(200, buildManifest(record, runDirOf(id), { step, attempt, scope: scopeOf(url) }));
+  });
+
+  route("GET", "/v1/runs/:id/file", "read", async ({ params, url }) => {
+    const id = runId(params.id!);
+    const record = await requiredRun(id);
+    const path = url.searchParams.get("path");
+    if (path === null) throw new ApiError("bad_request", "give the file with ?path=", { path: "path" });
+    return fileResponse(record, runDirOf(id), path);
+  });
+
+  route("GET", "/v1/runs/:id/archive", "read", async ({ params, url }) => {
+    const id = runId(params.id!);
+    const record = await requiredRun(id);
+    const step = url.searchParams.get("step") ?? undefined;
+    const attempt = optionalAttempt(url);
+    requireStepAndAttempt(record, id, step, attempt);
+
+    const archive = archiveBody(record, runDirOf(id), { step, attempt });
+    const headers: Record<string, string> = {
+      "content-type": "application/gzip",
+      "x-content-type-options": "nosniff",
+      "content-disposition": `attachment; filename="${archive.filename}"`,
+      "x-run-skipped": String(archive.skipped),
+    };
+    if (archive.partial) headers["x-run-partial"] = "true";
+    return new Response(archive.body, { status: 200, headers });
+  });
+
   // --- dispatch ------------------------------------------------------------
 
   async function dispatch(request: Request, who: { name: string }): Promise<Response> {
@@ -342,6 +384,11 @@ export function createApi(deps: ApiDependencies): Api {
     if (name === undefined) throw new ApiError("missing_input", 'give "pipeline" or "yaml"', { path: "pipeline" });
     const version = optionalInteger(body, "version");
     return pipelineVersion(store, name, version === undefined ? "latest" : String(version)).yaml;
+  }
+
+  /** Where a run's own directory is. The engine's store owns that answer (SPEC 4.2). */
+  function runDirOf(id: string): string {
+    return engine.store.layout(id).runDir;
   }
 
   async function requiredRun(id: string): Promise<RunRecord> {
@@ -493,6 +540,44 @@ function decodeSegment(part: string): string {
     return decodeURIComponent(part);
   } catch {
     throw new ApiError("bad_request", `"${part}" is not a valid percent-encoded path segment`);
+  }
+}
+
+// The three file routes take their narrowing in the query string, where a wrong value is the same
+// kind of mistake as a wrong offset on the log route.
+function optionalAttempt(url: URL): number | undefined {
+  const raw = url.searchParams.get("attempt");
+  return raw === null ? undefined : parseIntegerParam("attempt", raw, 1);
+}
+
+const FILE_SCOPES: readonly string[] = ["outputs", "work", "logs", "all"];
+
+function scopeOf(url: URL): FileScope {
+  const raw = url.searchParams.get("scope") ?? "all";
+  if (!FILE_SCOPES.includes(raw)) {
+    throw new ApiError("type_mismatch", `scope must be one of ${FILE_SCOPES.join(", ")}, got "${raw}"`, {
+      path: "scope",
+    });
+  }
+  return raw as FileScope;
+}
+
+/** A `step_not_found` / `attempt_not_found` for a query that names neither, exactly as the log route. */
+function requireStepAndAttempt(
+  record: RunRecord,
+  id: string,
+  step: string | undefined,
+  attempt: number | undefined,
+): void {
+  if (step === undefined) return;
+  const found = Object.hasOwn(record.steps, step) ? record.steps[step] : undefined;
+  if (found === undefined) {
+    throw new ApiError("step_not_found", `run "${id}" has no step "${step}"`, { path: `steps.${step}` });
+  }
+  if (attempt !== undefined && !found.attempts.some((entry) => entry.n === attempt)) {
+    throw new ApiError("attempt_not_found", `step "${step}" of run "${id}" has no attempt ${attempt}`, {
+      path: `steps.${step}.attempts`,
+    });
   }
 }
 
