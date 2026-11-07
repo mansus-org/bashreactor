@@ -7,7 +7,7 @@
 // inside the run directory; and no component of it, read with `lstat` from the run directory down, is
 // a symlink. Nothing here follows a link, in a single download or in an archive.
 
-import { lstatSync, readdirSync, type Stats } from "node:fs";
+import { closeSync, lstatSync, openSync, readdirSync, readSync, type Stats } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import type { RunRecord } from "@bashreactor/engine";
 import { ApiError } from "./errors.ts";
@@ -296,6 +296,50 @@ function downloadHeaders(filename: string, size: number, partial: boolean): Reco
   return headers;
 }
 
+/**
+ * The bytes of one file, in bounded chunks, pulled only when the reader has taken the last one.
+ *
+ * `Bun.file(...).stream()` is the shorter thing to write and it reads ahead by tens of megabytes on a
+ * 300 MB file, which is the exact size this has to survive. Reading a fixed 64 KB per pull keeps the
+ * whole response inside a few hundred kilobytes no matter how big the file is, and stops at the size
+ * the header already promised, so a file a running block is still appending to cannot desynchronise
+ * the stream from its own `content-length`.
+ */
+function fileStream(absolute: string, size: number): ReadableStream<Uint8Array> {
+  const CHUNK = 64 * 1024;
+  let fd: number | null = null;
+  let position = 0;
+  return new ReadableStream<Uint8Array>({
+    start() {
+      fd = openSync(absolute, "r");
+    },
+    pull(controller) {
+      const remaining = size - position;
+      if (remaining <= 0) {
+        closeSync(fd!);
+        fd = null;
+        controller.close();
+        return;
+      }
+      const buffer = new Uint8Array(Math.min(CHUNK, remaining));
+      const read = readSync(fd!, buffer, 0, buffer.length, position);
+      if (read === 0) {
+        // The file is shorter than its own size: a block truncated it mid-download. End the body
+        // where it ends rather than hang or invent bytes.
+        closeSync(fd!);
+        fd = null;
+        controller.close();
+        return;
+      }
+      position += read;
+      controller.enqueue(buffer.subarray(0, read));
+    },
+    cancel() {
+      if (fd !== null) closeSync(fd);
+    },
+  });
+}
+
 /** One file of a run, streamed. Nothing here reads the file: the body is the file. */
 export function fileResponse(record: RunRecord, runDir: string, supplied: string): Response {
   const target = runPathOrThrow(runDir, supplied);
@@ -307,7 +351,7 @@ export function fileResponse(record: RunRecord, runDir: string, supplied: string
   if (!target.stat.isFile()) {
     throw new ApiError("file_not_found", `"${supplied}" is not a regular file`, { path: supplied });
   }
-  return new Response(Bun.file(target.absolute), {
+  return new Response(fileStream(target.absolute, target.stat.size), {
     status: 200,
     headers: downloadHeaders(target.relative, target.stat.size, record.status === "running"),
   });
@@ -388,6 +432,16 @@ export function archiveBody(record: RunRecord, runDir: string, choice: ArchiveCh
   };
 }
 
+/** The same bytes as `fileStream`, as an async iterator, for the archive generator. */
+async function* readChunks(absolute: string, size: number): AsyncGenerator<Uint8Array> {
+  const reader = fileStream(absolute, size).getReader();
+  for (;;) {
+    const next = await reader.read();
+    if (next.done) return;
+    yield next.value;
+  }
+}
+
 const BLOCK = 512;
 const ZERO_BLOCK = new Uint8Array(BLOCK);
 
@@ -424,9 +478,7 @@ async function* tarEntries(
     if (directory) continue;
     const absolute = join(runDir, entry.path);
     if (!isInside(runDir, absolute)) continue;
-    for await (const chunk of Bun.file(absolute).stream()) {
-      yield chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk as ArrayBuffer);
-    }
+    for await (const chunk of readChunks(absolute, size)) yield chunk;
     const padding = size % BLOCK === 0 ? 0 : BLOCK - (size % BLOCK);
     if (padding > 0) yield ZERO_BLOCK.subarray(0, padding);
   }
