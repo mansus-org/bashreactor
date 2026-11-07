@@ -6,6 +6,7 @@ import type { CommandSpec } from "../args.ts";
 import { usage } from "../errors.ts";
 import { localTime } from "../output.ts";
 import { isReadableFile } from "../connection.ts";
+import { blockUploadBody } from "../local.ts";
 import { VERSION_FLAG, versionOf } from "./flags.ts";
 import type { BlockList, BlockVersion } from "../types.ts";
 
@@ -97,9 +98,13 @@ export const blockCommands: CommandSpec[] = [
       if (!isReadableFile(path)) {
         throw usage(`"${path}" is not a file`, { code: "file_input_not_found", file: path });
       }
-      const created = await ctx.client.json<BlockVersion>("POST", `/v1/blocks/${encodeURIComponent(name)}/versions`, {
-        body: { content: readFileSync(path, "utf8") },
-      });
+      // The file's bytes, not its text: SPEC 2 makes the SHA-256 of those bytes the version's
+      // identity, and reading a block as UTF-8 text would rewrite whatever is not.
+      const created = await ctx.client.json<BlockVersion>(
+        "POST",
+        `/v1/blocks/${encodeURIComponent(name)}/versions`,
+        { body: blockUploadBody(readFileSync(path)) },
+      );
       ctx.printer.emit(created, (p) => {
         p.line(`added ${created.name}@${created.version}  ${created.size} bytes  ${created.sha256.slice(0, SHORT_SHA)}`);
       });
