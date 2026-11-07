@@ -3,7 +3,9 @@
 // unless the person asked to.
 
 import { parsePipeline } from "@bashreactor/core";
-import type { CommandSpec, Ctx } from "../args.ts";
+import { existsSync, mkdirSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
+import type { CommandSpec, Ctx, FlagSpec } from "../args.ts";
 import { usage } from "../errors.ts";
 import { elapsed, localTime } from "../output.ts";
 import { publishRelativeBlocks, readPipelineFile } from "../local.ts";
@@ -12,6 +14,7 @@ import { INTERVAL_FLAG, VERSION_FLAG, versionOf } from "./flags.ts";
 import type {
   LogChunk,
   PipelineVersion,
+  RunFileManifest,
   RunRecord,
   RunStatus,
   RunSummary,
@@ -26,6 +29,22 @@ const SUMMARY: Record<"cancel" | "retry" | "resume", string> = {
   retry: "retry a failed or cancelled run from where it stopped",
   resume: "take up a run left `running` by an engine that died",
 };
+
+/** Where a download goes, and whether an existing file may be replaced. */
+const OUTPUT_FLAG = {
+  name: "out",
+  short: "-o",
+  help: "where to write it (default: the name the server offered)",
+  value: "string",
+} as const satisfies FlagSpec;
+
+const FORCE_FLAG = { name: "force", help: "overwrite the file if it is already there" } as const satisfies FlagSpec;
+
+/** The step and attempt a manifest or an archive may be narrowed to. */
+const STEP_FLAGS: readonly FlagSpec[] = [
+  { name: "step", help: "only this step", value: "string" },
+  { name: "attempt", help: "only this attempt of that step", value: "int", min: 1 },
+];
 
 export const runCommands: CommandSpec[] = [
   {
@@ -253,7 +272,153 @@ export const runCommands: CommandSpec[] = [
       }
     },
   },
+  {
+    group: "runs",
+    name: "files",
+    summary: "what a run wrote, and how big each file is",
+    args: [{ name: "<run-id>" }],
+    flags: [
+      ...STEP_FLAGS,
+      {
+        name: "scope",
+        help: "which parts to list",
+        value: "string",
+        choices: ["outputs", "work", "logs", "all"],
+      },
+    ],
+    run: async (ctx) => {
+      const manifest = await ctx.client.json<RunFileManifest>("GET", `/v1/runs/${encodeURIComponent(ctx.args[0]!)}/files`, {
+        query: { step: ctx.flag("step"), attempt: ctx.flag("attempt"), scope: ctx.flag("scope") },
+      });
+      ctx.printer.emit(manifest, (p) => renderManifest(p, manifest));
+      return 0;
+    },
+  },
+  {
+    group: "runs",
+    name: "download",
+    summary: "save one file a run wrote",
+    args: [{ name: "<run-id>" }, { name: "<path>" }],
+    flags: [OUTPUT_FLAG, FORCE_FLAG],
+    run: async (ctx) => {
+      const id = ctx.args[0]!;
+      const path = ctx.args[1]!;
+      const response = await ctx.client.bytes("GET", `/v1/runs/${encodeURIComponent(id)}/file`, {
+        query: { path },
+      });
+      const destination = resolve(ctx.cwd, ctx.flag("out") ?? basename(path));
+      const saved = await save(ctx, response, destination);
+      ctx.printer.emit(saved, (p) => p.line(`${path}  ${sizeText(saved.bytes)}  ${saved.file}`));
+      return 0;
+    },
+  },
+  {
+    group: "runs",
+    name: "archive",
+    summary: "save a run, a step or an attempt as one tar.gz",
+    args: [{ name: "<run-id>" }],
+    flags: [OUTPUT_FLAG, FORCE_FLAG, ...STEP_FLAGS],
+    run: async (ctx) => {
+      const id = ctx.args[0]!;
+      const response = await ctx.client.bytes("GET", `/v1/runs/${encodeURIComponent(id)}/archive`, {
+        query: { step: ctx.flag("step"), attempt: ctx.flag("attempt") },
+      });
+      // The server names the archive after what it holds; only a name it did not offer is invented here.
+      const offered = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1];
+      const destination = resolve(ctx.cwd, ctx.flag("out") ?? offered ?? `${id}.tar.gz`);
+      const saved = await save(ctx, response, destination);
+      const skipped = Number(response.headers.get("x-run-skipped") ?? "0");
+      ctx.printer.emit(saved, (p) => {
+        p.line(`${id}  ${sizeText(saved.bytes)}  ${saved.file}`);
+        // A link a block planted is left out rather than followed, and the person saving this should
+        // know something was left out rather than find a smaller tree than the run has.
+        if (skipped > 0) p.line(`${skipped} link or special file(s) skipped: a run file is never followed through a link`);
+      });
+      return 0;
+    },
+  },
 ];
+
+/** Where a download went, as the answer to a download command. */
+interface Saved {
+  file: string;
+  bytes: number;
+  run: string;
+}
+
+/**
+ * Write the response to a file without holding it. An existing file is not touched unless `--force`,
+ * because a half-written download is worse than no download and a person's own file is not ours to
+ * replace on a guess.
+ */
+async function save(ctx: Ctx, response: Response, destination: string): Promise<Saved> {
+  if (existsSync(destination) && !ctx.has("force")) {
+    throw usage(`"${destination}" already exists; give --force to overwrite it`, { file: destination });
+  }
+  const directory = dirname(destination);
+  if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
+  // The Response, not `response.body`: Bun.write handed a web ReadableStream writes the 23-byte
+  // string "[object ReadableStream]" and reports success. Handed the Response it streams the body.
+  const written = await Bun.write(destination, response);
+  return { file: destination, bytes: Number(written), run: ctx.args[0]! };
+}
+
+function sizeText(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return "-";
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = "B";
+  for (const next of units) {
+    if (value < 1024) break;
+    value /= 1024;
+    unit = next;
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${unit}`;
+}
+
+function renderManifest(p: Printer, manifest: RunFileManifest): void {
+  p.fields([
+    ["run", manifest.run],
+    ["status", manifest.status],
+    ["partial", manifest.partial ? "yes: the run is still writing" : "no"],
+  ]);
+
+  if (manifest.outputs.length > 0) {
+    p.line("");
+    p.line("outputs");
+    p.table(
+      ["NAME", "SIZE", "STEP", "ATTEMPT", "PATH"],
+      manifest.outputs.map((entry) => [
+        entry.name,
+        entry.size === null ? "missing" : sizeText(entry.size),
+        entry.step,
+        String(entry.attempt),
+        entry.path,
+      ]),
+    );
+  }
+
+  for (const [stepId, step] of Object.entries(manifest.steps)) {
+    for (const attempt of step.attempts) {
+      p.line("");
+      p.line(`${stepId} attempt ${attempt.n} — ${attempt.status}${attempt.partial ? ", partial" : ""}`);
+      const rows: (readonly string[])[] = [];
+      if (attempt.log !== undefined) rows.push(["log", sizeText(attempt.log.size), attempt.log.path]);
+      for (const entry of attempt.outputs ?? []) {
+        rows.push(["output", entry.kind === undefined ? sizeText(entry.size) : entry.kind, entry.path]);
+      }
+      for (const entry of attempt.work ?? []) {
+        rows.push(["work", entry.kind === undefined ? sizeText(entry.size) : entry.kind, entry.path]);
+      }
+      if (rows.length === 0) {
+        p.line("  nothing on disk");
+        continue;
+      }
+      p.table(["", "SIZE", "PATH"], rows);
+    }
+  }
+}
 
 function isFileTarget(target: string): boolean {
   return /\.(ya?ml)$/i.test(target);

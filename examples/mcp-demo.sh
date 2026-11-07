@@ -61,7 +61,7 @@ step "1. the tools"
 tools=$(curl -sS -X POST "$url" -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 note "$(jq -r '[.result.tools[].name] | join(" ")' <<<"$tools")"
-check "one tool per route the API offers" "19" "$(jq -r '.result.tools | length' <<<"$tools")"
+check "one tool per route the API offers" "20" "$(jq -r '.result.tools | length' <<<"$tools")"
 
 step "2. the library, and a block's contract"
 check "list_block_versions" "1" "$(call list_block_versions '{"name":"generate-corpus"}' | jq '.versions | length')"

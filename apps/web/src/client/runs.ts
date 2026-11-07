@@ -10,10 +10,46 @@ import { MAX_DRAWN_LINES, clipLine, emptyLog, feedLog, logLines } from "./logs.j
 import type { LogLine, LogState } from "./logs.js";
 import type { Route } from "./app.js";
 import { navigate } from "./app.js";
-import type { Attempt, LogChunk, Run, RunStep, RunSummary } from "./api.js";
+import type { Attempt, LogChunk, Run, RunFiles, RunStep, RunSummary } from "./api.js";
 
 /** How often a live run is re-read. The log is a byte offset, so this is a cursor, not a stream. */
 const POLL_MS = 1000;
+
+/**
+ * A link to one of a run's files. The href is the real API address, so it can be copied, opened in a
+ * new tab against a server that takes a token some other way, or read by whatever is checking that a
+ * page says what it links to; the click goes through the API client instead, because that is the only
+ * thing holding the bearer token (SPEC 4.1) and a navigation the browser makes alone cannot carry it.
+ */
+function downloadLink(href: string, label: string, onClick: () => void, size?: number): HTMLElement {
+  return el(
+    "a",
+    {
+      class: "file",
+      href,
+      "data-download": label,
+      onclick: (event: Event) => {
+        event.preventDefault();
+        onClick();
+      },
+    },
+    label,
+    ...(size === undefined ? [] : [el("span", { class: "file__size" }, ` ${bytes(size)}`)]),
+  );
+}
+
+/** Bytes the way a person reads them, because a run that ingested URLs has gigabytes in it. */
+function bytes(count: number): string {
+  if (count < 1024) return `${count} B`;
+  const units = ["kB", "MB", "GB", "TB"];
+  let value = count / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
+}
 
 /**
  * The statuses this screen can stamp: the seven step statuses of SPEC 4.4, the run statuses that
@@ -203,6 +239,9 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   // keeps drawing the last good one, so it has to say that it has.
   let lastError: string | null = null;
   let programmaticScroll = false;
+  // The manifest of downloadable files, read once per run rather than on every poll: what a run can
+  // hand out does not change while you watch it, and a second of polling should not refetch a tree.
+  let files: RunFiles | null = null;
   // Finished lines of `log` that have been handled by renderLog, and how many of those were not drawn.
   let shown = 0;
   let notDrawn = 0;
@@ -271,6 +310,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     { class: "runhead__tools" },
     el("div", { class: "field" }, el("label", { class: "label", for: "run-jump" }, "Run"), jump),
     el("a", { class: "btn", href: "/app/runs", "data-link": "" }, "All runs"),
+    downloadLink(api.runArchiveUrl(run.id), "Download the run", () => void api.saveRunArchive(run.id)),
+    downloadLink(api.runManifestUrl(run.id), "Download the manifest", () => void api.saveRunManifest(run.id)),
     cancelButton,
     resumeButton,
     retryButton,
@@ -282,6 +323,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   const panelTitle = el("h2", { class: "h2", id: "panel-title" });
   const panelMeta = el("p", { class: "logpanel__meta" });
   const panelOutputs = el("dl", { class: "outputs" });
+  const panelFiles = el("div", { class: "files", "aria-label": "Files of this attempt" });
   const noAttempt = el("span", { class: "help" }, "This step has never started, so there is no log yet.");
   const attemptPicker = el(
     "div",
@@ -339,6 +381,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
       panelMeta,
       attemptPicker,
       panelOutputs,
+      panelFiles,
       logNote,
       logBox,
     )),
@@ -564,6 +607,37 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     panelOutputs.hidden = outputs.length === 0;
     say(panelOutputs, outputs.map(([name, value]) => `${name}=${valueText(value)}`).join(","), () =>
       outputs.map(([name, value]) => el("div", {}, el("dt", {}, name), el("dd", { tabindex: "0" }, valueText(value)))),
+    );
+
+    // The files this attempt left, taken from the manifest rather than guessed at: the run record says
+    // an output is called `report`, and only the tree says whether that is a file, how big it is, and
+    // whether it is still being written.
+    const listed = files?.steps[selected]?.attempts.find((entry) => entry.n === attempt);
+    const downloadable = [...(listed?.outputs ?? []), ...(listed?.work ?? []), ...(listed?.log ? [listed.log] : [])];
+    panelFiles.hidden = downloadable.length === 0;
+    say(panelFiles, downloadable.map((entry) => `${entry.path}:${entry.size ?? "-"}`).join(","), () =>
+      downloadable.length === 0
+        ? []
+        : [
+            el(
+              "span",
+              { class: "label" },
+              listed?.partial === true ? "Files, still being written" : "Files",
+            ),
+            ...downloadable.map((entry) =>
+              downloadLink(
+                api.runFileUrl(run.id, entry.path),
+                entry.path,
+                () => void api.saveRunFile(run.id, entry.path),
+                entry.size,
+              ),
+            ),
+            downloadLink(
+              api.runArchiveUrl(run.id, { step: selected, attempt }),
+              `Everything in ${selected} as one archive`,
+              () => void api.saveRunArchive(run.id, { step: selected, attempt }),
+            ),
+          ],
     );
 
     renderLogStatus();
@@ -851,6 +925,20 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
     }
   }
 
+  /**
+   * The list of what this run can hand out, read once. If it will not come, the screen still shows the
+   * run: a run whose files cannot be listed is a run you can still read the log of, and there is
+   * nothing honest to say about files that would be better than the links simply not being there.
+   */
+  async function readFiles(): Promise<void> {
+    try {
+      files = await api.runFiles(run.id);
+    } catch {
+      files = null;
+    }
+    if (!signal.aborted) renderPanel();
+  }
+
   function startPolling(): void {
     if (timer !== undefined) window.clearTimeout(timer);
     timer = window.setTimeout(() => void tick(), POLL_MS);
@@ -860,6 +948,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   renderSteps();
   renderPanel();
   renderLog(true);
+  void readFiles();
   await readLog(true);
   if (signal.aborted) return;
   if (run.status === "running") startPolling();

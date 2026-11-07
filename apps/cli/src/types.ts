@@ -58,6 +58,43 @@ export interface LogChunk {
   text: string;
 }
 
+/**
+ * `GET /v1/runs/:id/files` (BASHR-47). A file entry carries a `size`; a symlink or other special
+ * file carries a `kind` and no size, and is not downloadable — a block that plants a link must be
+ * visible in the listing, not hidden by it.
+ */
+export interface RunFileManifest {
+  run: string;
+  status: RunStatus;
+  partial: boolean;
+  outputs: RunOutputFile[];
+  steps: Record<string, RunStepFiles>;
+}
+
+export interface RunFileEntry {
+  path: string;
+  size: number | null;
+  kind?: "link" | "other";
+}
+
+export interface RunOutputFile extends RunFileEntry {
+  name: string;
+  type: "file";
+  step: string;
+  attempt: number;
+}
+
+export interface RunStepFiles {
+  attempts: {
+    n: number;
+    status: string;
+    partial: boolean;
+    log?: RunFileEntry;
+    outputs?: (RunFileEntry & { name: string })[];
+    work?: RunFileEntry[];
+  }[];
+}
+
 export interface RunSummary {
   id: string;
   pipeline: string;

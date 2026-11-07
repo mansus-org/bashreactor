@@ -475,6 +475,13 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 .outputs dt { font-family: var(--font-code); font-weight: 700; overflow-wrap: anywhere; }
 .outputs dd { margin: 0; font-family: var(--font-code); overflow-x: auto; white-space: pre; }
 
+/* The files of the attempt on screen. A list of links, not a table: the path is the whole of what a
+   person is choosing between, and it is long, so it gets the line to itself. */
+.files { display: grid; gap: 4px; }
+.files .label { margin-bottom: 2px; }
+.file { font-family: var(--font-code); font-size: 0.9375rem; overflow-wrap: anywhere; }
+.file__size { font-variant-numeric: tabular-nums; }
+
 .log {
   height: max(380px, calc(100dvh - 300px));
   border: 3px solid var(--ink); overflow: auto;

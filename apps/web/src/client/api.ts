@@ -110,6 +110,32 @@ export interface LogChunk {
   text: string;
 }
 
+/** One file that may be downloaded, with its size, or why it is not a plain file. */
+export interface RunFileEntry {
+  path: string;
+  size?: number;
+  kind?: string;
+  name?: string;
+}
+
+export interface RunFileAttempt {
+  n: number;
+  status: string;
+  partial: boolean;
+  log?: RunFileEntry;
+  outputs?: RunFileEntry[];
+  work?: RunFileEntry[];
+}
+
+/** What `GET /v1/runs/:id/files` answers (SPEC 4.10): the run's outputs, and each step's attempts. */
+export interface RunFiles {
+  run: string;
+  status: string;
+  partial: boolean;
+  outputs: { name: string; path: string; size: number }[];
+  steps: Record<string, { attempts: RunFileAttempt[] }>;
+}
+
 /** The SPEC 5 object, with the status that came back with it. */
 export class ApiError extends Error {
   readonly status: number;
@@ -255,7 +281,51 @@ export const api = {
     send("GET", `runs/${encodeURIComponent(id)}/logs/${encodeURIComponent(step)}/${attempt}`, {
       query: { offset },
     }).then(json<LogChunk>),
+
+  runFiles: (id: string, query: Record<string, string | number | undefined> = {}) =>
+    send("GET", `runs/${encodeURIComponent(id)}/files`, { query }).then(json<RunFiles>),
+
+  /** The address of one file of a run, as the API spells it. */
+  runFileUrl: (id: string, path: string) => url(`runs/${encodeURIComponent(id)}/file`, { path }),
+  /** The address of a run's archive, whole or one step's attempt. */
+  runArchiveUrl: (id: string, query: { step?: string; attempt?: number } = {}) =>
+    url(`runs/${encodeURIComponent(id)}/archive`, query),
+  /** The address of the manifest itself, which is a file people want to keep. */
+  runManifestUrl: (id: string) => url(`runs/${encodeURIComponent(id)}/files`),
+
+  saveRunFile: (id: string, path: string) => save(api.runFileUrl(id, path)),
+  saveRunArchive: (id: string, query: { step?: string; attempt?: number } = {}) =>
+    save(api.runArchiveUrl(id, query)),
+  saveRunManifest: (id: string) => save(url(`runs/${encodeURIComponent(id)}/files`)),
 };
+
+/**
+ * Fetch a file with the token on the request and hand it to the browser as a download.
+ *
+ * A plain link cannot do this: the API authenticates with a bearer header (SPEC 4.1) and an `a href`
+ * the browser follows on its own carries no headers, so the honest href and the working click are two
+ * different things. The href is still the real address, so copying it out and running it through curl
+ * is a thing a person can do; clicking it goes through here.
+ */
+async function save(href: string): Promise<void> {
+  const response = await fetch(href, { headers: { authorization: `Bearer ${session.token}` }, cache: "no-store" });
+  if (!response.ok) throw await errorOf(response);
+  const name = downloadName(response.headers.get("content-disposition"), href);
+  const objectUrl = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = name;
+  anchor.click();
+  URL.revokeObjectURL(objectUrl);
+}
+
+/** The filename the server asked for, or the last part of the address when it did not name one. */
+function downloadName(disposition: string | null, href: string): string {
+  const quoted = /filename="([^"]*)"/.exec(disposition ?? "");
+  if (quoted !== null) return quoted[1]!;
+  const path = new URL(href).pathname;
+  return path.slice(path.lastIndexOf("/") + 1) || "download";
+}
 
 export interface Health {
   status: string;
