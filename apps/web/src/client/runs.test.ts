@@ -696,7 +696,7 @@ class FakeServer {
     return this.asked.filter((entry) => entry === `GET ${this.runPath}`).length;
   }
 
-  /** The process is gone: nothing answers, which is the `unreachable` the API reports. */
+  /** The process is gone: nothing answers, which is the `api_unreachable` SPEC 5 gives a client. */
   stop(): void {
     this.dead = true;
   }
@@ -1019,7 +1019,7 @@ describe("a server that stops answering", () => {
 
     server.stop();
     await waitFor("the page to notice", () => statusLine(view).includes("Lost the server, still trying."));
-    expect(statusLine(view)).toContain("unreachable");
+    expect(statusLine(view)).toContain("api_unreachable");
     // The last good poll stays on screen, which is why the line has to carry the bad news.
     expect(one(view.querySelector('[id="panel-title"]'), "the panel title").textContent).toBe("render");
 

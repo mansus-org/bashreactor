@@ -73,6 +73,18 @@ const STATUS_BY_CODE: Record<string, number> = {
   interrupted: 500,
 };
 
+/**
+ * Every code whose status is decided in the table above. SPEC 5 has to list all of them, and nothing
+ * here may map a code the spec has not agreed to; `test/errors.test.ts` checks both ways.
+ */
+export const CODES_WITH_STATUS: readonly string[] = Object.keys(STATUS_BY_CODE);
+
+/**
+ * The status for an error code, independent of which route or which package raised it (SPEC 5).
+ *
+ * A code nothing mapped is a 500, because that is what it is: something broke that no other code
+ * describes. Guessing a 4xx would tell a caller their request was wrong when it was not.
+ */
 export function statusForCode(code: string): number {
   return STATUS_BY_CODE[code] ?? 500;
 }
