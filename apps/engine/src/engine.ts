@@ -100,8 +100,15 @@ export class Engine {
     this.path = options.path ?? process.env.PATH ?? "";
   }
 
-  private async ensureRuntime(): Promise<void> {
-    if (this.runtimeMissing === null) this.runtimeMissing = await checkRuntime(this.path);
+  /**
+   * The backstop, not the check. `startServer` runs the same SPEC 2.6 check before it binds its
+   * socket, so by the time an engine built by the API sees a run the answer is already known; this is
+   * here for an engine built directly, and for a runtime that went away after the process came up.
+   * Checked once and remembered, because the answer does not change while the process lives and a run
+   * that gets as far as a step should not pay for it twice.
+   */
+  private ensureRuntime(): void {
+    if (this.runtimeMissing === null) this.runtimeMissing = checkRuntime(this.path);
     if (this.runtimeMissing.length > 0) {
       throw new BashreactorError("runtime_missing", `missing on PATH: ${this.runtimeMissing.join(", ")}`);
     }
@@ -120,7 +127,7 @@ export class Engine {
   }
 
   async start(pipelinePath: string, inputs: Record<string, Value> = {}): Promise<RunRecord> {
-    await this.ensureRuntime();
+    this.ensureRuntime();
     const pipelineBytes = readFileSync(pipelinePath);
     const pipelineSource = new TextDecoder("utf-8", { fatal: true }).decode(pipelineBytes);
     const dir = dirname(pipelinePath);
