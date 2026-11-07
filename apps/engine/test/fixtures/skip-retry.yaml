@@ -1,0 +1,16 @@
+name: skip-retry
+description: A gate that fails its only attempt, and the step behind it.
+
+steps:
+  gate:
+    uses: ./flaky.sh
+    timeout: 30s
+    retry:
+      max_attempts: 1
+
+  downstream:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [gate]
+    timeout: 30s

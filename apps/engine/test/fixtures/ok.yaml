@@ -1,0 +1,9 @@
+name: ok
+description: One step that succeeds at once.
+
+steps:
+  ok:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    timeout: 30s

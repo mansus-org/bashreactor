@@ -1,0 +1,18 @@
+name: retry-budget
+description: One step that leaves with a given code, with a budget of three attempts and no wait between them.
+
+inputs:
+  exit_code:
+    type: integer
+    description: The status the block leaves with.
+    default: 75
+
+steps:
+  work:
+    uses: ./exit-code.sh
+    with:
+      exit_code: ${{ inputs.exit_code }}
+    timeout: 30s
+    retry:
+      max_attempts: 3
+      delay: 0s

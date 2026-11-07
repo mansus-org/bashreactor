@@ -1,0 +1,10 @@
+name: retry-succeeds
+description: One step that fails its first attempt and finishes on the second, inside a budget of three.
+
+steps:
+  work:
+    uses: ./flaky.sh
+    timeout: 30s
+    retry:
+      max_attempts: 3
+      delay: 0s

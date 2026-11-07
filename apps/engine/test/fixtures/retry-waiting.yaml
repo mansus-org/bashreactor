@@ -1,0 +1,19 @@
+name: retry-waiting
+description: One step that has to wait out a retry delay, next to one that could use the only slot.
+
+max_parallel: 1
+
+steps:
+  retrying:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 75
+    timeout: 30s
+    retry:
+      max_attempts: 2
+      delay: 2s
+  other:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    timeout: 30s

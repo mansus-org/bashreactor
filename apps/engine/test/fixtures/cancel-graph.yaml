@@ -1,0 +1,16 @@
+name: cancel-graph
+description: A long step that spawns a child, and a step behind it that has not started.
+
+steps:
+  spawn:
+    uses: ./spawn-child.sh
+    # Long enough that it is the cancel that ends the step, never the timeout.
+    timeout: 60s
+    kill_grace: 1s
+
+  after:
+    uses: ./exit-code.sh
+    with:
+      exit_code: 0
+    needs: [spawn]
+    timeout: 30s
