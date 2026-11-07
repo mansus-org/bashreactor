@@ -37,4 +37,7 @@ ENV BASHREACTOR_VERSION=${VERSION}
 ENV PORT=8080
 USER 10001:10001
 EXPOSE 8080
+# One process, one port: it serves the UI at /app, the API at /v1, the MCP endpoint at /mcp and
+# /healthz. Do not add a second process here — nothing would watch it, and the readiness probe only
+# asks the API. docs/DEPLOY.md has the reasoning and what a deploy still needs.
 CMD ["bun", "server.js"]

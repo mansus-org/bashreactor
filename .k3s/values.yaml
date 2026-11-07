@@ -6,6 +6,9 @@ ingress:
   host: bashreactor.mansus.org
 
 port: 8080
+# The one port carries everything the image serves: /app, /v1, /mcp and /healthz. The ingress below
+# routes / Prefix to it, so the MCP endpoint is published by the same rule as the site and needs no
+# path of its own.
 
 # $BASHREACTOR_HOME: runs/ and home/ for the engine, store/ for the store, stage/ for staging,
 # tokens.json for the tokens (SPEC 1.4). Resuming a run after a rollout depends on this surviving
@@ -36,7 +39,9 @@ sealedSecrets:
 healthCheck:
   path: /healthz
 
-# The scaffold server idles around 30 MB under bun; the limit leaves room for the API that replaces it.
+# Measured on the built entry (dist/server.js) with the UI, the API and /mcp all answering: 68 MB
+# idle, 73 MB after a few requests. The request is set above that so the scheduler accounts for what
+# the pod actually uses; the limit leaves room for a big log page and for bun's heap to grow.
 resources:
-  requests: { cpu: 10m, memory: 64Mi }
+  requests: { cpu: 10m, memory: 128Mi }
   limits: { memory: 256Mi }
