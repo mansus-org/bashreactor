@@ -1,15 +1,17 @@
 // The entry the image runs: `bun server.js`, built from this file.
 //
-// This is apps/api/src/main.ts with one addition — the web UI mounted in front of the API — and it
-// is a separate file because BASHR-8 may not edit apps/api/. Everything else is kept the same on
-// purpose: the same fatal config resolution, the same resume-on-startup, the same signal handling,
-// because a container's PID 1 gets no default signal handling and drops a rollout's runs if it is
-// skipped. `startServer`'s `build` hook is the seam: the API is built exactly as main.ts builds it,
-// and only its `fetch` is wrapped.
+// This is apps/api/src/main.ts with two additions — the web UI mounted in front of the API, and the
+// MCP endpoint beside it — and it is a separate file because BASHR-8 may not edit apps/api/.
+// Everything else is kept the same on purpose: the same fatal config resolution, the same
+// resume-on-startup, the same signal handling, because a container's PID 1 gets no default signal
+// handling and drops a rollout's runs if it is skipped. `startServer`'s `build` hook is the seam:
+// the API is built exactly as main.ts builds it, and only its `fetch` is wrapped.
 
 import manifest from "../package.json";
 import { createApi, resolveConfig, resolveVersion, resumeRunningRuns, startServer, stopOnSignals } from "@bashreactor/api";
 import type { Api, ApiConfig } from "@bashreactor/api";
+import { createMcpServer, resolveConfig as resolveMcpConfig } from "@bashreactor/mcp";
+import type { McpOptions } from "@bashreactor/mcp";
 import { mountApp } from "./index.ts";
 import { withForwardedScheme } from "./proxy.ts";
 
@@ -20,9 +22,38 @@ const startup = startServer({
   build: (builtConfig: ApiConfig, log: (line: string) => void): Api => {
     const built = createApi({ config: builtConfig, log });
     const ui = mountApp((request) => built.fetch(request), { log });
-    // The scheme is put back before anything reads the URL, so the API's own `/` redirect is fixed
-    // by the same line and apps/api/ does not have to know it sits behind a proxy.
-    return { ...built, fetch: async (request: Request) => await ui(withForwardedScheme(request)) };
+
+    // The MCP server runs in this process rather than as a second one, because the platform's chart
+    // renders exactly one container and exactly one Service port: a second process on its own port
+    // would have no Service and no route, so nothing outside this pod could reach it, and a process
+    // nothing watches dies silently while the pod still reads Ready. Mounted here it is published on
+    // the port the Service already points at, behind the ingress the app already has, and it cannot
+    // be up while the API is down or the other way round.
+    //
+    // It still speaks to the API the way every other client does — a bearer token spent on a URL —
+    // except the call goes to the API's own handler instead of leaving through the socket and
+    // coming back. `BASHREACTOR_URL` keeps its meaning for anything that reads it back.
+    const mcpUrl = process.env.BASHREACTOR_URL ?? `http://127.0.0.1:${builtConfig.port}`;
+    // The client behind the MCP server hands this a URL string and an init, never a Request; Bun
+    // types `fetch` as carrying a `preconnect` static, which no stand-in can have.
+    const toApi = ((input: string | Request, init?: RequestInit) =>
+      built.fetch(input instanceof Request ? input : new Request(input, init))) as McpOptions["fetch"];
+    const mcp = createMcpServer(
+      resolveMcpConfig({ ...process.env, BASHREACTOR_URL: mcpUrl }, builtConfig.version),
+      { log, fetch: toApi },
+    );
+    const mcpPath = mcp.config.path;
+
+    return {
+      ...built,
+      fetch: async (request: Request): Promise<Response> => {
+        // The scheme is put back before anything reads the URL, so the API's own `/` redirect is
+        // fixed by the same line and apps/api/ does not have to know it sits behind a proxy.
+        const original = withForwardedScheme(request);
+        if (new URL(original.url).pathname === mcpPath) return await mcp.fetch(original);
+        return await ui(original);
+      },
+    };
   },
 });
 const { api } = startup;
