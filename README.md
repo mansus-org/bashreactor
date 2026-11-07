@@ -86,8 +86,8 @@ pipeline, and the screen says so.
 
 The Problems panel is one list with two sources: the editor's own checks, run in the browser on every
 keystroke against the block contracts it has fetched from the library, and the issues the API answered
-with the last time you pressed `Validate`. Nothing goes to `POST /v1/pipelines/validate` until you press
-that button, and the API is what refuses to store a pipeline it cannot resolve.
+with the last time you pressed `Validate`. Nothing goes to `POST /v1/pipelines/validate` until you
+press that button, and the API is what refuses to store a pipeline it cannot resolve.
 
 To see a stored pipeline as the library holds it, use the CLI: `bun apps/cli/src/bin.ts pipelines get
 word-report` prints the document back with `uses: generate-corpus@1` where the file on disk says
@@ -111,11 +111,11 @@ the run is final.
 
 One thing catches out everyone who reads a live run: a step whose first attempt is running reports
 `attempts_used: 0`, in `run.json`, in `GET /v1/runs/:id`, and in the `ATTEMPTS` column of
-`bashreactor runs get <id>`. That is SPEC 4.5 read literally — the count goes up when an attempt *ends*
-`succeeded` or `failed`, and an interrupted or cancelled attempt costs nothing, which is what makes a
-restart cheap. The attempt itself is already there: `attempts` holds it, `running`, with its number and
-its log. The run screen prints the same number, so the note under a live step reads *Attempt 0, 1
-attempt so far.* (`stepNote` in `apps/web/src/client/runs.ts`).
+`bashreactor runs get <id>`. That is SPEC 4.5 read literally — the count goes up when an attempt
+*ends* `succeeded` or `failed`, and an interrupted or cancelled attempt costs nothing, which is what
+makes a restart cheap. The attempt itself is already there: `attempts` holds it, `running`, with its
+number and its log. The run screen prints the same number, so the note under a live step reads
+*Attempt 0, 1 attempt so far.* (`stepNote` in `apps/web/src/client/runs.ts`).
 
 #### The run that worked
 
@@ -168,13 +168,14 @@ The log pane holds one attempt of one step, and its cursor is a byte offset (SPE
 it to a step's newest attempt. Because the cursor is an offset, an answer only carries what is new, and
 the page only goes forward: it starts over from byte 0 when you point the pane at another step or
 attempt, and otherwise never does. A poll is one `run.json` request and at least one log request, and
-each log answer is capped at 1 MiB (`MAX_LOG_TEXT_BYTES` in `apps/api/src/app.ts`), so the page asks
-again in the same poll while the server says there is more. What keeps a six-hour run cheap to watch is
-the server side of that: `readLog` opens the log and reads only the window it was asked for, through
+each answer is capped at 1 MiB (`MAX_LOG_TEXT_BYTES` in `apps/api/src/app.ts`), so the page asks again
+in the same poll while the server says there is more. What keeps a six-hour run cheap to watch is the
+server side of that: `readLog` opens the log and reads only the window it was asked for, through
 `readFileRange` in `apps/engine/src/run-store.ts`, whatever the offset. On this side the pane keeps
 every line it has read and paints the last 2000 of them (`MAX_DRAWN_LINES` in
-`apps/web/src/client/logs.ts`), with a note saying how many are not drawn. `bashreactor runs logs <id>
-check --offset 42` and the `get_run_log` tool use the same cursor. The note on the `check` row gives the other half of why
+`apps/web/src/client/logs.ts`), with a note saying how many are not drawn. The CLI's
+`bashreactor runs logs <id> check --offset 42` and the `get_run_log` tool use the same cursor. The
+note on the `check` row gives the other half of why
 a failure is not a dead end: `1 attempt used; the work directory is kept`.
 
 ### Blocks: the library

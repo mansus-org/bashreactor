@@ -9,8 +9,8 @@ may not edit `apps/api/`, and it keeps main.ts's config resolution, resume-on-st
 handling on purpose: a container that is PID 1 gets no default signal handling and drops a rollout's
 runs if it skips them.
 
-The browser is a client of `/v1` like the CLI and the MCP server: bearer token, same scopes, same error
-objects. There is no websocket and no second API — the run screen polls `GET /v1/runs/:id` once a
+The browser is a client of `/v1` like the CLI and the MCP server: bearer token, same scopes, same
+error objects. There is no websocket and no second API — the run screen polls `GET /v1/runs/:id` once a
 second (`POLL_MS` in `src/client/runs.ts`).
 
 ## What it serves
@@ -68,9 +68,9 @@ because SPEC 2.6 says the engine refuses to start without them.
 
 ## Before you edit `src/client/`
 
-- **A new module has to be registered twice**: imported in `src/raw.js` and named in `CLIENT_MODULES` in
-  `src/assets.ts`. Miss it and the browser is served a 404 for `assets/<name>.js`, the ES module graph
-  never resolves, and the screen sits on *Loading.* with nothing in the console for you.
+- **A new module has to be registered twice**: imported in `src/raw.js` and named in `CLIENT_MODULES`
+  in `src/assets.ts`. Miss it and the browser is served a 404 for `assets/<name>.js`, the ES module
+  graph never resolves, and the screen sits on *Loading.* with nothing in the console for you.
   `src/assets.test.ts` is the check: it reads the bytes the server serves, resolves every import the
   way the browser would, and fails on a client file the table does not know.
 - **Import a sibling as `./x.js`, not `./x.ts`.** The files are TypeScript; what is served is `.js`.
@@ -78,8 +78,8 @@ because SPEC 2.6 says the engine refuses to start without them.
   the source.
 - **No dependencies.** The CSP is `'self'` only and there is no bundler to add one with. The one piece
   of third-party code is the YAML parser, and it is bundled on purpose.
-- **Tests are colocated and run with `bun test` in this package.** A client module is tested through the
-  text the server serves — a `data:` import, see `client/logs.test.ts` — rather than by importing
+- **Tests are colocated and run with `bun test` in this package.** A client module is tested through
+  the text the server serves — a `data:` import, see `client/logs.test.ts` — rather than by importing
   `./logs.ts`: bun caches modules by path and `src/raw.js` has already loaded that path as a string.
   Files ending `.testkit.ts` are scaffolding and are never shipped.
 - **Typecheck runs twice on purpose**: `tsc -p .` for the server side, `tsc -p tsconfig.client.json`
@@ -93,8 +93,8 @@ because SPEC 2.6 says the engine refuses to start without them.
 ## Tests
 
 `bun test` in this package. `src/index.test.ts` mounts the UI in front of a real API in one process,
-which is how it is deployed, and re-probes the API's own routes so the mount cannot quietly change what
-`/` and `/healthz` answer; it also publishes, validates, stores, starts and follows the worked example
-through the one handler. `src/server.test.ts` runs this entry as a real process over a real socket, and
-`src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the source and the bundle
+which is how it is deployed, and re-probes the API's own routes so the mount cannot quietly change
+what `/` and `/healthz` answer; it also publishes, validates, stores, starts and follows the worked
+example through the one handler. `src/server.test.ts` runs this entry as a real process over a real
+socket, and `src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the source and the bundle
 `bun run build` makes, since the image ships only the bundle.

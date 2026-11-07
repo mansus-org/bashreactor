@@ -471,10 +471,11 @@ Three screens, and all of them read the same `/v1` routes you just called by han
 | `/app/runs` | Every run, newest first. Open the failed one and the graph shows `check` failed and `report` skipped while `count` finished: statuses are 1-bit signs, not colours. The log pane follows one attempt by byte offset, with Follow and Pause, and the run's own Cancel, Retry and Resume buttons are the three POSTs. |
 | `/app/blocks` | Open `generate-corpus`. The contract shown is the block's own header, read out of the stored bytes. |
 
-`apps/web` has its own README at [`apps/web/README.md`](../apps/web/README.md): how the UI is built and
-served, and what to know before editing `src/client/`. The short version of where things are: the entry
-point is `apps/web/src/server.ts` (how it mounts) and `apps/web/src/client/` is the screens (`app.ts`
-is the shell and the gate, `runs.ts` the run screen, `blocks.ts` the library, `editor.ts` the pipeline).
+`apps/web` has its own README at [`apps/web/README.md`](../apps/web/README.md): how the UI is built
+and served, and what to know before editing `src/client/`. The short version of where things are: the
+entry point is `apps/web/src/server.ts` (how it mounts) and `apps/web/src/client/` is the screens
+(`app.ts` is the shell and the gate, `runs.ts` the run screen, `blocks.ts` the library, `editor.ts`
+the pipeline).
 
 ## 5. The same run from an agent: MCP
 

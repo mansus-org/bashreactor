@@ -8,13 +8,14 @@
 // `name@version` the library answers with. Everything else in the file keeps its bytes, comments
 // included, because only the scalar after `uses:` is replaced.
 //
-// The consequence is worth stating out loud: what gets stored or started is the rewritten document, so
-// the stored pipeline version reads `count-words@2`. What a *run* records is a staged path, not that:
-// the API stages a run by copying the library's bytes beside a throwaway copy of the YAML and rewriting
-// every `name@version` to `./name@version` (`apps/api/src/staging.ts`), and the engine snapshots that
-// document into the run directory. So `run.json` holds `steps.<id>.block.uses` as `"./count-words@2"`,
-// a path that only ever existed in the staging directory, and the bytes it ran are at
-// `blocks/<sha256>.sh` — keyed by hash, by design, so the reference cannot rot under a later version.
+// The consequence is worth stating out loud: what gets stored or started is the rewritten
+// document, so the stored pipeline version reads `count-words@2`. What a *run* records is a staged
+// path, not that: the API stages a run by copying the library's bytes beside a throwaway copy of the
+// YAML and rewriting every `name@version` to `./name@version` (`apps/api/src/staging.ts`), and the
+// engine snapshots that document into the run directory. So `run.json` holds
+// `steps.<id>.block.uses` as `"./count-words@2"`, a path that only ever existed in the staging
+// directory, and the bytes it ran are at `blocks/<sha256>.sh` — keyed by hash, by design, so the
+// reference cannot rot under a later version.
 
 import {
   BLOCK_NAME_RE,
