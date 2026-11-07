@@ -104,7 +104,7 @@ section 5 has none for them. They are the open item at the bottom. `file_not_fou
 | `GET` | `/v1/pipelines/:name/:version` | read | one version, with its YAML and parsed form |
 | `POST` | `/v1/pipelines/validate` | read | validate YAML, report every issue, create nothing |
 | `POST` | `/v1/pipelines/:name/versions` | write | store a version (validated first) |
-| `GET` | `/v1/runs` | read | every run, newest first |
+| `GET` | `/v1/runs` | read | one page of runs, newest first; `?limit=` and `?cursor=`, `X-Next-Cursor` when there is more |
 | `POST` | `/v1/runs` | write | start a run and drive it in the background |
 | `GET` | `/v1/runs/:id` | read | the whole `run.json` |
 | `POST` | `/v1/runs/:id/cancel` | write | ask for a cancel (SPEC 4.6) |
@@ -184,6 +184,9 @@ curl -s -X POST -H "Authorization: Bearer $WRITE" -H 'content-type: application/
 # -> 201 and the run as created, with every step pending; it runs in the background
 
 curl -s -H "Authorization: Bearer $READ" $BR/v1/runs
+# one page of twenty, and the page after it: the cursor is the last id of the page before it
+curl -s -D - -o /dev/null -H "Authorization: Bearer $READ" "$BR/v1/runs?limit=20" | grep -i x-next-cursor
+curl -s -H "Authorization: Bearer $READ" "$BR/v1/runs?limit=20&cursor=20261104T101500Z-3fa9c2d1"
 curl -s -H "Authorization: Bearer $READ" $BR/v1/runs/20261104T101500Z-3fa9c2d1
 ```
 
@@ -236,6 +239,31 @@ are run-relative — the strings SPEC 4.2 documents — and every one of them go
 
 An unknown run, step or attempt is the same 404 the log route gives. A path with no file behind it is
 `file_not_found`; a path that names a directory is `bad_request` telling you to use the archive.
+
+## How the run list is paged
+
+`GET /v1/runs` answers with a page, never with the history. The id is a timestamp to the second
+(SPEC 4.2), so it is the whole ordering: the server lists the run directories, sorts the ids newest
+first, and reads the `run.json` of the page it chose and nothing else. Reading every run to throw all
+but a page away made one request cost what the whole history does, and nothing bounded it.
+
+- `?limit=` is how many the page holds. Absent, empty or `0` is 100; more than 500 is clamped to 500;
+  something that is not a count is 422 `type_mismatch`.
+- `?cursor=` is the last id of the page before this one. Absent or unparseable starts at the newest.
+- `X-Next-Cursor` is sent when there is a page below this one, and it is the id to pass as `?cursor=`
+  to get it. Absent means you are at the bottom.
+
+The body is unchanged: an array of `{id, pipeline, status, created_at, finished_at,
+cancel_requested_at}`, newest first. A client that used to be handed everything is handed the newest
+page, and stops when the header is absent.
+
+Two things follow from the cursor being an id rather than an offset, and both are the point:
+
+- A run that arrives while you are paging does not shift the page under you, because the walk is
+  against ids and not against positions.
+- A run the server cannot read does not wedge the walk. A directory that is not a run id is not a
+  run, and a run whose `run.json` is missing or cannot be parsed is left out of the body, logged, and
+  still moves the cursor along — one bad file is not allowed to be a listing that never answers.
 
 ## How a run is started, and why it is not waited for
 
