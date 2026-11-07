@@ -483,7 +483,9 @@ describe("a big file streams", () => {
     writeFileSync(path, "");
     truncateSync(path, BIG);
     try {
+      Bun.gc(true);
       const before = process.memoryUsage().rss;
+      let peak = before;
       const response = await server.call("GET", fileUrl(runId, "steps/write/work/big.bin"));
       expect(response.status).toBe(200);
       expect(response.headers.get("content-length")).toBe(String(BIG));
@@ -494,8 +496,9 @@ describe("a big file streams", () => {
         const chunk = await reader.read();
         if (chunk.done) break;
         received += chunk.value.byteLength;
+        if (received % (8 << 20) < chunk.value.byteLength) peak = Math.max(peak, process.memoryUsage().rss);
       }
-      const grew = process.memoryUsage().rss - before;
+      const grew = peak - before;
       expect(received).toBe(BIG);
       expect(grew).toBeLessThan(64 * 1024 * 1024);
     } finally {
