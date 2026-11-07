@@ -99,7 +99,7 @@ export interface Result {
  */
 export async function cli(
   args: readonly string[],
-  options: { url?: string | null; token?: string | null; env?: Record<string, string>; raw?: boolean } = {},
+  options: { url?: string | null; token?: string | null; env?: Record<string, string>; raw?: boolean; cwd?: string } = {},
 ): Promise<Result> {
   const home = mkdtempSync(join(tmpdir(), "bashreactor-cli-home-"));
   const env: Record<string, string> = {
@@ -113,6 +113,7 @@ export async function cli(
 
   const proc = Bun.spawn([process.execPath, BIN, ...args], {
     env,
+    cwd: options.cwd,
     stdin: "ignore",
     stdout: "pipe",
     stderr: "pipe",
