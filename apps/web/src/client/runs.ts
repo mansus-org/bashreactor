@@ -130,13 +130,14 @@ function runRow(run: RunSummary): HTMLElement {
   return el(
     "a",
     { class: "runrow", href: `/app/runs/${run.id}`, "data-link": "" },
-    el("span", {}, sign(state(run.status), "sign sign--large")),
     el(
       "span",
       {},
       el("span", { class: "runrow__id" }, run.id),
       el("span", { class: "runrow__meta" }, ` · ${run.pipeline}, started ${when(run.created_at)}`),
     ),
+    // The stamp is the state: it carries the sign and the word, so the row does not repeat the shape
+    // at 70 px next to it.
     stateStamp(state(run.status)),
   );
 }
@@ -213,7 +214,9 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   let readingKey = "";
   let timer: number | undefined;
 
-  const title = el("h1", { class: "title" });
+  // The id is 26 characters of code, not a headline: "Run" is the display word and the id goes under
+  // it in the code face, where it reads as one line.
+  const title = el("h1", { class: "title" }, "Run ", el("span", { class: "title__id mono" }, run.id));
   const bigSign = el("div", { class: "runhead__sign" });
   // The head is built once and updated in place: it holds the link to the pipeline, and a head
   // rebuilt every second drops your focus off it.
@@ -283,7 +286,7 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   const attemptPicker = el(
     "div",
     { class: "attempts", role: "group", "aria-label": "Attempt whose log this is" },
-    el("span", { class: "label", style: "margin:0" }, "Attempt"),
+    el("span", { class: "label label--inline" }, "Attempt"),
     noAttempt,
   );
   // One button per attempt number, made the first time that number is seen and hidden when the step
@@ -381,7 +384,6 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal): Pr
   }
 
   function renderHead(): void {
-    title.textContent = `Run ${run.id}`;
     document.title = `Run ${run.id} — Bashreactor`;
     const stamp = state(run.status);
     say(bigSign, stamp, () => [sign(stamp, "sign sign--large")]);
