@@ -63,10 +63,10 @@ answer differently:
 | 401 | `unauthenticated` |
 | 403 | `forbidden` |
 | 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found`, and `not_found` for a path with no route |
+| 405 | `method_not_allowed`, a path this API has with a method it does not take |
 | 409 | `run_claimed`, `run_not_active`, `run_not_retryable`, `already_exists`, `version_conflict` |
 | 422 | every definition and starting code (`pipeline_yaml_invalid`, `pipeline_schema_invalid`, `block_header_malformed`, `block_schema_invalid`, `unknown_*`, `missing_input`, `type_mismatch`, `expression_invalid`, `dependency_cycle`, `file_input_not_found`, `env_missing`) and a request body that does not fit |
 | 500 | `internal_error`, `store_migration_failed`, `store_closed` |
-| 405 | `method_not_allowed`, a path this API has with a method it does not take |
 | 501 | `not_implemented`, for a route this task has not built yet |
 | 503 | `runtime_missing` (a block runtime binary is missing, no admin token is configured, or the API never started), `store_locked` |
 
