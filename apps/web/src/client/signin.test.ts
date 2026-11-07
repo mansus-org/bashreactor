@@ -33,6 +33,8 @@ type Answer = () => { status: number; body: unknown };
 const answers = new Map<string, Answer>();
 const calls: string[] = [];
 
+const realFetch = globalThis.fetch;
+
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input), "http://x");
   calls.push(`${init?.method ?? "GET"} ${url.pathname}`);
@@ -221,6 +223,8 @@ afterAll(() => {
   session.onUnauthorized = () => {};
   signOut();
   uninstallDom(dom);
-  delete (globalThis as unknown as Record<string, unknown>).fetch;
+  // Put the real one back rather than deleting the global: every test file in this run shares the
+  // process, and the browser suite reaches for a live fetch after this one is done.
+  globalThis.fetch = realFetch;
   rmSync(served, { recursive: true, force: true });
 });
