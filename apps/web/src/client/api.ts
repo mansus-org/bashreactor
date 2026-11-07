@@ -127,7 +127,7 @@ export interface RunFileAttempt {
   work?: RunFileEntry[];
 }
 
-/** What `GET /v1/runs/:id/files` answers (SPEC 4.11): the run's outputs, and each step's attempts. */
+/** What `GET /v1/runs/:id/files` answers (SPEC 4.10): the run's outputs, and each step's attempts. */
 export interface RunFiles {
   run: string;
   status: string;

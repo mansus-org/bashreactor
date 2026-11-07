@@ -669,7 +669,7 @@ class FakeServer {
   /** Real milliseconds an answer takes, so a test can look at the page in the middle of a read. */
   logDelayMs = 0;
   /**
-   * What the manifest route answers (SPEC 4.11). Left null so a run with nothing listed reads as a
+   * What the manifest route answers (SPEC 4.10). Left null so a run with nothing listed reads as a
    * 404, which is what a server that has no files for a run says, and what the page has to survive.
    */
   files: unknown | null = null;
@@ -1271,7 +1271,7 @@ describe("the app's own content security policy", () => {
 
 // ---------- the files a run can hand out ----------
 //
-// A run leaves files on the node (SPEC 4.9) and the API will give them back (SPEC 4.11), so the run
+// A run leaves files on the node (SPEC 4.9) and the API will give them back (SPEC 4.10), so the run
 // screen has to offer them: the manifest, each file of the attempt on screen, and an archive of a
 // step's attempt. What is pinned here is that the links name the run and the path they will fetch,
 // that clicking one goes through the API rather than navigating, and that a run whose files cannot be
