@@ -12,25 +12,28 @@
 // so a run records `count-words@2` rather than `./count-words.sh`.
 
 import {
-  BLOCK_NAME_RE,
+  BashreactorError,
+  isLibraryRef,
+  isPathRef,
   kindOf,
   mapEntries,
+  parseBlockHeaderText,
   parseYamlDocument,
   scalarValue,
+  splitBlockHeaderBytes,
+  validatePipelineSource,
 } from "@bashreactor/core";
-import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
+import type { ValidationIssue } from "@bashreactor/core";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import type { ApiClient } from "./client.ts";
 import { isReadableFile } from "./connection.ts";
-import { usage } from "./errors.ts";
+import { CliError, EXIT_FAILURE, usage } from "./errors.ts";
 import type { BlockVersion } from "./types.ts";
 
 // `yaml` is core's dependency, not this package's, so its map node is named through the helper that
 // hands it back rather than imported here.
 type YamlMap = Parameters<typeof mapEntries>[0];
-
-/** SPEC 3.4: a `uses` value that starts like this is a path, not a library reference. */
-const PATH_REFERENCE = /^\.\.?\//;
 
 // A folded or literal scalar's range swallows the line break that ends it, and putting that break
 // back is what keeps the lines after `uses:` on their own lines.
@@ -45,6 +48,15 @@ export interface PreparedFile {
   yaml: string;
   /** The blocks this put into the library, so the command can say what it did. */
   published: { name: string; version: number; path: string }[];
+}
+
+/**
+ * The upload body for a block file. SPEC 2 makes the SHA-256 of the file's exact bytes its identity,
+ * and a JSON string can only carry what is valid UTF-8, so the bytes go over as base64 and arrive
+ * whole whatever a block's body happens to contain.
+ */
+export function blockUploadBody(bytes: Uint8Array): { content_b64: string } {
+  return { content_b64: Buffer.from(bytes).toString("base64") };
 }
 
 /** One `steps.<id>.uses` that names a file, and where its scalar sits in the source text. */
@@ -65,16 +77,16 @@ export function readPipelineFile(path: string): { path: string; source: string }
 }
 
 /**
- * Every path reference in `steps`, found by parsing rather than by matching lines: SPEC 3.1 makes a
- * quoted scalar, and a scalar inside a flow mapping, the same value as a bare one, so no regex over
- * lines can see them all. The offsets come back so the rewrite can replace one scalar and leave the
- * rest of the file untouched.
+ * Every `uses` in `steps` whose value is a string, found by parsing rather than by matching lines:
+ * SPEC 3.1 makes a quoted scalar, and a scalar inside a flow mapping, the same value as a bare one,
+ * so no regex over lines can see them all. The offsets come back so the rewrite can replace one
+ * scalar and leave the rest of the file untouched.
  *
- * A file that does not parse yields nothing, which is right: the API answers its own
+ * A file that does not parse yields nothing, which is right: the validator answers its own
  * `pipeline_yaml_invalid` for it. So does a `steps` that is not a mapping of steps, and a step with
  * no `uses` or with a `uses` that is not a string.
  */
-export function findPathReferences(source: string): UsesReference[] {
+export function findUses(source: string): UsesReference[] {
   const parsed = parseYamlDocument(source);
   if (!parsed.ok || parsed.root === null) return [];
   const { doc, root } = parsed;
@@ -91,7 +103,7 @@ export function findPathReferences(source: string): UsesReference[] {
     if (!uses || kindOf(uses, doc) !== "string") continue;
 
     const text = scalarValue(uses, doc);
-    if (text === null || text.type !== "string" || !PATH_REFERENCE.test(text.value)) continue;
+    if (text === null || text.type !== "string") continue;
     const range = uses.range;
     if (!range) continue;
 
@@ -102,6 +114,16 @@ export function findPathReferences(source: string): UsesReference[] {
     found.push({ value: text.value, start: range[0], end: range[1] });
   }
   return found;
+}
+
+/** The references that name a file beside the pipeline (SPEC 3.4). */
+export function findPathReferences(source: string): UsesReference[] {
+  return findUses(source).filter((reference) => isPathRef(reference.value));
+}
+
+/** The references that name the library, as `name@version`. */
+export function findLibraryReferences(source: string): UsesReference[] {
+  return findUses(source).filter((reference) => isLibraryRef(reference.value));
 }
 
 /**
@@ -130,6 +152,9 @@ export function rewriteReferences(
  * Publish every `uses: ./block.sh` and hand back the same document with those references pointed at
  * the library. A reference whose file is not there is left alone, so the API answers the spec's own
  * `block_not_found` for it rather than a message invented here.
+ *
+ * This is a write: it is what `pipelines add` and `runs start` do with a file on your disk, and it is
+ * why `pipelines validate` does not go through here (SPEC 3.9 — see `validateLocalPipelineFile`).
  */
 export async function publishRelativeBlocks(
   client: ApiClient,
@@ -145,18 +170,15 @@ export async function publishRelativeBlocks(
     const path = join(directory, ref);
     if (!isReadableFile(path)) continue;
 
-    const name = basename(path, extname(path));
-    if (!BLOCK_NAME_RE.test(name)) {
-      throw usage(`"${path}" cannot become a library block: "${name}" is not a block name`, {
-        code: "block_schema_invalid",
-        path: "name",
-        file: path,
-      });
-    }
-    const content = readFileSync(path, "utf8");
-    const created = await client.json<BlockVersion>("POST", `/v1/blocks/${name}/versions`, {
-      body: { content },
-    });
+    const bytes = readFileSync(path);
+    // SPEC 2.3: the header's name is the block's name and the filename is a convenience, so the
+    // library learns it from the file and not from whatever the file happens to be called.
+    const name = declaredBlockName(bytes, path);
+    const created = await client.json<BlockVersion>(
+      "POST",
+      `/v1/blocks/${encodeURIComponent(name)}/versions`,
+      { body: blockUploadBody(bytes) },
+    );
     versions.set(ref, `${created.name}@${created.version}`);
     published.push({ name: created.name, version: created.version, path });
     note(`published ${path} as ${created.name}@${created.version}`);
@@ -169,3 +191,93 @@ export async function publishRelativeBlocks(
     published,
   };
 }
+
+/**
+ * The name a block file declares for itself. The same core parser the API runs, so a file that will
+ * not parse gets the same code and message whoever read it; only the exit code is the CLI's own, and
+ * a bad file is the document's fault rather than the command line's.
+ */
+function declaredBlockName(bytes: Uint8Array, path: string): string {
+  const split = splitBlockHeaderBytes(bytes);
+  if (!split.ok) {
+    throw new CliError("block_header_malformed", split.error, { path: "name", file: path, exit: EXIT_FAILURE });
+  }
+  try {
+    return parseBlockHeaderText(split.header).name;
+  } catch (error) {
+    if (error instanceof BashreactorError) {
+      throw new CliError(error.code, error.message, {
+        path: error.path ?? "name",
+        file: path,
+        exit: EXIT_FAILURE,
+      });
+    }
+    throw error;
+  }
+}
+
+/**
+ * SPEC 3.9: validation "runs over the pipeline and the headers of all blocks it references, and
+ * creates nothing". So it happens here, over the file on your disk, with core's own validator — the
+ * one the engine and the API run, so there is not a second schema — and nothing is published.
+ *
+ * A `uses: ./block.sh` is read from beside the file. A `name@version` is read from the library over
+ * a GET, which is read scope: a read-only token is enough, and a file whose blocks are all beside it
+ * needs no token at all.
+ */
+export async function validateLocalPipelineFile(
+  file: { path: string; source: string },
+  client: ApiClient,
+): Promise<{ valid: boolean; issues: ValidationIssue[] }> {
+  const directory = dirname(file.path);
+  const library = await readLibraryBlocks(client, file.source);
+  const issues = validatePipelineSource(file.source, {
+    resolve(uses: string): { ok: true; source: string } | { ok: false } {
+      if (isPathRef(uses)) {
+        try {
+          return { ok: true, source: decodeBlockBytes(readFileSync(join(directory, uses))) };
+        } catch {
+          return { ok: false };
+        }
+      }
+      const source = library.get(uses);
+      return source === undefined ? { ok: false } : { ok: true, source };
+    },
+  });
+  return { valid: issues.length === 0, issues };
+}
+
+/**
+ * A block file as text, for reading its header. SPEC 2.2: the header must be valid UTF-8 and the
+ * rest of the file is opaque bytes, so a body that is not UTF-8 must not stop the header being read.
+ */
+function decodeBlockBytes(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+}
+
+/** Every `name@version` the file references, fetched read-only and held in memory for one run. */
+async function readLibraryBlocks(client: ApiClient, source: string): Promise<Map<string, string>> {
+  const references = new Set(findLibraryReferences(source).map((reference) => reference.value));
+  const library = new Map<string, string>();
+  await Promise.all(
+    [...references].map(async (ref) => {
+      const [name, version] = ref.split("@");
+      try {
+        const response = await client.bytes(
+          "GET",
+          `/v1/blocks/${encodeURIComponent(name!)}/${encodeURIComponent(version!)}/content`,
+        );
+        library.set(ref, decodeBlockBytes(new Uint8Array(await response.arrayBuffer())));
+      } catch (error) {
+        // A block the library does not have is the report's news, not the command's: the validator
+        // answers the spec's own `block_not_found` for it. Anything else — no token, no server, a
+        // block name the URL cannot carry — is the command failing, and calling that
+        // `block_not_found` would be a lie about why nothing was checked.
+        if (error instanceof CliError && error.code === "block_not_found") return;
+        throw error;
+      }
+    }),
+  );
+  return library;
+}
+

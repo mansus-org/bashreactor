@@ -1,12 +1,13 @@
-// Pipeline versions: `pipelines ls|get|validate|add`. A local file goes through
-// `publishRelativeBlocks` first, because the API resolves `uses` against itself and not against
-// your disk — see ../local.ts.
+// Pipeline versions: `pipelines ls|get|validate|add`. A local file that is going to be stored or
+// run goes through `publishRelativeBlocks` first, because the API resolves `uses` against itself and
+// not against your disk — see ../local.ts. Validation does not: SPEC 3.9 says it creates nothing, so
+// it is done over the file where it lies.
 
 import type { CommandSpec } from "../args.ts";
 import { localTime } from "../output.ts";
-import { publishRelativeBlocks, readPipelineFile } from "../local.ts";
+import { publishRelativeBlocks, readPipelineFile, validateLocalPipelineFile } from "../local.ts";
 import { VERSION_FLAG, versionOf } from "./flags.ts";
-import type { PipelineList, PipelineVersion, ValidationReport } from "../types.ts";
+import type { PipelineList, PipelineVersion } from "../types.ts";
 
 export const pipelineCommands: CommandSpec[] = [
   {
@@ -60,14 +61,15 @@ export const pipelineCommands: CommandSpec[] = [
   {
     group: "pipelines",
     name: "validate",
-    summary: "check a pipeline file and every block it uses, running nothing",
+    summary: "check a pipeline file and every block it uses, running nothing and creating nothing",
     args: [{ name: "<file>" }],
+    // SPEC 3.9: "Validation runs over the pipeline and the headers of all blocks it references, and
+    // creates nothing." Nothing here writes, so nothing here needs a write token — and a file whose
+    // blocks are all beside it needs no token at all, because no route is called for them.
+    anonymous: true,
     run: async (ctx) => {
       const file = readPipelineFile(ctx.args[0]!);
-      const prepared = await publishRelativeBlocks(ctx.client, file, (line) => ctx.printer.note(line));
-      const report = await ctx.client.json<ValidationReport>("POST", "/v1/pipelines/validate", {
-        body: { yaml: prepared.yaml },
-      });
+      const report = await validateLocalPipelineFile(file, ctx.client);
       ctx.printer.emit(report, (p) => {
         if (report.valid) {
           p.line(`valid  ${file.path}`);
@@ -79,8 +81,8 @@ export const pipelineCommands: CommandSpec[] = [
           report.issues.map((issue) => [issue.code, issue.path ?? "-", issue.message]),
         );
       });
-      // The route answers 200 with every issue whatever it finds (apps/api/README.md), so the
-      // verdict is in the body and a script wants it in the exit code.
+      // The report carries every issue whatever it finds (SPEC 3.9), so the verdict is in the body
+      // and a script wants it in the exit code.
       return report.valid ? 0 : 1;
     },
   },
