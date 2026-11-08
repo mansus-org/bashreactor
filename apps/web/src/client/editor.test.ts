@@ -1047,11 +1047,13 @@ describe("the time a stored version was written", () => {
       .children.find((node) => node.value === "1")!;
 
     // Printed in the zone the browser is already in, and never stamped "UTC" in a box of times that
-    // are not: the pipeline screen used to name a third clock next to the run's two.
-    expect(option.textContent).toMatch(/^v1, \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    // are not: the pipeline screen used to name a third clock next to the run's two. To the second,
+    // because two saves either side of a fix are a breath apart and minutes cannot tell them apart.
+    expect(option.textContent).toMatch(/^v1, \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
     expect(option.textContent).not.toMatch(/UTC|GMT|Z$/);
-    // The instant the server actually said, for anyone who wants the exact one rather than the local one.
-    // A screen reader reads this instead of the label, so the label is repeated in front of it.
+    // The instant the server actually said, for anyone who wants the exact one rather than the local
+    // one. No browser shows a tooltip on an `<option>`, so it is in the label a screen reader reads too.
+    expect(option.getAttribute("title")).toBe("stored 2026-01-01T09:00:00Z");
     expect(option.getAttribute("aria-label")).toBe(`${option.textContent}, stored 2026-01-01T09:00:00Z`);
   });
 });

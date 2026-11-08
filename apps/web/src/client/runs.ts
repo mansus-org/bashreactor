@@ -16,6 +16,15 @@ import type { Attempt, LogChunk, Run, RunFiles, RunStep, RunSummary } from "./ap
 export const POLL_MS = 1000;
 
 /**
+ * How often the Runs list is re-read when nothing on it is running.
+ *
+ * Nothing running is not the end of the story: the run that starts next may be started from the CLI
+ * or in another tab, and the page is the only place most people look. A second would be rude, so the
+ * list goes quiet rather than stopping, and a run that turns up takes the fast loop back.
+ */
+export const IDLE_POLL_MS = 15_000;
+
+/**
  * The time a live view runs on: what now is, and how to be woken later.
  *
  * Both live views are built on this instead of calling `setTimeout` and `Date.now()` themselves so
@@ -207,6 +216,8 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
   let failure: HTMLElement | null = null;
   let seen = false;
   let unmake: (() => void) | null = null;
+  /** Whether a read is on its way, so two wakes cannot start two and land them out of order. */
+  let reading = false;
 
   /** Put `node` at `index` among the list's children, moving it if it is not already sitting there. */
   function place(node: HTMLElement, index: number): void {
@@ -231,8 +242,9 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
       place(row, at);
     });
     // A Map being walked while entries drop out of it is fine: the iterator notices.
+    const stillHere = new Set(runs.map((run) => run.id));
     for (const [id, row] of rows) {
-      if (runs.some((run) => run.id === id)) continue;
+      if (stillHere.has(id)) continue;
       row.remove();
       rows.delete(id);
     }
@@ -257,7 +269,9 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
       note.hidden = false;
       return;
     }
-    // Nothing on the page yet, so there is nothing to call out of date: this is the whole of the screen.
+    // Nothing on the page yet, so there is nothing to call out of date: this is the whole of the screen,
+    // and the line that said it was loading has to get out of the way of the box saying it failed.
+    note.hidden = true;
     failure = errorBox(errorBody(error), el("a", { class: "btn btn--ink", href: "/app/pipeline", "data-link": "" }, "Open the editor"));
     view.append(failure);
   }
@@ -267,7 +281,8 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
     unmake = null;
     // A hidden tab is not watching, and its timers are throttled to about a minute anyway. The reading
     // stops here and `whenShown` starts it again when the tab is next looked at.
-    if (signal.aborted || document.hidden) return;
+    if (signal.aborted || document.hidden || reading) return;
+    reading = true;
     let runs: RunSummary[] | null = null;
     let error: unknown = null;
     try {
@@ -275,6 +290,7 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
     } catch (cause) {
       error = cause;
     }
+    reading = false;
     if (signal.aborted) return;
     if (runs !== null) {
       paint(runs);
@@ -283,9 +299,13 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
       tell(error);
     }
     // A run is either `running` or one of the final states (SPEC 4.4), so once nothing on the page is
-    // running there is nothing left to watch, and the head stops without a timer left behind.
-    if (runs !== null && !runs.some((run) => run.status === "running")) return;
-    unmake = clock.after(POLL_MS, () => void tick());
+    // running there is nothing of its own left to watch and the list drops to the slow one.
+    // A read that landed while the tab went hidden arms nothing: `whenShown` owns the restart.
+    if (document.hidden) return;
+    // A read that failed says nothing about what is running, so it does not change the pace: the run
+    // this page last saw going may well still be going, and a lost server is not a reason to slow down.
+    const busy = runs === null || runs.some((run) => run.status === "running");
+    unmake = clock.after(busy ? POLL_MS : IDLE_POLL_MS, () => void tick());
   }
 
   whenShown(signal, () => void tick());
@@ -294,6 +314,10 @@ async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock):
 }
 
 function runRow(run: RunSummary): HTMLElement {
+  // The words are the reader's own clock; `datetime` and the title carry that same instant in UTC, so
+  // two screens and a server log line up without anybody doing sums.
+  const stored = isoInstant(run.created_at);
+  const exact = stored === "" ? {} : { datetime: stored, title: stored };
   return el(
     "a",
     { class: "runrow", href: `/app/runs/${run.id}`, "data-link": "" },
@@ -302,8 +326,8 @@ function runRow(run: RunSummary): HTMLElement {
       {},
       el("span", { class: "runrow__id" }, run.id),
       el(
-        "span",
-        { class: "runrow__meta", title: isoInstant(run.created_at) },
+        "time",
+        { class: "runrow__meta", ...exact },
         ` · ${run.pipeline}, started ${when(run.created_at)}`,
       ),
     ),
@@ -325,6 +349,15 @@ function lineNode(line: LogLine): HTMLElement {
 
 function attemptsOf(run_: Run, step: string): number[] {
   return (run_.steps[step]?.attempts ?? []).map((entry) => entry.n);
+}
+
+/**
+ * Whether a step has said its last word (SPEC 4.4). `waiting_retry` is not one of these: a step that
+ * failed an attempt and is due another one is still going, and moving off it is how a pane ends up
+ * reading a parallel step while the one you chose starts its second attempt behind you.
+ */
+function settled(step: RunStep | undefined): boolean {
+  return step !== undefined && ["succeeded", "failed", "skipped", "cancelled"].includes(step.status);
 }
 
 function pickStep(run_: Run): string {
@@ -363,6 +396,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
   let selected = pickStep(run);
   let attempt = attemptsOf(run, selected).at(-1) ?? 0;
   let log: LogState = emptyLog;
+  /** Whether a run read is on its way, so a click and a timer cannot land two of them out of order. */
+  let polling = false;
   let follow = true;
   let paused = false;
   let busy = false;
@@ -551,15 +586,19 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
 
   function stepNote(step: RunStep): string {
     const runSteps = run.steps;
+    // Whether the log panel is holding this step. Follow keeps a step there while it waits its turn or
+    // its retry, and a row that only says "Waits for a free slot" reads like the panel is stuck on the
+    // wrong step. Said once, in the row, where the state is.
+    const onScreen = step.id === selected ? "On screen. " : "";
     if (step.status === "waiting_retry") {
       if (step.next_attempt_at !== null) {
-        return `Retries in ${duration((Date.parse(step.next_attempt_at) - clock.now()) / 1000)}.`;
+        return `${onScreen}Another attempt in ${duration((Date.parse(step.next_attempt_at) - clock.now()) / 1000)}.`;
       }
-      return "Waiting to retry.";
+      return `${onScreen}Waiting to retry.`;
     }
     if (step.status === "pending") {
       const open = step.needs.filter((need) => runSteps[need]?.status !== "succeeded");
-      return open.length > 0 ? `Waits for ${open.join(", ")}.` : "Waits for a free slot.";
+      return `${onScreen}${open.length > 0 ? `Waits for ${open.join(", ")}.` : "Waits for a free slot."}`;
     }
     if (step.status === "running") return `Attempt ${step.attempts_used}, ${step.attempts.length} attempt${step.attempts.length === 1 ? "" : "s"} so far.`;
     if (step.status === "failed") return step.failure !== null ? `${step.failure.code}: ${step.failure.message}. ${step.attempts_used} attempt${step.attempts_used === 1 ? "" : "s"} used; the work directory is kept.` : "Failed.";
@@ -577,9 +616,16 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
     say(bigSign, stamp, () => [sign(stamp, "sign sign--large")]);
     metaStamp.replaceChildren(stateStamp(stamp));
     const elapsed = ((run.finished_at !== null ? Date.parse(run.finished_at) : clock.now()) - Date.parse(run.created_at)) / 1000;
-    metaStarted.textContent = `started ${when(run.created_at)}`;
-    metaStarted.title = isoInstant(run.created_at);
-    metaElapsed.textContent = run.finished_at !== null ? `took ${duration(elapsed)}` : `running for ${duration(elapsed)}`;
+    // A time this build cannot read is not shown at all: "started NaN" is worse than the word with
+    // nothing after it, and the exact instant is only worth putting up if it is a real instant.
+    const stored = Number.isNaN(Date.parse(run.created_at)) ? "" : isoInstant(run.created_at);
+    metaStarted.hidden = stored === "";
+    metaStarted.textContent = stored === "" ? "started" : `started ${when(run.created_at)}`;
+    metaStarted.title = stored;
+    const counted = duration(elapsed);
+    metaElapsed.hidden = counted === "";
+    metaElapsed.textContent =
+      counted === "" ? "" : run.finished_at !== null ? `took ${counted}` : `running for ${counted}`;
     metaCancel.hidden = run.cancel_requested_at === null;
     metaPoll.hidden = lastPollError === null;
     if (lastPollError !== null) metaPoll.setAttribute("title", lastPollError);
@@ -1034,7 +1080,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
     unmake = null;
     // A hidden tab is not watching anybody, and browsers throttle its timers to about a minute
     // anyway, so it reads nothing while it is hidden. `whenShown` picks the loop back up.
-    if (signal.aborted || document.hidden) return;
+    if (signal.aborted || document.hidden || polling) return;
+    polling = true;
     let changed: string[] = [];
     try {
       const next = await api.run(run.id);
@@ -1046,14 +1093,19 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
       if (signal.aborted) return;
       // The page goes on showing the last good poll, so it has to say that it stopped getting one.
       lastPollError = errorWords(error);
+    } finally {
+      polling = false;
     }
 
-    if (follow && run.steps[selected]?.status !== "running") {
+    if (follow && settled(run.steps[selected])) {
       // Follow means the live edge, so the pane moves when the step it is on finishes and another one
       // starts. It used to move only when a new attempt appeared, which left it sitting on a finished
       // log for the whole of a step that succeeded on its first try while the run went on elsewhere.
       const live = Object.keys(run.steps).find((step) => run.steps[step]!.status === "running");
-      if (live !== undefined && live !== selected) choose(live, false);
+      if (live !== undefined && live !== selected) {
+        choose(live, false);
+        announce(`Following ${live}.`);
+      }
     }
 
     const attempts = attemptsOf(run, selected);
@@ -1112,8 +1164,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
   }
 
   // Coming back to the tab is the moment a run that moved while you were away turns up, so that is
-  // when the reading starts again.
-  whenShown(signal, startPolling);
+  // when the reading starts again — now, not a second later.
+  whenShown(signal, () => void tick());
 
   renderHead();
   renderSteps();

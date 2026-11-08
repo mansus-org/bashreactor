@@ -96,8 +96,15 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** Seconds to "4 m 07 s", the way a person reads a duration off a running job. */
+/**
+ * Seconds to "4 m 07 s", the way a person reads a duration off a running job.
+ *
+ * Nothing to count means nothing to say: a time the API did not give, or did not give in a shape that
+ * parses, comes back empty rather than as `NaN s`, because a duration on these screens is a promise
+ * that both ends of it are known.
+ */
 export function duration(total: number): string {
+  if (!Number.isFinite(total)) return "";
   const seconds = Math.max(0, Math.floor(total));
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -132,14 +139,19 @@ export function when(iso: string | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
-/** The same instant the API was answered with, unchanged, for the `title` of something showing `when`. */
+/**
+ * The same instant the API was answered with, in UTC, for the `title` of something showing `when`.
+ *
+ * What is on the page is the reader's own clock, so the exact instant has to be written down next to
+ * it for anyone comparing two screens or matching a run against a server log. UTC always, even when
+ * the answer came in some other offset, so that two screens always agree.
+ */
 export function isoInstant(iso: string | null): string {
-  return iso ?? "";
-}
-
-/** `when` without the seconds, for a picker where a version is told apart by the minute, not the second. */
-export function whenMinute(iso: string | null): string {
-  return when(iso).slice(0, 16);
+  if (!iso) return "";
+  const at = Date.parse(iso);
+  // The `.000` that `toISOString` adds is noise nobody asked for, and a title that reads differently
+  // from the string in the API's JSON makes people think the two disagree. Real milliseconds stay.
+  return Number.isNaN(at) ? "" : new Date(at).toISOString().replace(/\.000Z$/, "Z");
 }
 
 /** The e-ink repaint. Reading layout restarts it when the same node repaints twice in a row. */

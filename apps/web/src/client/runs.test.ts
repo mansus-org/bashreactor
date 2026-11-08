@@ -384,7 +384,7 @@ writeFileSync(join(served, "app.js"), "export function navigate() {}\n");
 const { sign, when, isoInstant, duration } = (await import(join(served, "dom.js"))) as typeof import("./dom.ts");
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { MAX_DRAWN_LINES } = (await import(join(served, "logs.js"))) as typeof import("./logs.ts");
-const { renderRuns, POLL_MS } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
+const { renderRuns, POLL_MS, IDLE_POLL_MS } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
 
 // Most of what is tested here is a button, and a read-only token is never offered one.
 session.identity = { name: "tester", scope: "write", admin: false };
@@ -1274,11 +1274,11 @@ describe("following a log", () => {
  * The Runs list, on a clock the test turns. `answer` and `fail` say what the next read will say and
  * `reads` counts them, so a test can watch the screen ask rather than wait to see whether it did.
  */
-async function liveList(runs: RunSummary[]): Promise<{
+async function liveList(runs: RunSummary[], firstFails = false): Promise<{
   view: FakeElement;
   clock: FakeClock;
   reads(): number;
-  answer(runs: RunSummary[]): void;
+  answer(runs: RunSummary[] | (() => Promise<FakeResponse>)): void;
   fail(message: string): void;
 }> {
   previous?.abort();
@@ -1288,7 +1288,11 @@ async function liveList(runs: RunSummary[]): Promise<{
   const view = new FakeElement("div");
   const clock = new FakeClock();
   let asked = 0;
-  let next: () => Promise<FakeResponse> = async () => reply(runs);
+  let next: () => Promise<FakeResponse> = firstFails
+    ? async () => {
+        throw new Error("the api is down");
+      }
+    : async () => reply(runs);
   const saved = globalThis.fetch;
   globalThis.fetch = ((input: RequestInfo | URL) => {
     const url = String(input);
@@ -1305,13 +1309,17 @@ async function liveList(runs: RunSummary[]): Promise<{
     controller.signal,
     clock,
   );
-  await waitFor("the list to be drawn", () => view.querySelectorAll(".runrow").length > 0);
+  // The first read has landed once there are rows, or the list has said it is empty, or it has said
+  // nothing at all because the read failed and the whole screen is the error.
+  await waitFor("the list's first read", () => view.querySelectorAll(".runrow").length > 0 || note(view).hidden);
   return {
     view,
     clock,
     reads: () => asked,
     answer: (list) => {
-      next = async () => reply(list);
+      // Either the page to answer with, or the whole answer: a test that wants to hold a read open
+      // until it says so passes a function.
+      next = typeof list === "function" ? list : async () => reply(list);
     },
     fail: (message) => {
       next = async () => {
@@ -1341,15 +1349,87 @@ describe("a list that keeps up", () => {
     expect(word(one(list.view.querySelector(".stamp"), "the row's state"))).toBe("succeeded");
   });
 
-  test("stops reading the moment nothing on it is running, and leaves no timer behind", async () => {
+  test("goes quiet the moment nothing on it is running, and keeps a slow watch", async () => {
     const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
     list.answer([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
     await list.clock.advance(POLL_MS);
 
-    expect(list.clock.waking).toBe(0);
+    // One timer, and it is the slow one: nothing here is moving, but the list is still the front door.
+    expect(list.clock.waking).toBe(1);
     const reads = list.reads();
     await list.clock.advance(POLL_MS * 10);
     expect(list.reads()).toBe(reads);
+    await list.clock.advance(IDLE_POLL_MS);
+    expect(list.reads()).toBe(reads + 1);
+  });
+
+  test("a run started somewhere else turns up while the list is quiet", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    expect(list.reads()).toBe(1);
+
+    // Started from the CLI, or in another tab: nobody has touched this page.
+    list.answer([summary("20261104T111500Z-1a2b3c4d", "running"), summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    await list.clock.advance(IDLE_POLL_MS);
+
+    expect(list.reads()).toBe(2);
+    expect(list.view.querySelectorAll(".runrow").length).toBe(2);
+    expect(word(one(list.view.querySelector(".stamp"), "the row's state"))).toBe("running");
+    // And with something running, the fast loop is back on its own.
+    await list.clock.advance(POLL_MS);
+    expect(list.reads()).toBe(3);
+  });
+
+  test("one read that reorders, gains and loses in the same breath", async () => {
+    const list = await liveList([
+      summary("20261104T101500Z-3fa9c2d1", "running"),
+      summary("20261104T091500Z-4b5c6d7e", "running"),
+    ]);
+    const before = list.view.querySelectorAll(".runrow");
+    const kept = one(before[0] ?? null, "the older row");
+    const gone = one(before[1] ?? null, "the row that is about to go");
+    kept.focus();
+
+    // The older of the two has been deleted, a newer one has arrived, and the survivor has moved up.
+    list.answer([summary("20261104T111500Z-1a2b3c4d", "running"), summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    await list.clock.advance(POLL_MS);
+
+    const rows = list.view.querySelectorAll(".runrow");
+    expect(rows.length).toBe(2);
+    expect(rows[1]).toBe(kept);
+    expect(fakeDocument.activeElement).toBe(kept);
+    expect(rows[0]).not.toBe(kept);
+    expect(rows[0]).not.toBe(gone);
+  });
+
+  test("an empty list fills, and empties again", async () => {
+    const list = await liveList([]);
+    expect(one(list.view.querySelector(".stage__empty"), "the empty message").hidden).toBe(false);
+    expect(note(list.view).hidden).toBe(true);
+
+    list.answer([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    await list.clock.advance(IDLE_POLL_MS);
+    expect(list.view.querySelectorAll(".runrow").length).toBe(1);
+    expect(one(list.view.querySelector(".stage__empty"), "the empty message").hidden).toBe(true);
+    expect(note(list.view).hidden).toBe(true);
+
+    list.answer([]);
+    await list.clock.advance(POLL_MS);
+    expect(list.view.querySelectorAll(".runrow").length).toBe(0);
+    expect(one(list.view.querySelector(".stage__empty"), "the empty message").hidden).toBe(false);
+    expect(note(list.view).hidden).toBe(true);
+  });
+
+  test("a first read that fails does not leave the page saying it is loading", async () => {
+    const list = await liveList([], true);
+    expect(list.view.querySelector("[role=alert]")).not.toBeNull();
+    // The box is the whole of the screen now: the line that said it was loading has to get out of it.
+    expect(note(list.view).hidden).toBe(true);
+
+    list.answer([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    await list.clock.advance(POLL_MS);
+    expect(list.view.querySelectorAll(".runrow").length).toBe(1);
+    expect(list.view.querySelector("[role=alert]")).toBeNull();
+    expect(note(list.view).hidden).toBe(true);
   });
 
   test("a run that starts while you are looking turns up, and the row you were on is the same row", async () => {
@@ -1401,6 +1481,33 @@ describe("a list that keeps up", () => {
       showTab(false);
     }
   });
+
+  test("a tab looked at again while a read is on its way does not start a second one", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let out = 0;
+    let peak = 0;
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    list.answer(() => {
+      out += 1;
+      peak = Math.max(peak, out);
+      return gate.then(() => {
+        out -= 1;
+        return reply([summary("20261104T101500Z-3fa9c2d1", "running")]);
+      });
+    });
+
+    // The tab goes away and comes back while that read is still in the air.
+    await list.clock.advance(POLL_MS);
+    showTab(true);
+    showTab(false);
+    release();
+    await waitFor("the read to land", () => out === 0);
+
+    expect(peak).toBe(1);
+    // The read that landed is what re-armed the timer, so the list has not gone quiet on its own.
+    expect(list.clock.waking).toBe(1);
+  });
 });
 
 describe("a run screen that keeps up", () => {
@@ -1418,6 +1525,32 @@ describe("a run screen that keeps up", () => {
     const polls = server.polls;
     await clock.advance(POLL_MS * 10);
     expect(server.polls).toBe(polls);
+  });
+
+  test("follow stays on a step that failed an attempt and is due another one", async () => {
+    const server = new FakeServer(runFixture([step("build", "running"), step("report", "pending", ["build"])], "running"));
+    const clock = new FakeClock();
+    const view = await openRun(server, clock);
+    expect(panelTitle(view)).toBe("build");
+
+    // The attempt failed and the retry timer has it now. The run is still going, and so is this step:
+    // the next attempt is its log continuing, not another step's starting.
+    server.run = runFixture([step("build", "waiting_retry"), step("report", "running", ["build"])], "running");
+    await clock.advance(POLL_MS);
+
+    expect(panelTitle(view)).toBe("build");
+    expect(word(one(rowOf(view, "build").querySelector(".stamp"), "the row's state"))).toBe("waiting_retry");
+    expect(rowOf(view, "build").textContent).toContain("On screen");
+  });
+
+  test("a stored time this build cannot read says nothing rather than NaN", async () => {
+    const broken = runFixture([step("build", "running")], "running");
+    broken.created_at = "not a time at all";
+    const server = new FakeServer(broken);
+    const view = await openRun(server, new FakeClock());
+
+    expect(view.textContent).not.toContain("NaN");
+    expect(metaLine(view, "started").textContent).toBe("started");
   });
 
   test("says the poll is lost, and stops saying it when the server answers again", async () => {
@@ -1486,6 +1619,9 @@ describe("a run screen that keeps up", () => {
   });
 });
 
+/** Two digits, for reading a date back off a `Date`'s local getters. */
+const pair = (n: number) => String(n).padStart(2, "0");
+
 describe("one clock on the screen", () => {
   test("a time is the reader's own clock, and does not name a zone", () => {
     const stamp = when("2026-11-04T10:15:00Z");
@@ -1501,6 +1637,15 @@ describe("one clock on the screen", () => {
 
     expect(metaLine(view, "started").getAttribute("title")).toBe(LIVE.created_at);
     expect(metaLine(view, "started").textContent).toBe(`started ${when(LIVE.created_at)}`);
+  });
+
+  test("the printed time is the same instant the server sent", () => {
+    // Computed from the reader's own local getters, so it holds in any zone the test machine runs in:
+    // this is the one place that says out loud what `when` promises.
+    const local = new Date(Date.UTC(2026, 10, 4, 10, 15, 0));
+    expect(when("2026-11-04T10:15:00Z")).toBe(
+      `${local.getFullYear()}-${pair(local.getMonth() + 1)}-${pair(local.getDate())} ${pair(local.getHours())}:${pair(local.getMinutes())}:${pair(local.getSeconds())}`,
+    );
   });
 
   test("a time that is not there is nothing, not a date invented", () => {

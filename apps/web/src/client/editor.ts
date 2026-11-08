@@ -8,7 +8,7 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { ValidationIssue } from "./api.js";
-import { announce, el, errorBox, isoInstant, sign, whenMinute } from "./dom.js";
+import { announce, el, errorBox, isoInstant, sign, when } from "./dom.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
 import {
@@ -37,13 +37,16 @@ steps:
 
 /**
  * One version in the picker: its number and when it was stored, in the zone the person reading it is
- * in. It used to be the raw UTC string cut at the sixteenth character, which named no zone at all and
- * was the wrong time for anyone east of Greenwich. A time with no zone in it is only ever the reader's
- * own, so the exact instant goes in the label for anyone who needs it.
+ * in, to the second. Two saves either side of a fix are a breath apart, and a picker that shows
+ * minutes cannot say which is which. A time with no zone in it is only ever the reader's own, so the
+ * exact instant goes beside it: in the title, and again in the label, because no browser shows a
+ * tooltip on an `<option>`.
  */
 function versionOption(entry: { version: number; created_at: string }): HTMLElement {
-  const label = `v${entry.version}, ${whenMinute(entry.created_at)}`;
-  return el("option", { value: String(entry.version), "aria-label": `${label}, stored ${isoInstant(entry.created_at)}` }, label);
+  const stored = isoInstant(entry.created_at);
+  const label = `v${entry.version}, ${when(entry.created_at)}`;
+  const exact = stored === "" ? {} : { title: `stored ${stored}`, "aria-label": `${label}, stored ${stored}` };
+  return el("option", { value: String(entry.version), ...exact }, label);
 }
 
 /** SPEC 1.1: a step id starts with a lowercase letter and takes only lowercase letters, digits and `_`. */
