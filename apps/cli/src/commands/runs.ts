@@ -170,6 +170,22 @@ export const runCommands: CommandSpec[] = [
   })),
   {
     group: "runs",
+    name: "rm",
+    summary: "delete a run and everything it wrote",
+    args: [{ name: "<run-id>" }],
+    run: async (ctx) => {
+      // One call: the API owns the directory and says what it removed. A run that is still running
+      // answers 409 `run_claimed` with the pid that holds it, which is a better answer than this
+      // command guessing by reading the record first.
+      const answer = await ctx.client.json<{ deleted: string }>("DELETE", `/v1/runs/${encodeURIComponent(ctx.args[0]!)}`);
+      ctx.printer.emit(answer, (p) => {
+        p.line(`deleted ${answer.deleted}`);
+      });
+      return 0;
+    },
+  },
+  {
+    group: "runs",
     name: "logs",
     summary: "print a step's log from an offset, and say the next offset",
     args: [{ name: "<run-id>" }, { name: "<step>" }],
@@ -363,7 +379,8 @@ async function save(ctx: Ctx, response: Response, destination: string): Promise<
   return { file: destination, bytes: Number(written), run: ctx.args[0]! };
 }
 
-function sizeText(bytes: number | null | undefined): string {
+/** Exported for `bashreactor disk`, which counts bytes the same way a run's files do. */
+export function sizeText(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined) return "-";
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB", "TB"];

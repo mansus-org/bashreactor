@@ -90,6 +90,13 @@ export interface SignalOptions {
   log?: (line: string) => void;
   /** Replaced in tests. The real one ends the process. */
   exit?: (code: number) => void;
+  /**
+   * Anything else the entry point started that has to be unwound, called before the engine shuts down
+   * and awaited. The retention timer is the reason it exists: a sweep must not still be deleting
+   * directories at the moment the engine is told to stop, and a shutdown that returns while one is in
+   * flight is a SIGKILL waiting to land on it.
+   */
+  onStop?: () => void | Promise<void>;
 }
 
 /**
@@ -111,7 +118,7 @@ export function stopOnSignals(startup: Startup, options: SignalOptions = {}): vo
     received += 1;
     if (received === 1) {
       log(`bashreactor: ${signal}, stopping; running blocks get their kill_grace`);
-      void stop(startup).then(
+      void stop(startup, options).then(
         () => exit(0),
         (error: unknown) => {
           log(`bashreactor: shutdown failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -131,8 +138,11 @@ export function stopOnSignals(startup: Startup, options: SignalOptions = {}): vo
   process.on("SIGINT", onSignal);
 }
 
-async function stop(startup: Startup): Promise<void> {
-  // The engine goes first so that a request still being served cannot start a step on the way out.
+async function stop(startup: Startup, options: SignalOptions): Promise<void> {
+  // The timer goes first: a sweep that starts now would be deleting a run while the engine is being
+  // taken down around it.
+  await options.onStop?.();
+  // The engine goes next so that a request still being served cannot start a step on the way out.
   const engine = startup.api?.engine.shutdown();
   await Promise.all([engine, startup.server.stop()]);
   startup.api?.close();

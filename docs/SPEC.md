@@ -127,6 +127,11 @@ into a container that will not come up, and a refused connection tells nobody an
 *Rejected: a failing status on a degraded `/healthz`.* The reason is in the body, and a probe that
 hides its body is not worth having.
 
+`/healthz` is readiness and nothing else. It MUST NOT report free disk: a full volume is not something
+a restart fixes, and pulling a pod out of rotation with a run mid-flight to say something that was
+already true is worse than the problem. The number is `GET /v1/disk`,
+[section 4.11](#411-keeping-a-run-and-letting-it-go).
+
 ---
 
 ## 2. Block format
@@ -777,7 +782,8 @@ $BASHREACTOR_HOME/
 A run id is the UTC start time and 8 random hex digits, matching `^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$`, for
 example `20261104T101500Z-3fa9c2d1`. It sorts by time and needs no library.
 
-Nothing is deleted from a run directory except `tmp/`. Deleting a run means deleting the directory.
+Nothing is deleted from a run directory except `tmp/`. Deleting a run means deleting the directory,
+whole, and only the engine does it — [section 4.11](#411-keeping-a-run-and-letting-it-go).
 
 **Snapshots.** Starting, resuming and retrying a run read only the snapshots, never the original
 pipeline or block files. Editing a block does not affect runs already started.
@@ -1066,6 +1072,70 @@ and a single file answered while the run is running says so in its own header. A
 are final. An unknown run, step or attempt is the same answer the log route gives (`run_not_found`,
 `step_not_found`, `attempt_not_found`); a path with no file behind it is `file_not_found`.
 
+### 4.11 Keeping a run, and letting it go
+
+A run directory is deleted whole or not at all, and only by the engine, because `runs/<run id>/` is the
+record, every log and everything a block wrote, and anybody else reaching for it is guessing at a layout
+they do not own. An unknown run is `run_not_found`. A run with a live claim is `run_claimed` — something
+is writing into it — and it is left alone; cancel it first.
+
+The volume is a fixed size and a run never stops writing to it, so the server can trim on its own. The
+window is `$BASHREACTOR_RETENTION`, a [section 1.3](#13-durations) duration (`30d`, `12h`, `45m`): a run
+that has reached a final status and has been finished longer than the window is deleted, on startup and
+then hourly. A window shorter than that hourly sweep is accepted and said out loud at startup, because
+the sweep cannot honour it: a run then goes somewhere between the window and the window plus an hour.
+Unset, empty, `off`, `none` and `0` all mean the server never deletes anything, and that is
+the default — a run directory is the only copy of what a pipeline produced, and nothing in v1 can tell
+which runs a person still wants. Whichever it is, the server says so at startup, because "off" being
+silent is how a volume fills.
+
+What the sweep will not touch: a run that is not in a final status — in v1 the only one is `running`,
+which is being written into — a run with no `finished_at` to age it by, and a run that refuses while it is
+being deleted. Anything it cannot account for is kept and counted, because the failure mode of keeping one run too long is a fuller disk and the
+failure mode of deleting one too early is somebody's data. One directory that will not go does not end
+the pass; the error is logged once and the rest still go. Neither does a record that will not parse — a
+run nothing can read is the one only a delete can clear, so the engine does not read `run.json` in order
+to remove it. Two things come with that: a directory under `runs/` belonging to no run (a `createRun`
+interrupted mid-write, a delete the filesystem refused partway) is in no listing and is cleared by the
+same pass once it is older than the window, and a tree a block made read-only is made writable and
+taken away whole, because half a run directory is in no listing and still spends the space.
+
+One pass at a time: a sweep is a walk of the whole data directory, and a tick that arrives while one is
+still going is skipped rather than started, so two never delete over each other's heads. On shutdown the
+timer stops before the engine does, and a pass in flight is waited for.
+
+The window is one number for every run, and that is a decision rather than an oversight.
+
+A `failed` or `cancelled` run can still be retried, and a sweep takes away what a retry needs. It is
+deleted on the same window as a success anyway: the runs that fill a volume are the ones that fail
+nightly, and exempting failures would keep precisely what nobody wants and pay for it in the space
+that is left. A retry is something a person does inside the window, and a window of a day is the
+promise that a retry stays possible for a day.
+
+Nor is the newest run of a pipeline kept. "Newest" is per-pipeline state a sweep would have to compute
+over the whole home to protect one run while everything older goes, and it protects a pipeline that
+runs once a quarter no better than its age already does. What keeps a run in v1 is a window long
+enough, or no window at all; a marker that pins one run against the sweep is section 6 material, and
+so is a window per pipeline or per run.
+
+One thing comes with trusting `finished_at` and the clock the process is handed: a node that boots with
+a wrong clock and corrects it some minutes later can make every finished run look old at once, and one
+pass then clears the home. Nothing in v1 notices that; the line a pass logs, saying how many runs it
+removed, is the only trace there is. It is the argument for a window measured in days on a shared host.
+
+The room left is `GET /v1/disk`, which answers `path`, `total_bytes`, `used_bytes`, `free_bytes`,
+`low` and `runs_bytes` — a number for a probe or a cron to watch, said before the runs start dying.
+A filesystem that will not say is `runtime_missing`, never a zero: a volume that did not mount is not
+a full one. The two kinds of number are both there because they are not the same thing. The
+filesystem's are the mount's, and a `local-path` volume is a directory on a node that enforces no
+size, so `total_bytes` can be a disk far larger than the volume and `used_bytes` mostly somebody
+else's workload. `runs_bytes` counts the files under `runs/` and nothing else, which is the one
+number that can be compared with the size the deployment asked for.
+
+*Rejected: deleting by disk pressure rather than by age.* It needs a number for "full" the spec cannot
+pick, and it makes the oldest run the sacrifice every time, which is the one most likely to be the
+audit trail.
+
 ---
 
 ## 5. Errors
@@ -1109,8 +1179,9 @@ adds, and are nothing a block can fail with.
 | `run_not_found` | The run id does not exist. |
 | `run_not_active` | Cancel or resume on a run that is not `running`. |
 | `run_not_retryable` | Manual retry on a run that is `running` or `succeeded`. |
-| `run_claimed` | Resume on a run with a live claim. |
-| `runtime_missing` | [Section 2.6](#26-runtime-contract). The engine refuses to start, or a server is missing configuration it cannot come up without. Not a network failure: that is `api_unreachable`. |
+| `run_claimed` | Resume or delete a run with a live claim. |
+| `run_delete_failed` | [Section 4.11](#411-keeping-a-run-and-letting-it-go). The filesystem refused the removal even after the tree was made writable. The run is still there, in full. |
+| `runtime_missing` | [Section 2.6](#26-runtime-contract). The engine refuses to start, or a server is missing configuration it cannot come up without. Not a network failure: that is `api_unreachable`. Also `GET /v1/disk` when the filesystem under the data directory will not say how full it is, [section 4.11](#411-keeping-a-run-and-letting-it-go). |
 | `file_not_found` | [Section 4.10](#410-reading-a-runs-files). No file of this run is at that path, or it is only reachable through a link. |
 | `pipeline_not_found` | No pipeline of that name and version. `latest` is a version, so `nope` and `nope@latest` miss the same way. |
 | `step_not_found` | The run is there; that step is not one of its steps ([section 4.10](#410-reading-a-runs-files)). |
@@ -1146,8 +1217,13 @@ They are listed here so that the first client to meet one meets a code that is i
 ## 6. Out of scope for version 1
 
 Conditional steps (`if:`), matrix and fan-out steps, triggers and schedules, step output caching between
-runs, sandboxing, log rotation, retention of old runs, remote or distributed workers, and manual approval
-gates. A pipeline that uses a key for any of these is rejected, because the key is unknown.
+runs, sandboxing, log rotation, deleting runs by disk pressure, remote or distributed workers, and
+manual approval gates. A pipeline that uses a key for any of these is rejected, because the key is
+unknown.
+
+Retention is in: [section 4.11](#411-keeping-a-run-and-letting-it-go) keeps a finished run for
+`$BASHREACTOR_RETENTION` and then removes it. What is still out is deciding *which* runs to keep — a run
+marked to survive, a per-run or per-pipeline window, and any trimming that is not by age.
 
 Manual retry always reuses the snapshot, so fixing a block and continuing a failed run from where it
 stopped is not possible yet. It needs a new run.

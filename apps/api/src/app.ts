@@ -16,6 +16,8 @@ import { authenticate, authorize } from "./auth.ts";
 import type { Access, Identity } from "./auth.ts";
 import { stagePipeline } from "./staging.ts";
 import { TokenStore } from "./tokens.ts";
+import { diskSpace, runsBytes } from "./disk.ts";
+import type { DiskSpace } from "./disk.ts";
 import { archiveBody, buildManifest, fileResponse } from "./run-files.ts";
 import type { FileScope } from "./run-files.ts";
 
@@ -30,6 +32,8 @@ export interface ApiDependencies {
   engine?: Engine;
   store?: Store;
   tokens?: TokenStore;
+  /** How the filesystem under the data directory is measured; the real `statfs` unless injected. */
+  disk?: (path: string) => DiskSpace | null;
   log?: (line: string) => void;
 }
 
@@ -62,6 +66,7 @@ export function createApi(deps: ApiDependencies): Api {
   const tokens = deps.tokens ?? new TokenStore(config.tokensPath, log);
   const engine =
     deps.engine ?? new Engine({ store: new FsRunStore(config.dataDir), env: process.env, path: config.enginePath });
+  const disk = deps.disk ?? diskSpace;
   const stageDir = join(config.dataDir, "stage");
 
   const routes: Route[] = [];
@@ -72,6 +77,36 @@ export function createApi(deps: ApiDependencies): Api {
   // --- who you are ---------------------------------------------------------
 
   route("GET", "/v1/whoami", "read", ({ identity }) => json(200, identity));
+
+  /**
+   * The filesystem `$BASHREACTOR_HOME` sits on (SPEC 4.11). Until now the only way to find out the volume
+   * was full was that a run failed: the first thing to notice an over-full volume is a block's log
+   * append, hours into a pipeline, and it reports as a step failure, not as a server that has
+   * nowhere to write. This is the same fact, said before the runs start dying.
+   *
+   * It is a read and not the readiness probe, on purpose: `/healthz` is readiness, and a full volume
+   * is not something a restart fixes — pulling the pod out of rotation with a run mid-flight to
+   * report something that was already true is worse than the problem. `path` is here because a mount
+   * that is not where the server thinks it is is exactly the deployment bug this catches.
+   *
+   * `runs_bytes` goes with the filesystem's own numbers because on this cluster they are not the same
+   * thing: a `local-path` volume is a directory on a node and enforces no size, so `total_bytes` can
+   * be a disk far larger than the volume and `used_bytes` mostly somebody else's workload. What
+   * compares against the size the deployment asked for is what bashreactor itself has written.
+   */
+  route("GET", "/v1/disk", "read", async () => {
+    const space = disk(config.dataDir);
+    if (space === null) {
+      // `runtime_missing` rather than a new code: the server cannot answer because something it needs
+      // is not there, which is the same 503 the engine's missing `bash` is (SPEC 5).
+      throw new ApiError("runtime_missing", `cannot read the filesystem under "${config.dataDir}"`);
+    }
+    return json(200, {
+      path: config.dataDir,
+      ...space,
+      runs_bytes: await runsBytes(join(config.dataDir, "runs")),
+    });
+  });
 
   // --- tokens (admin only) -------------------------------------------------
 
@@ -261,6 +296,23 @@ export function createApi(deps: ApiDependencies): Api {
     return accepted(engine.resume(id), () => acceptedRun(id));
   });
 
+  /**
+   * Remove a run and everything it wrote (SPEC 4.2, SPEC 4.11). This is the only way anything outside the
+   * engine can take a run away, because the engine owns the directory: `runs/<id>/` holds the record,
+   * every block's log and every file a block made, and a caller that reached for `rm -rf` would be
+   * guessing at a layout it does not own.
+   *
+   * It is a write and not an admin call: the same authority that starts a run may remove one, and
+   * reading what is in there before you go is what `GET .../files` is for. A run with a live claim
+   * answers 409 `run_claimed`, the code SPEC 5 already gives for "an engine holds this"; cancel it
+   * first. The body names what went, the shape `DELETE /v1/tokens/:id` already answers with.
+   */
+  route("DELETE", "/v1/runs/:id", "write", async ({ params }) => {
+    const id = runId(params.id!);
+    await engine.deleteRun(id);
+    return json(200, { deleted: id });
+  });
+
   route("GET", "/v1/runs/:id/logs/:step/:attempt", "read", async ({ params, url }) => {
     const id = runId(params.id!);
     const stepId = params.step!;
@@ -354,6 +406,10 @@ export function createApi(deps: ApiDependencies): Api {
       if (request.method !== "GET") {
         throw new ApiError("method_not_allowed", "the deploy probe is GET /healthz");
       }
+      // Deliberately still exactly `{status, version}`, and deliberately not the place the volume's
+      // free space is reported (SPEC 4.11): this is the readiness probe, and a full `$BASHREACTOR_HOME`
+      // is not something a restart fixes — it would pull a pod out of rotation with a run mid-flight
+      // to say something that was already true. The number is at `GET /v1/disk`.
       return json(200, { status: "ok", version: config.version });
     }
 

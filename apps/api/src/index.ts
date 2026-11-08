@@ -16,6 +16,8 @@ export type { Access, Identity } from "./auth.ts";
 export { TokenStore, TOKEN_SCOPES } from "./tokens.ts";
 export type { TokenInfo, TokenScope } from "./tokens.ts";
 export { resumeRunningRuns } from "./resume.ts";
+export { announceRetention, durationText, startRetention, sweepRuns, DEFAULT_SWEEP_INTERVAL_MS } from "./retention.ts";
+export type { RetentionReport, RunsThatCanBeDeleted } from "./retention.ts";
 export { startServer, stopOnSignals } from "./startup.ts";
 export type { SignalOptions, Startup, StartupOptions } from "./startup.ts";
 export { stagePipeline } from "./staging.ts";

@@ -13,6 +13,13 @@ port: 8080
 # $BASHREACTOR_HOME: runs/ and home/ for the engine, store/ for the store, stage/ for staging,
 # tokens.json for the tokens (SPEC 1.4). Resuming a run after a rollout depends on this surviving
 # the pod, so it is a volume and not an emptyDir.
+#
+# 1 Gi, and a run never stops writing to it: the record, every block's log, everything a block made.
+# Nothing trims a run directory in place, so what keeps the volume is the retention below, and 1 Gi is
+# the reason it is not left off. Read the number honestly: `local-path` provisions a directory on the
+# node and enforces no size, so this 1 Gi is what the deployment asks for, not a wall the filesystem
+# holds anyone to. The number that means it is `runs_bytes` from `GET /v1/disk` (`bashreactor disk`),
+# which counts `runs/` and nothing else.
 persistence:
   enabled: true
   size: 1Gi
@@ -26,6 +33,11 @@ env:
   # The image already defaults to this. Set here too, so the mount path and the directory the
   # server writes to cannot drift apart when one of the two changes.
   BASHREACTOR_HOME: /data
+  # How long a finished run is kept before the server deletes it (SPEC 4.11). The server's own
+  # default is off, which is right on a laptop and not on a 1 Gi volume: with nothing deleting, the
+  # first sign of a full disk was a step failing on a log append, hours into a pipeline. 30d is a
+  # month of runs on a demo-sized volume, chosen rather than defaulted; the startup log says which.
+  BASHREACTOR_RETENTION: "30d"
   # The sha256 of the admin token, never the token. Optional because previews run in another
   # namespace and cannot decrypt this secret: they start with the API off instead of failing.
   BASHREACTOR_ADMIN_TOKEN_SHA256:

@@ -65,7 +65,9 @@ token and passes back whatever the API says.
 | `runs cancel <id>` | `POST /v1/runs/:id/cancel` | write |
 | `runs retry <id>` | `POST /v1/runs/:id/retry` | write |
 | `runs resume <id>` | `POST /v1/runs/:id/resume` | write |
+| `runs rm <id>` | `DELETE /v1/runs/:id` | write |
 | `runs logs <id> <step>` | `GET /v1/runs/:id/logs/:step/:attempt` | read |
+| `disk` | `GET /v1/disk` | read |
 | `tokens ls` | `GET /v1/tokens` | admin |
 | `tokens add <name> --scope read\|write` | `POST /v1/tokens` | admin |
 | `tokens revoke <id>` | `DELETE /v1/tokens/:id` | admin |
@@ -205,6 +207,29 @@ follow it: bashreactor runs logs 20261105T152616Z-4458ce1b generate --follow
 
 If you did want to wait, `--wait` polls until the run is final and its exit code is the run's
 status, which is what a CI step wants.
+
+## Room on the server
+
+A run directory is never trimmed, so it is removed whole or it is still there: `runs rm <id>` deletes
+one and everything it wrote, and answers `run_claimed` if an engine is still writing into it — cancel
+it first. `disk` says how much room the server has left to write in, and exits 1 when it says `low`,
+so a cron can watch it without reading prose:
+
+```
+$ bashreactor disk
+path   /tmp/bashr42-disk.BmOQ4j
+free   411 GB of 937 GB
+used   525 GB  (56%)
+runs/  22 KB
+low    no
+```
+
+Keep the two kinds of number apart. `free` and `used` are the filesystem the server sits on, which on a
+cluster is often the node's whole disk rather than the volume that was asked for; `runs/` is the run
+directories and nothing else, and it is the one to watch against whatever size the deployment gave.
+
+What removes runs by itself is `BASHREACTOR_RETENTION` on the server (apps/api/README.md, "Room to
+write in"), off by default; the CLI never deletes anything it was not told to.
 
 ## A pipeline file on your disk
 

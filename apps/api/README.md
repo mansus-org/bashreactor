@@ -18,6 +18,7 @@ bun apps/api/src/main.ts            # or: bun run serve
 | `BASHREACTOR_ADMIN_TOKEN` | — | The admin token, in the clear. Convenient on a laptop. |
 | `BASHREACTOR_ADMIN_TOKEN_SHA256` | — | The same token as its sha256, which is what a deployment should set: the clear text then never reaches a pod spec or a shell history. Wins over the clear text. |
 | `BASHREACTOR_VERSION` | the manifest version | What `/healthz` reports. The image sets it to the tag it was built as. |
+| `BASHREACTOR_RETENTION` | off | How long a run that has finished is kept before the server deletes it, as a SPEC 1.3 duration (`7d`, `12h`, `90m`). `off`, `none`, `0` and unset all mean the server never removes a run by itself; a value that does not parse stops the server rather than guessing. Whatever it is, startup says which. |
 
 With no admin token at all the server still starts and still answers `/healthz`, and every `/v1`
 route is 503: an unset token is not a reason for a pod to fail its probe.
@@ -94,6 +95,7 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | none | `{"status":"ok","version"}` for the deploy probe, `{"status":"degraded",…}` if the API never started |
 | `GET` | `/v1/whoami` | read | who the token is |
+| `GET` | `/v1/disk` | read | the filesystem under `$BASHREACTOR_HOME`: `path`, `total_bytes`, `used_bytes`, `free_bytes`, `low`, and `runs_bytes` for the run directories alone |
 | `GET` | `/v1/tokens` | admin | the agent tokens, without their secrets |
 | `POST` | `/v1/tokens` | admin | create one; the secret appears here and nowhere else |
 | `DELETE` | `/v1/tokens/:id` | admin | revoke it, effective on the next request |
@@ -115,6 +117,7 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | `GET` | `/v1/runs/:id/files` | read | what the run wrote: its file outputs, and each step's outputs, log and work, with sizes |
 | `GET` | `/v1/runs/:id/file?path=` | read | one of those files, streamed, as an attachment |
 | `GET` | `/v1/runs/:id/archive` | read | the run, one step or one attempt as tar.gz |
+| `DELETE` | `/v1/runs/:id` | write | remove a finished run and everything it wrote; `run_claimed` while an engine holds it |
 
 A path this API does not have is 404 `not_found`; a path it does have, with a method it does not take,
 is 405 `method_not_allowed` naming the methods it takes. `GET /` is not a route: it redirects to
@@ -216,6 +219,42 @@ curl -s -H "Authorization: Bearer $READ" -o embed.tar.gz --url-query step=embed 
 curl -s -H "Authorization: Bearer $READ" -o embed1.tar.gz --url-query step=embed --url-query attempt=1 $BR/v1/runs/$RUN/archive
 ```
 
+```bash
+# how full the volume is, and one run gone for good
+# {"path":"/data","total_bytes":1005921779712,"used_bytes":564133601280,"free_bytes":441788178432,"low":false,"runs_bytes":22452}
+curl -s -H "Authorization: Bearer $READ" $BR/v1/disk
+curl -s -X DELETE -H "Authorization: Bearer $WRITE" $BR/v1/runs/$RUN
+# -> 200 {"deleted":"…"}; 409 run_claimed if a run is still writing into it
+```
+
+## Room to write in
+
+`$BASHREACTOR_HOME` is a volume of a fixed size and a run never stops writing to it, so there are two
+routes about that and neither of them is `/healthz`.
+
+`GET /v1/disk` is the number: the filesystem under the data directory, with `low` true once free space
+is under 64 MiB. It is a read route and not the probe on purpose — a full volume is not something a
+restart fixes, and a probe that fails there takes a pod out of rotation with a run mid-flight to report
+something that was already true. A filesystem that will not answer (`statvfs` failed, so most often a
+mount that is not there) is 503 `runtime_missing`, never a zero: a volume that did not mount is not a
+full one.
+
+The four sizes are the *filesystem*'s, which is not always the volume: a `local-path` PVC is a directory
+on the node and enforces no size, so `total_bytes` there is the node's disk and `low` fires late. That
+is what `runs_bytes` is for — the bytes under `runs/`, counted by walking them, and nothing else — the
+only number on the route that is about this server's own data. The walk is one `stat` per file and it
+follows no symlink, so a block cannot plant a link out of the run directory to make the number lie; the
+cost is paid on a route nobody polls at speed.
+
+`DELETE /v1/runs/:id` is the removal, and `BASHREACTOR_RETENTION` is the same call on a timer — hourly,
+starting at boot, for runs that reached a final status and have been finished longer than the window.
+A run that is `running`, one with no `finished_at`, and one with a live claim are all kept,
+and one directory that will not go does not stop the pass. A `failed` or `cancelled` run is kept for
+exactly the same window as a success, even though it can still be retried: the runs that fill a volume
+are the ones that fail nightly (SPEC 4.11). The default is off, because a run directory is
+the only copy of what a pipeline produced; the server says "retention is off" at startup so that the
+default is a decision somebody made rather than a thing nobody noticed.
+
 ## Reading a run's files, and what that cannot reach
 
 `files`, `file` and `archive` answer about one directory: `$BASHREACTOR_HOME/runs/<run id>/`. Paths
@@ -300,6 +339,9 @@ the run directory is re-emitted.
 does. `test/startup.test.ts` pins the other half of that contract: a server whose API could not be
 built still binds the socket and says why at `/healthz`. The run tests build an engine whose `PATH`
 has every binary SPEC 2.6 demands, so they do not depend on what happens to be installed.
+`test/delete-run.test.ts` and `test/disk.test.ts` go through the socket too, because both are about a
+directory and a filesystem rather than about a handler, and `test/retention.test.ts` runs the sweep
+against an engine of records with the clock held still.
 
 ## Open items
 

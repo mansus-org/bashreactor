@@ -4,6 +4,8 @@
 
 import { chmodSync, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { BashreactorError } from "@bashreactor/core";
+import { RUN_ID_RE } from "./run.ts";
 import type { RunRecord } from "./run.ts";
 
 export interface EngineClaim {
@@ -39,12 +41,41 @@ export interface RunLayout {
 
 export type ClaimResult = "claimed" | "exists" | "missing";
 
+/**
+ * A directory under `runs/` that is not a run: one `createRun` was halfway through when the process
+ * died, or one a delete moved out of the listing before removing it. No listing ever returns these,
+ * which is the whole reason they get this prefix — and the reason something has to sweep them.
+ */
+export const TEMP_PREFIX = ".tmp-";
+
+/** What a directory that will not go away costs: the name, and why. */
+export interface PruneResult {
+  /** Temp directories removed. */
+  removed: string[];
+  /** Temp directories still there, with the filesystem's reason each one stayed. */
+  failed: string[];
+}
+
 export interface RunStore {
   layout(runId: string): RunLayout;
   createRun(record: RunRecord, files: RunFiles): Promise<void>;
   saveRun(record: RunRecord): Promise<void>;
   loadRun(runId: string): Promise<RunRecord | null>;
   listRunIds(): Promise<string[]>;
+  /**
+   * Take a run's whole directory away (SPEC 4.2). The only method here that destroys anything, so it
+   * is the one that refuses a name that is not a run id: every other path it could build is under
+   * `runs/`, and this one would be a tree somewhere else.
+   */
+  removeRun(runId: string): Promise<void>;
+  /**
+   * Remove `runs/${TEMP_PREFIX}*` directories whose own mtime is older than `olderThanMs` (SPEC
+   * 4.11). They belong to no run, so nothing else will ever look at them: a crashed `createRun` and a
+   * delete the filesystem refused both leave one, and on a volume whose whole problem is that it
+   * fills up, "invisible" must not mean "forgotten". Never throws — a directory it cannot remove
+   * comes back in `failed`.
+   */
+  pruneTempDirs(olderThanMs: number): Promise<PruneResult>;
 
   tryClaim(runId: string, claim: EngineClaim): Promise<ClaimResult>;
   loadClaim(runId: string): Promise<EngineClaim | null>;
@@ -100,7 +131,7 @@ export class FsRunStore implements RunStore {
   }
 
   async createRun(record: RunRecord, files: RunFiles): Promise<void> {
-    const tmpName = `.tmp-${record.id}`;
+    const tmpName = `${TEMP_PREFIX}${record.id}`;
     const tmpDir = this.layout(tmpName).runDir;
     mkdirSync(tmpDir, { recursive: true });
     mkdirSync(join(tmpDir, "blocks"), { recursive: true });
@@ -125,7 +156,74 @@ export class FsRunStore implements RunStore {
   async listRunIds(): Promise<string[]> {
     const runsDir = join(this.root, "runs");
     if (!existsSync(runsDir)) return [];
-    return readdirSync(runsDir).filter((name) => !name.startsWith(".tmp-"));
+    return readdirSync(runsDir).filter((name) => !name.startsWith(TEMP_PREFIX));
+  }
+
+  /**
+   * Remove a run whole, or not at all — which is the hard half of the promise (SPEC 4.11). `rmSync
+   * -r` walks depth-first and throws the moment it meets something it cannot unlink, and a block can
+   * easily leave a read-only tree in its work dir (a Go module cache does, `npm` sometimes does):
+   * the run would be half gone, and if `run.json` was the file that went first then nothing can name
+   * the directory again. So the directory is renamed out of the listing first — one atomic call,
+   * after which the run does not exist as far as every reader is concerned — and only the renamed
+   * copy is removed. Whatever a refusing filesystem leaves is a temp directory, and the sweep clears
+   * it.
+   *
+   * A run directory that is a symlink goes as the link and not as whatever it points at: `rmSync`
+   * lstats what it walks.
+   */
+  async removeRun(runId: string): Promise<void> {
+    if (!RUN_ID_RE.test(runId)) throw new BashreactorError("run_not_found", `"${runId}" is not a run id`);
+    const { runDir } = this.layout(runId);
+    try {
+      lstatSync(runDir);
+    } catch {
+      return; // already gone, which is the same answer as deleted
+    }
+    const staged = join(this.root, "runs", `${TEMP_PREFIX}delete-${runId}`);
+    try {
+      renameSync(runDir, staged);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw new BashreactorError(
+        "run_delete_failed",
+        `run "${runId}" could not be moved out of the way: ${reason(error)}`,
+        { path: runDir },
+      );
+    }
+    removeTree(staged, `run "${runId}"`);
+  }
+
+  async pruneTempDirs(olderThanMs: number): Promise<PruneResult> {
+    const runsDir = join(this.root, "runs");
+    const removed: string[] = [];
+    const failed: string[] = [];
+    let names: string[];
+    try {
+      names = readdirSync(runsDir);
+    } catch {
+      return { removed, failed };
+    }
+    const cutoff = Date.now() - olderThanMs;
+    for (const name of names) {
+      if (!name.startsWith(TEMP_PREFIX)) continue;
+      const path = join(runsDir, name);
+      let mtime: number;
+      try {
+        mtime = lstatSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      // Younger than the retention: it is somebody's in-flight `createRun`, not a leftover.
+      if (mtime > cutoff) continue;
+      try {
+        removeTree(path, `leftover "${name}"`);
+        removed.push(name);
+      } catch (error) {
+        failed.push(`${name}: ${reason(error)}`);
+      }
+    }
+    return { removed, failed };
   }
 
   async tryClaim(runId: string, claim: EngineClaim): Promise<ClaimResult> {
@@ -255,4 +353,52 @@ function writeAtomic(target: string, text: string): void {
   const tmp = `${target}.tmp-${Math.random().toString(16).slice(2)}`;
   writeFileSync(tmp, text);
   renameSync(tmp, target);
+}
+
+function reason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Make every directory under `path` writable, bottom up. Removing a file needs write permission on
+ * the directory holding it, not on the file, so this is what a read-only tree left by a block needs
+ * before it can be unlinked. A directory that cannot be chmod'd is passed over: the `rmSync` that
+ * follows reports it properly.
+ */
+function chmodDirsWritable(path: string): void {
+  let entries;
+  try {
+    entries = readdirSync(path, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    // A `Dirent` from `readdirSync` is an `lstat`, so a symlink is not a directory and its target is
+    // left alone, which is the whole point.
+    if (entry.isDirectory()) chmodDirsWritable(join(path, entry.name));
+  }
+  try {
+    chmodSync(path, 0o700);
+  } catch {
+    // reported by the removal that follows
+  }
+}
+
+/** Remove a tree, and if the filesystem refuses, make it writable and try once more. */
+function removeTree(path: string, what: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true });
+    return;
+  } catch {
+    chmodDirsWritable(path);
+    try {
+      rmSync(path, { recursive: true, force: true });
+    } catch (second) {
+      throw new BashreactorError(
+        "run_delete_failed",
+        `${what} could not be removed: ${reason(second)}`,
+        { path },
+      );
+    }
+  }
 }
