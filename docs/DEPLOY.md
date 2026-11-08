@@ -90,10 +90,13 @@ by itself, which is the default — right on a laptop, not on a 1 Gi volume. Whi
 so, because "off" being silent is how a volume fills:
 
 ```console
-$ env BASHREACTOR_HOME=$tmp BASHREACTOR_RETENTION=30d BASHREACTOR_ADMIN_TOKEN_SHA256=$HASH bun apps/web/src/server.ts
-bashreactor listening on :8080
-bashreactor: retention: a run that finished over 30d ago is deleted
+$ env BASHREACTOR_HOME=$tmp PORT=18094 BASHREACTOR_RETENTION=30d BASHREACTOR_ADMIN_TOKEN_SHA256=$HASH bun apps/web/src/server.ts
+bashreactor listening on :18094
+bashreactor: retention: a run that finished over 30d ago is deleted, at startup and then every 1h
 ```
+
+A window shorter than the hourly sweep is accepted and said out loud at startup, because the sweep
+cannot honour it exactly: a run then goes somewhere between the window and the window plus an hour.
 
 A value that does not parse is fatal, the way a bad `PORT` is — starting with retention that was asked
 for and not understood is how a deployment deletes the wrong year:
@@ -108,18 +111,40 @@ $ echo $?
 **The number** is `GET /v1/disk`, for a probe or a cron to watch before the runs start dying: the
 filesystem under `$BASHREACTOR_HOME`, and `low` once there is less than 64 MiB free. `bashreactor disk`
 is the same call and exits 1 on `low`. Both were run against the entry the image runs, with the admin
-token, on a dev box — so the path and the sizes are that box's, and on the cluster the path is `/data`
-and the total is the 1 Gi the PVC asks for:
+token, on a dev box that had one finished run in it:
 
 ```console
 $ curl -sS -H "authorization: Bearer $TOKEN" http://127.0.0.1:18094/v1/disk
-{"path":"/tmp/tmp.4MLoTrOiMP","total_bytes":1005921779712,"used_bytes":561902747648,"free_bytes":444019032064,"low":false} [200]
-$ curl -sS -X DELETE -H "authorization: Bearer $TOKEN" -w ' [%{http_code}]\n' http://127.0.0.1:18094/v1/runs/20261104T101500Z-3fa9c2d1
-{"code":"run_not_found","message":"run \"20261104T101500Z-3fa9c2d1\" does not exist"} [404]
+{"path":"/tmp/bashr42-disk.BmOQ4j","total_bytes":1005921779712,"used_bytes":564133601280,"free_bytes":441788178432,"low":false,"runs_bytes":22452}
+$ bashreactor disk
+path   /tmp/bashr42-disk.BmOQ4j
+free   411 GB of 937 GB
+used   525 GB  (56%)
+runs/  22 KB
+low    no
 ```
 
-That last route is the third thing: `DELETE /v1/runs/:id` — `bashreactor runs rm <id>` — which removes
-one finished run whole, and answers `run_claimed` while an engine is still writing into it.
+Read those two kinds of number apart, because on the cluster they are not the same claim.
+`total_bytes`, `used_bytes` and `free_bytes` are the *filesystem*'s, and `local-path` provisions a
+directory under `/var/lib/rancher/k3s/storage` that enforces no size: the 1 Gi in `.k3s/values.yaml`
+is a promise the node does not keep, so on the cluster those three are the node's whole disk and `low`
+fires when the node is nearly full, not when the volume's 1 Gi is spent. `runs_bytes` is the one that
+answers the question the 1 Gi was asked for — the bytes under `runs/`, counted by walking them, and
+nothing else — so it is the one to compare with the size in the values file and the one worth alerting
+on. It is `du -sb runs/` to the byte; the cost of the walk is one `stat` per file, on a route nobody
+polls at speed.
+
+The third thing is `DELETE /v1/runs/:id` — `bashreactor runs rm <id>` — which removes one finished run
+whole, and answers `run_claimed` while an engine is still writing into it. Twice the same id, so the
+second one is visible too:
+
+```console
+$ curl -sS -X DELETE -H "authorization: Bearer $TOKEN" -w ' [%{http_code}]\n' http://127.0.0.1:18094/v1/runs/20261108T003334Z-88177479
+{"deleted":"20261108T003334Z-88177479"} [200]
+$ curl -sS -X DELETE -H "authorization: Bearer $TOKEN" -w ' [%{http_code}]\n' http://127.0.0.1:18094/v1/runs/20261108T003334Z-88177479
+{"code":"run_not_found","message":"run \"20261108T003334Z-88177479\" does not exist"} [404]
+$
+```
 
 `/healthz` deliberately says nothing about any of this. It is the readiness probe, and a full volume is
 not something a restart fixes: failing it would take the pod out of rotation with a run mid-flight to

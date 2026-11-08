@@ -95,7 +95,7 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | --- | --- | --- | --- |
 | `GET` | `/healthz` | none | `{"status":"ok","version"}` for the deploy probe, `{"status":"degraded",…}` if the API never started |
 | `GET` | `/v1/whoami` | read | who the token is |
-| `GET` | `/v1/disk` | read | the filesystem under `$BASHREACTOR_HOME`: `path`, `total_bytes`, `used_bytes`, `free_bytes`, `low` |
+| `GET` | `/v1/disk` | read | the filesystem under `$BASHREACTOR_HOME`: `path`, `total_bytes`, `used_bytes`, `free_bytes`, `low`, and `runs_bytes` for the run directories alone |
 | `GET` | `/v1/tokens` | admin | the agent tokens, without their secrets |
 | `POST` | `/v1/tokens` | admin | create one; the secret appears here and nowhere else |
 | `DELETE` | `/v1/tokens/:id` | admin | revoke it, effective on the next request |
@@ -221,7 +221,7 @@ curl -s -H "Authorization: Bearer $READ" -o embed1.tar.gz --url-query step=embed
 
 ```bash
 # how full the volume is, and one run gone for good
-# {"path":"/data","total_bytes":1073741824,"used_bytes":858993459,"free_bytes":214748365,"low":false}
+# {"path":"/data","total_bytes":1005921779712,"used_bytes":564133601280,"free_bytes":441788178432,"low":false,"runs_bytes":22452}
 curl -s -H "Authorization: Bearer $READ" $BR/v1/disk
 curl -s -X DELETE -H "Authorization: Bearer $WRITE" $BR/v1/runs/$RUN
 # -> 200 {"deleted":"…"}; 409 run_claimed if a run is still writing into it
@@ -238,6 +238,13 @@ restart fixes, and a probe that fails there takes a pod out of rotation with a r
 something that was already true. A filesystem that will not answer (`statvfs` failed, so most often a
 mount that is not there) is 503 `runtime_missing`, never a zero: a volume that did not mount is not a
 full one.
+
+The four sizes are the *filesystem*'s, which is not always the volume: a `local-path` PVC is a directory
+on the node and enforces no size, so `total_bytes` there is the node's disk and `low` fires late. That
+is what `runs_bytes` is for — the bytes under `runs/`, counted by walking them, and nothing else — the
+only number on the route that is about this server's own data. The walk is one `stat` per file and it
+follows no symlink, so a block cannot plant a link out of the run directory to make the number lie; the
+cost is paid on a route nobody polls at speed.
 
 `DELETE /v1/runs/:id` is the removal, and `BASHREACTOR_RETENTION` is the same call on a timer — hourly,
 starting at boot, for runs that reached a final status and have been finished longer than the window.

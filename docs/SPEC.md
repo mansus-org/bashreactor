@@ -1082,7 +1082,9 @@ is writing into it — and it is left alone; cancel it first.
 The volume is a fixed size and a run never stops writing to it, so the server can trim on its own. The
 window is `$BASHREACTOR_RETENTION`, a [section 1.3](#13-durations) duration (`30d`, `12h`, `45m`): a run
 that has reached a final status and has been finished longer than the window is deleted, on startup and
-then hourly. Unset, empty, `off`, `none` and `0` all mean the server never deletes anything, and that is
+then hourly. A window shorter than that hourly sweep is accepted and said out loud at startup, because
+the sweep cannot honour it: a run then goes somewhere between the window and the window plus an hour.
+Unset, empty, `off`, `none` and `0` all mean the server never deletes anything, and that is
 the default — a run directory is the only copy of what a pipeline produced, and nothing in v1 can tell
 which runs a person still wants. Whichever it is, the server says so at startup, because "off" being
 silent is how a volume fills.
@@ -1103,9 +1105,14 @@ One pass at a time: a sweep is a walk of the whole data directory, and a tick th
 still going is skipped rather than started, so two never delete over each other's heads. On shutdown the
 timer stops before the engine does, and a pass in flight is waited for.
 
-The room left is `GET /v1/disk`, which answers `path`, `total_bytes`, `used_bytes`, `free_bytes` and
-`low` — a number for a probe or a cron to watch, said before the runs start dying. A filesystem that
-will not say is `runtime_missing`, never a zero: a volume that did not mount is not a full one.
+The room left is `GET /v1/disk`, which answers `path`, `total_bytes`, `used_bytes`, `free_bytes`,
+`low` and `runs_bytes` — a number for a probe or a cron to watch, said before the runs start dying.
+A filesystem that will not say is `runtime_missing`, never a zero: a volume that did not mount is not
+a full one. The two kinds of number are both there because they are not the same thing. The
+filesystem's are the mount's, and a `local-path` volume is a directory on a node that enforces no
+size, so `total_bytes` can be a disk far larger than the volume and `used_bytes` mostly somebody
+else's workload. `runs_bytes` counts the files under `runs/` and nothing else, which is the one
+number that can be compared with the size the deployment asked for.
 
 *Rejected: deleting by disk pressure rather than by age.* It needs a number for "full" the spec cannot
 pick, and it makes the oldest run the sacrifice every time, which is the one most likely to be the

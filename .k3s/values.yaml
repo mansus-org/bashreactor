@@ -16,7 +16,10 @@ port: 8080
 #
 # 1 Gi, and a run never stops writing to it: the record, every block's log, everything a block made.
 # Nothing trims a run directory in place, so what keeps the volume is the retention below, and 1 Gi is
-# the reason it is not left off. `GET /v1/disk` says when to shorten it.
+# the reason it is not left off. Read the number honestly: `local-path` provisions a directory on the
+# node and enforces no size, so this 1 Gi is what the deployment asks for, not a wall the filesystem
+# holds anyone to. The number that means it is `runs_bytes` from `GET /v1/disk` (`bashreactor disk`),
+# which counts `runs/` and nothing else.
 persistence:
   enabled: true
   size: 1Gi
@@ -30,7 +33,7 @@ env:
   # The image already defaults to this. Set here too, so the mount path and the directory the
   # server writes to cannot drift apart when one of the two changes.
   BASHREACTOR_HOME: /data
-  # How long a finished run is kept before the server deletes it (SPEC 6, SPEC 4.11). The server's own
+  # How long a finished run is kept before the server deletes it (SPEC 4.11). The server's own
   # default is off, which is right on a laptop and not on a 1 Gi volume: with nothing deleting, the
   # first sign of a full disk was a step failing on a log append, hours into a pipeline. 30d is a
   # month of runs on a demo-sized volume, chosen rather than defaulted; the startup log says which.
