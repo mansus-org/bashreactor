@@ -2,13 +2,13 @@
 // before it is a failed run.
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApi } from "../src/app.ts";
 import type { ApiConfig } from "../src/config.ts";
 import { resolveConfig } from "../src/config.ts";
-import { LOW_FREE_BYTES, diskSpace } from "../src/disk.ts";
+import { LOW_FREE_BYTES, diskSpace, runsBytes } from "../src/disk.ts";
 import { ADMIN_TOKEN, fakeRuntimeDir, startApi } from "./helpers.ts";
 
 const body = async (response: Response) => (await response.json()) as Record<string, any>;
@@ -42,6 +42,40 @@ describe("diskSpace", () => {
   });
 });
 
+describe("runsBytes", () => {
+  // The filesystem's own numbers can belong to a disk far larger than the volume the deployment was
+  // given, so this is the count an operator can compare with what they asked for.
+  test("everything under the directory, however it is nested", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-runs-bytes-"));
+    const run = join(root, "runs", "20261106T120000Z-deadbeef");
+    mkdirSync(join(run, "blocks", "fetch"), { recursive: true });
+    writeFileSync(join(run, "run.json"), "{}");
+    writeFileSync(join(run, "blocks", "fetch", "log"), "0123456789");
+
+    expect(await runsBytes(join(root, "runs"))).toBe(12);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a home with no runs yet is empty, not an error", async () => {
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-runs-bytes-"));
+    expect(await runsBytes(join(root, "runs"))).toBe(0);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("a symlink counts as the link, not as whatever it reaches", async () => {
+    // A block that leaves a symlink out of the volume must not have the whole of that other tree
+    // charged to bashreactor, and the walk must not follow it into a loop.
+    const root = mkdtempSync(join(tmpdir(), "bashreactor-runs-bytes-"));
+    const runs = join(root, "runs");
+    mkdirSync(runs, { recursive: true });
+    writeFileSync(join(root, "somewhere-else"), "0123456789".repeat(100));
+    symlinkSync(join(root, "somewhere-else"), join(runs, "escape"));
+
+    expect(await runsBytes(runs)).toBeLessThan(1000);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
 describe("GET /v1/disk", () => {
   test("names the directory it measured and the room left in it", async () => {
     const api = startApi();
@@ -53,6 +87,12 @@ describe("GET /v1/disk", () => {
     expect(disk.total_bytes).toBeGreaterThan(0);
     expect(disk.free_bytes).toBeGreaterThan(0);
     expect(typeof disk.low).toBe("boolean");
+    expect(disk.runs_bytes).toBe(0);
+
+    // The number that belongs to bashreactor rather than to the node it is standing on.
+    mkdirSync(join(api.root, "runs", "20261106T120000Z-deadbeef"), { recursive: true });
+    writeFileSync(join(api.root, "runs", "20261106T120000Z-deadbeef", "run.json"), "0123456789");
+    expect((await body(await api.call("GET", "/v1/disk"))).runs_bytes).toBe(10);
     api.cleanup();
   });
 

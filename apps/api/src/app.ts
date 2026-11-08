@@ -16,7 +16,7 @@ import { authenticate, authorize } from "./auth.ts";
 import type { Access, Identity } from "./auth.ts";
 import { stagePipeline } from "./staging.ts";
 import { TokenStore } from "./tokens.ts";
-import { diskSpace } from "./disk.ts";
+import { diskSpace, runsBytes } from "./disk.ts";
 import type { DiskSpace } from "./disk.ts";
 import { archiveBody, buildManifest, fileResponse } from "./run-files.ts";
 import type { FileScope } from "./run-files.ts";
@@ -88,15 +88,24 @@ export function createApi(deps: ApiDependencies): Api {
    * is not something a restart fixes — pulling the pod out of rotation with a run mid-flight to
    * report something that was already true is worse than the problem. `path` is here because a mount
    * that is not where the server thinks it is is exactly the deployment bug this catches.
+   *
+   * `runs_bytes` goes with the filesystem's own numbers because on this cluster they are not the same
+   * thing: a `local-path` volume is a directory on a node and enforces no size, so `total_bytes` can
+   * be a disk far larger than the volume and `used_bytes` mostly somebody else's workload. What
+   * compares against the size the deployment asked for is what bashreactor itself has written.
    */
-  route("GET", "/v1/disk", "read", () => {
+  route("GET", "/v1/disk", "read", async () => {
     const space = disk(config.dataDir);
     if (space === null) {
       // `runtime_missing` rather than a new code: the server cannot answer because something it needs
       // is not there, which is the same 503 the engine's missing `bash` is (SPEC 5).
       throw new ApiError("runtime_missing", `cannot read the filesystem under "${config.dataDir}"`);
     }
-    return json(200, { path: config.dataDir, ...space });
+    return json(200, {
+      path: config.dataDir,
+      ...space,
+      runs_bytes: await runsBytes(join(config.dataDir, "runs")),
+    });
   });
 
   // --- tokens (admin only) -------------------------------------------------
