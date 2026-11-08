@@ -25,19 +25,31 @@ const run = (id: string, status: string, finished_at: string | null) =>
 interface FakeEngine extends RunsThatCanBeDeleted {
   calls: string[];
   refused: Map<string, BashreactorError | Error>;
+  /** What `getRun` throws for, so a damaged record can be handed to the sweep. */
+  unreadable: Set<string>;
+  /** What `pruneTempDirs` reports. */
+  leftovers: string[];
+  leftoverFailures: string[];
+  pruned: number;
 }
 
 function fakeEngine(...records: RunRecord[]): FakeEngine {
   const byId = new Map(records.map((record) => [record.id, record]));
   const refused = new Map<string, BashreactorError | Error>();
+  const unreadable = new Set<string>();
   const calls: string[] = [];
-  return {
+  const engine: FakeEngine = {
     calls,
     refused,
+    unreadable,
+    leftovers: [],
+    leftoverFailures: [],
+    pruned: 0,
     async listRuns() {
       return [...byId.keys()];
     },
     async getRun(runId) {
+      if (unreadable.has(runId)) throw new SyntaxError("Unexpected token 'o', \"not json\" is not valid JSON");
       return byId.get(runId) ?? null;
     },
     async deleteRun(runId) {
@@ -46,7 +58,12 @@ function fakeEngine(...records: RunRecord[]): FakeEngine {
       if (error !== undefined) throw error;
       byId.delete(runId);
     },
+    async pruneTempDirs() {
+      engine.pruned += 1;
+      return { removed: engine.leftovers, failed: engine.leftoverFailures };
+    },
   };
+  return engine;
 }
 
 describe("BASHREACTOR_RETENTION", () => {
@@ -142,15 +159,50 @@ describe("sweepRuns", () => {
     expect(report.problem).toBeNull();
   });
 
-  test("a run that vanished between the listing and the read is not even counted", async () => {
+  test("a run that vanished between the listing and the read is counted as kept", async () => {
     const engine = fakeEngine(run("here", "succeeded", new Date(NOW.getTime() - 9 * DAY).toISOString()));
     const report = await sweepRuns(engine, DAY, { now: NOW });
     expect(report.deleted).toEqual(["here"]);
-    // The same engine, emptied: the listing still names it, the read says nothing.
+    // The same engine, emptied: the listing still names it, the read says nothing. Nothing was
+    // removed, so the only honest report is one that says it looked at one and kept one.
     const empty = fakeEngine();
     (empty as any).listRuns = async () => ["vanished"];
     const second = await sweepRuns(empty, DAY, { now: NOW });
-    expect(second).toEqual({ cutoff: report.cutoff, deleted: [], kept: 0, problem: null });
+    expect(second).toEqual({ cutoff: report.cutoff, deleted: [], kept: 1, temp: [], problem: null });
+  });
+
+  test("one record that will not parse does not stop the sweep reaching the runs after it", async () => {
+    const ancient = new Date(NOW.getTime() - 40 * DAY).toISOString();
+    const engine = fakeEngine(
+      run("damaged", "succeeded", ancient),
+      run("healthy", "succeeded", ancient),
+      run("also-healthy", "succeeded", ancient),
+    );
+    // `run.json` is read with `JSON.parse`, so a truncated write throws here rather than returning
+    // null, and a sweep that let that out would stop at the first bad record every time.
+    engine.unreadable.add("damaged");
+
+    const report = await sweepRuns(engine, DAY, { now: NOW });
+
+    expect(report.deleted).toEqual(["healthy", "also-healthy"]);
+    expect(report.kept).toBe(1);
+    expect(report.problem).toContain("not valid JSON");
+  });
+
+  test("the leftover directories are cleared in the same pass, and a failure to clear one is a problem", async () => {
+    const engine = fakeEngine(run("old", "succeeded", new Date(NOW.getTime() - 9 * DAY).toISOString()));
+    engine.leftovers = [".tmp-a", ".tmp-b"];
+
+    const report = await sweepRuns(engine, DAY, { now: NOW });
+
+    expect(engine.pruned).toBe(1);
+    expect(report.temp).toEqual([".tmp-a", ".tmp-b"]);
+    expect(report.problem).toBeNull();
+
+    const stuck = fakeEngine();
+    stuck.leftoverFailures = [".tmp-c: EACCES: permission denied, scandir"];
+    const second = await sweepRuns(stuck, DAY, { now: NOW });
+    expect(second.problem).toBe(".tmp-c: EACCES: permission denied, scandir");
   });
 
   test("an error that is not a refusal is kept as one problem, and the pass still finishes", async () => {
@@ -185,11 +237,11 @@ describe("startRetention", () => {
       intervalMs: 5,
       sweep: async () => {
         sweeps += 1;
-        return { cutoff: "", deleted: [], kept: 0, problem: null };
+        return { cutoff: "", deleted: [], kept: 0, temp: [], problem: null };
       },
     });
     await Bun.sleep(30);
-    stop();
+    await stop();
     expect(sweeps).toBe(0);
   });
 
@@ -199,7 +251,7 @@ describe("startRetention", () => {
       intervalMs: 10,
       sweep: async () => {
         sweeps += 1;
-        return { cutoff: "", deleted: [], kept: 0, problem: null };
+        return { cutoff: "", deleted: [], kept: 0, temp: [], problem: null };
       },
     });
     expect(sweeps).toBe(1);
@@ -208,10 +260,49 @@ describe("startRetention", () => {
       await Bun.sleep(10);
     }
     expect(sweeps).toBeGreaterThanOrEqual(3);
-    stop();
+    await stop();
     const after = sweeps;
     await Bun.sleep(50);
     expect(sweeps).toBe(after);
+  });
+
+  test("a tick that arrives while a sweep is still walking the home is skipped, not stacked", async () => {
+    let started = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lines: string[] = [];
+    const stop = startRetention(fakeEngine(), DAY, {
+      intervalMs: 5,
+      log: (line) => lines.push(line),
+      sweep: async () => {
+        started += 1;
+        await gate;
+        return { cutoff: "", deleted: [], kept: 0, temp: [], problem: null };
+      },
+    });
+
+    await Bun.sleep(40);
+    // One sweep, in flight, and several intervals gone by. A second walk of the same directories
+    // would be deleting under the first and reporting the same runs twice.
+    expect(started).toBe(1);
+    expect(lines).toEqual(["bashreactor: retention: the last sweep has not finished, this one is skipped"]);
+
+    // Stopping waits for the sweep that is running rather than returning in the middle of it.
+    let finished = false;
+    const stopping = stop().then(() => {
+      finished = true;
+    });
+    await Bun.sleep(10);
+    expect(finished).toBe(false);
+    release?.();
+    await stopping;
+    expect(finished).toBe(true);
+
+    const before = started;
+    await Bun.sleep(30);
+    expect(started).toBe(before);
   });
 
   test("a pass that removed something says so, in the units the operator set", async () => {
@@ -219,7 +310,7 @@ describe("startRetention", () => {
     const engine = fakeEngine(run("old", "succeeded", new Date(Date.now() - 40 * DAY).toISOString()));
     const stop = startRetention(engine, 7 * DAY, { intervalMs: 60_000, log: (line) => lines.push(line) });
     await Bun.sleep(20);
-    stop();
+    await stop();
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("removed 1 run(s)");
@@ -227,12 +318,25 @@ describe("startRetention", () => {
     expect(lines[0]).toContain("kept 0");
   });
 
+  test("a pass that only cleared leftover directories says that too", async () => {
+    const lines: string[] = [];
+    const engine = fakeEngine();
+    engine.leftovers = [".tmp-crashed"];
+    const stop = startRetention(engine, 7 * DAY, { intervalMs: 60_000, log: (line) => lines.push(line) });
+    await Bun.sleep(20);
+    await stop();
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("removed 0 run(s)");
+    expect(lines[0]).toContain("1 leftover directory/directories");
+  });
+
   test("a pass that found nothing to do says nothing", async () => {
     const lines: string[] = [];
     const engine = fakeEngine(run("recent", "succeeded", new Date().toISOString()));
     const stop = startRetention(engine, 7 * DAY, { intervalMs: 60_000, log: (line) => lines.push(line) });
     await Bun.sleep(20);
-    stop();
+    await stop();
     expect(lines).toEqual([]);
   });
 
@@ -244,7 +348,7 @@ describe("startRetention", () => {
     };
     const stop = startRetention(engine, DAY, { intervalMs: 60_000, log: (line) => lines.push(line) });
     await Bun.sleep(20);
-    stop();
+    await stop();
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("retention sweep failed");
@@ -258,7 +362,7 @@ describe("startRetention", () => {
     engine.refused.set("broken", new Error("EIO: i/o error, unlink"));
     const stop = startRetention(engine, DAY, { intervalMs: 60_000, log: (line) => lines.push(line) });
     await Bun.sleep(20);
-    stop();
+    await stop();
 
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("removed 1 run(s)");

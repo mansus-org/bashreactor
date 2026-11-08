@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Startup } from "../src/startup.ts";
-import { startServer } from "../src/startup.ts";
+import { startServer, stopOnSignals } from "../src/startup.ts";
 import { resolveConfig } from "../src/config.ts";
 import { fakeRuntimeDir } from "./helpers.ts";
 
@@ -190,5 +190,32 @@ describe("startServer", () => {
     } finally {
       server.stop();
     }
+  });
+});
+
+describe("stopOnSignals", () => {
+  test("what the entry point started is stopped before the engine goes", async () => {
+    // The order is the whole point. A retention sweep that is still walking `runs/` when the engine
+    // shuts down is a delete that will be cut in half by SIGKILL, and a half-deleted run directory is
+    // worse than the full one: it is in no listing, so nothing will ever try to remove it again.
+    const order: string[] = [];
+    const startup = {
+      server: { stop: async (forced: boolean) => void order.push(`server:${forced ? "forced" : "clean"}`) },
+      api: { engine: { shutdown: async () => void order.push("engine") } },
+    } as unknown as Startup;
+
+    stopOnSignals(startup, {
+      log: () => {},
+      exit: () => void order.push("exit"),
+      onStop: async () => {
+        order.push("timer");
+        await Bun.sleep(10);
+      },
+    });
+
+    process.emit("SIGTERM", "SIGTERM");
+    for (let i = 0; i < 100 && !order.includes("exit"); i += 1) await Bun.sleep(5);
+
+    expect(order).toEqual(["timer", "engine", "server:clean", "exit"]);
   });
 });

@@ -12,15 +12,19 @@ const config = resolveConfig(process.env, resolveVersion(process.env, manifest.v
 const startup = startServer({ config });
 const { api } = startup;
 
+// Handed to `stopOnSignals` below, so the trim stops before the engine does: a sweep must not still be
+// deleting runs at the moment the data directory is being walked away from.
+let stopRetention: () => Promise<void> = async () => {};
+
 if (api !== null) {
   if (config.adminHash === null) {
     console.log("bashreactor: /v1 is disabled, no admin token is set in the environment");
   }
 
-  // SPEC 6: the volume is a fixed size and a run never stops writing to it, so what happens to old
-  // runs is said out loud at startup either way. "Off" is the default and a legitimate answer — an
-  // operator trims from outside — but it must not be a silent one.
-  announceRetention(api.engine, config.retentionMs);
+  // SPEC 6: the volume has a size and a run never stops writing to it, so what happens to old runs is
+  // said out loud at startup either way. "Off" is the default and a legitimate answer — an operator
+  // trims from outside — but it must not be a silent one.
+  stopRetention = announceRetention(api.engine, config.retentionMs);
 
   // A rollout replaces the pod mid-run, so every run still marked `running` is taken up again before
   // anything else is served (SPEC 4.7). With no engine there is nothing to take up.
@@ -31,4 +35,4 @@ if (api !== null) {
 
 // SPEC 4.7: SIGTERM and SIGINT stop the engine's runs gracefully; runs left `running` are picked up by
 // the next process, which is what the resume above is for.
-stopOnSignals(startup);
+stopOnSignals(startup, { onStop: () => stopRetention() });
