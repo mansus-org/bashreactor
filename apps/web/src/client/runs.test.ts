@@ -1543,6 +1543,20 @@ describe("a run screen that keeps up", () => {
     expect(rowOf(view, "build").textContent).toContain("On screen");
   });
 
+  test("a retry that is already due is not counted backwards", async () => {
+    const clock = new FakeClock();
+    // The fixture is written around T0, and its retry is due at T1: 41 seconds on.
+    clock.set(T0);
+    const server = new FakeServer(runFixture([step("build", "waiting_retry"), step("report", "pending", ["build"])], "running"));
+    const view = await openRun(server, clock);
+    expect(rowOf(view, "build").textContent).toContain("Another attempt in 41 s");
+
+    // The engine's clock and the browser's are two clocks, and the browser can wake after the due time.
+    // Counting up from there would read as a countdown that went wrong.
+    await clock.advance(42_000);
+    expect(rowOf(view, "build").textContent).toContain("Another attempt is due now.");
+  });
+
   test("a stored time this build cannot read says nothing rather than NaN", async () => {
     const broken = runFixture([step("build", "running")], "running");
     broken.created_at = "not a time at all";

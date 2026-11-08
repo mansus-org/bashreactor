@@ -592,7 +592,10 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
     const onScreen = step.id === selected ? "On screen. " : "";
     if (step.status === "waiting_retry") {
       if (step.next_attempt_at !== null) {
-        return `${onScreen}Another attempt in ${duration((Date.parse(step.next_attempt_at) - clock.now()) / 1000)}.`;
+        const wait = (Date.parse(step.next_attempt_at) - clock.now()) / 1000;
+        // The engine's clock and the browser's are two clocks; counting backwards is never the truth.
+        if (wait <= 0) return `${onScreen}Another attempt is due now.`;
+        return `${onScreen}Another attempt in ${duration(wait)}.`;
       }
       return `${onScreen}Waiting to retry.`;
     }
