@@ -1092,7 +1092,16 @@ What the sweep will not touch: a run that is not in a final status (`running` is
 `finished_at` to age it by, and a run that refuses while it is being deleted. Anything it cannot account
 for is kept and counted, because the failure mode of keeping one run too long is a fuller disk and the
 failure mode of deleting one too early is somebody's data. One directory that will not go does not end
-the pass; the error is logged once and the rest still go.
+the pass; the error is logged once and the rest still go. Neither does a record that will not parse — a
+run nothing can read is the one only a delete can clear, so the engine does not read `run.json` in order
+to remove it. Two things come with that: a directory under `runs/` belonging to no run (a `createRun`
+interrupted mid-write, a delete the filesystem refused partway) is in no listing and is cleared by the
+same pass once it is older than the window, and a tree a block made read-only is made writable and
+taken away whole, because half a run directory is in no listing and still spends the space.
+
+One pass at a time: a sweep is a walk of the whole data directory, and a tick that arrives while one is
+still going is skipped rather than started, so two never delete over each other's heads. On shutdown the
+timer stops before the engine does, and a pass in flight is waited for.
 
 The room left is `GET /v1/disk`, which answers `path`, `total_bytes`, `used_bytes`, `free_bytes` and
 `low` — a number for a probe or a cron to watch, said before the runs start dying. A filesystem that
