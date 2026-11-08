@@ -13,6 +13,18 @@ export interface EngineClaim {
   pid_start: number;
 }
 
+/**
+ * What a claim says to a reader that is not the holder: who wrote `lock`, and whether they are still
+ * there. `pid_start` stays out of it, because it is only the evidence for `live` and means nothing to
+ * anyone who cannot read `/proc`.
+ */
+export interface ClaimState {
+  /** The pid of the engine that wrote `lock`. */
+  pid: number;
+  /** Whether that pid is still the process that wrote it. A stale claim blocks nothing (SPEC 4.7). */
+  live: boolean;
+}
+
 export interface RunFiles {
   pipeline: Uint8Array;
   blocks: { sha256: string; bytes: Uint8Array }[];

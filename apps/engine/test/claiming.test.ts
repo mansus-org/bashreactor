@@ -155,6 +155,28 @@ describe("claiming", () => {
     expect(untouched.steps.ok!.attempts).toHaveLength(0);
   }, 30_000);
 
+  test("what a reader learns of the claim is who holds it and whether they stayed", async () => {
+    // A client decides whether resuming can work from this and nothing else (SPEC 4.7), so the engine
+    // that owns `lock` makes the judgement rather than every reader guessing at a pid it cannot read.
+    const store = new FsRunStore(newRoot());
+    const record = await new Engine({ store }).start(fixture("ok.yaml"));
+    const id = record.id;
+
+    // Nothing has claimed it, which is not the same as a stale claim: there is no lock to read at all.
+    expect(await new Engine({ store }).readClaim(id)).toBeNull();
+
+    // The lock an engine that was SIGKILLed leaves behind, which is the one case a resume is for.
+    expect(await store.tryClaim(id, { pid: deadPid(), pid_start: 4_242 })).toBe("claimed");
+    expect(await new Engine({ store }).readClaim(id)).toEqual({ pid: expect.any(Number), live: false });
+
+    // A stale lock may be deleted and claimed again (SPEC 4.7), and now somebody is really here.
+    await store.releaseClaim(id);
+    expect(await store.tryClaim(id, { pid: process.pid, pid_start: readProcStartTime(process.pid)! })).toBe(
+      "claimed",
+    );
+    expect(await new Engine({ store }).readClaim(id)).toEqual({ pid: process.pid, live: true });
+  }, 30_000);
+
   test("a cancel from a process that does not hold the claim reaches the holder", async () => {
     const root = newRoot();
     const { store, id, proc } = await driveInAnotherProcess(root, "slow.yaml");

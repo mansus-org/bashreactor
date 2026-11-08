@@ -4,6 +4,7 @@ export type { EngineOptions } from "./engine.ts";
 export { checkRuntime, REQUIRED_BINARIES } from "./runtime.ts";
 export { FsRunStore, TEMP_PREFIX } from "./run-store.ts";
 export type {
+  ClaimState,
   EngineClaim,
   FileStat,
   PruneResult,

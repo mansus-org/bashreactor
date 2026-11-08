@@ -913,6 +913,12 @@ file `lock`, holding `{"pid": <engine pid>, "pid_start": <its field 22>}`, creat
 A claim is **live** if `/proc/<pid>/stat` exists with the same field 22 and otherwise **stale**. A stale
 lock may be deleted and claimed again. The holder deletes `lock` when the run reaches a final status.
 
+**Reading a claim.** Liveness is never written down. `run.json` says `running` both for a run being driven
+this second and for one whose engine was SIGKILLed, and only `lock` tells the two apart, so anything that
+shows a run to a person answers the question at read time from the lock: the pid that wrote it and whether
+that pid is still it, or nothing at all where there is no `lock`. A client that cannot ask has no way to
+know whether a resume would be refused, so it must not offer one.
+
 **Resume.** `resume(run id)` applies to a run with status `running`. It fails with `run_claimed` if the
 claim is live, and `run_not_active` for any other status. A server engine calls it at startup on every
 run in `runs/` with status `running`, and skips those with a live claim. A local CLI calls it when the
