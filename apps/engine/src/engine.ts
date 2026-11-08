@@ -31,9 +31,9 @@ import type {
   WithValue,
 } from "@bashreactor/core";
 import { isLiveClaim, readProcStartTime } from "./proc.ts";
-import { FINAL_RUN_STATUSES, FINAL_STEP_STATUSES, nowIso, newRunId } from "./run.ts";
+import { FINAL_RUN_STATUSES, FINAL_STEP_STATUSES, RUN_ID_RE, nowIso, newRunId } from "./run.ts";
 import type { AttemptRecord, RunRecord, StepRecord } from "./run.ts";
-import type { EngineClaim, RunFiles, RunLayout, RunStore } from "./run-store.ts";
+import type { EngineClaim, PruneResult, RunFiles, RunLayout, RunStore } from "./run-store.ts";
 import { checkRuntime } from "./runtime.ts";
 import { spawnBlock } from "./spawn.ts";
 
@@ -281,10 +281,13 @@ export class Engine {
    * this very directory; taking the directory out from under it leaves a process logging to a path
    * that is gone and a half-written record in a directory that is not there. Cancel it, wait for it
    * to stop, delete it. A claim left by a worker that died is stale and does not hold.
+   *
+   * The claim is then taken and held, not just looked at. Reading it and deleting are two moments, and
+   * between them a retry or a resume can claim the run and start a step; the check alone would let the
+   * directory go out from under that process. Holding it is what makes the check mean something.
    */
   async deleteRun(runId: string): Promise<void> {
-    const record = await this.store.loadRun(runId);
-    if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
+    if (!RUN_ID_RE.test(runId)) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
     const claim = await this.store.loadClaim(runId);
     if (claim !== null && isLiveClaim(claim)) {
       throw new BashreactorError(
@@ -292,7 +295,30 @@ export class Engine {
         `run "${runId}" is claimed by a live engine (pid ${claim.pid}); cancel it and delete it once it has stopped`,
       );
     }
-    await this.store.removeRun(runId);
+    // Ours to hold: `takeClaim` frees a stale claim, refuses a live one, and writes our own, so
+    // nothing can start a step in the directory being removed. It is never released, because the
+    // directory — lock file and all — goes with it. It also answers `run_not_found` for a directory
+    // that is not there, and deliberately does not read `run.json`: a run whose record is corrupt or
+    // gone is exactly the one only a delete can clear.
+    await this.takeClaim(runId);
+    try {
+      await this.store.removeRun(runId);
+    } catch (error) {
+      // The claim goes back with the failure. A claim this process wrote and never released answers
+      // `run_claimed` to every later attempt forever, from a pid that is alive and will not let go —
+      // and the run is still listed, so there is something left to try again.
+      await this.store.releaseClaim(runId);
+      throw error;
+    }
+  }
+
+  /**
+   * Clear the directories under `runs/` that belong to no run (SPEC 4.11): a `createRun` interrupted
+   * mid-write, or a delete the filesystem refused partway. They are in no listing, so this is the only
+   * way anything ever reclaims their space.
+   */
+  async pruneTempDirs(olderThanMs: number): Promise<PruneResult> {
+    return this.store.pruneTempDirs(olderThanMs);
   }
 
   async listRuns(): Promise<string[]> {
@@ -411,6 +437,15 @@ export class Engine {
   private async claim(runId: string): Promise<EngineClaim> {
     const record = await this.store.loadRun(runId);
     if (record === null) throw new BashreactorError("run_not_found", `run "${runId}" does not exist`);
+    return this.takeClaim(runId);
+  }
+
+  /**
+   * Take the claim, without looking at `run.json`. Everything that runs a step wants the record read
+   * first, but deleting a run must work on a directory whose record is unreadable — that is the case
+   * where removal is the only fix there is.
+   */
+  private async takeClaim(runId: string): Promise<EngineClaim> {
     const claim: EngineClaim = { pid: process.pid, pid_start: readProcStartTime(process.pid) ?? 0 };
     for (let attempt = 0; attempt < 5; attempt++) {
       const result = await this.store.tryClaim(runId, claim);

@@ -36,6 +36,7 @@ export const ERROR_CODES = [
   "run_not_active",
   "run_not_retryable",
   "run_claimed",
+  "run_delete_failed",
   "runtime_missing",
   "not_implemented",
 ] as const;

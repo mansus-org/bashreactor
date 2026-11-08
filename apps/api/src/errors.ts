@@ -54,6 +54,9 @@ const STATUS_BY_CODE: Record<string, number> = {
   method_not_allowed: 405,
   not_implemented: 501,
   runtime_missing: 503,
+  // The filesystem refused the removal even once the tree was writable (SPEC 4.11). The run is
+  // untouched, so the caller could ask again, but there is nothing in the request to fix.
+  run_delete_failed: 500,
   internal_error: 500,
   store_migration_failed: 500,
   store_closed: 500,
