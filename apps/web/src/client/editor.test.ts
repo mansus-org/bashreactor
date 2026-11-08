@@ -86,12 +86,16 @@ steps:
     uses: gone@1
 `;
 
+const defaultCreated = (version: number) => `2026-01-0${version}T09:00:00Z`;
+/** What the fake server writes for a version's `created_at`, so a test can hand over a nonsense one. */
+let created = defaultCreated;
+
 const meta = (name: string, version: number) => ({
   name,
   version,
   sha256: `${name}-${version}`,
   size: 64,
-  created_at: `2026-01-0${version}T09:00:00Z`,
+  created_at: created(version),
 });
 
 const BLOCKS: Record<string, Record<number, string>> = {
@@ -1055,5 +1059,22 @@ describe("the time a stored version was written", () => {
     // one. No browser shows a tooltip on an `<option>`, so it is in the label a screen reader reads too.
     expect(option.getAttribute("title")).toBe("stored 2026-01-01T09:00:00Z");
     expect(option.getAttribute("aria-label")).toBe(`${option.textContent}, stored 2026-01-01T09:00:00Z`);
+  });
+
+  test("a version whose time cannot be read is named on its own rather than with an empty time", async () => {
+    created = () => "not a time at all";
+    try {
+      const view = await open(PINNED);
+      const option = view
+        .querySelector('[id="open-version"]')!
+        .children.find((node) => node.value === "1")!;
+
+      // "v1, " with nothing after the comma reads as a control that lost its text, and echoing the
+      // string back would dress a wrong time up as a right one.
+      expect(option.textContent).toBe("v1");
+      expect(option.getAttribute("title")).toBeNull();
+    } finally {
+      created = defaultCreated;
+    }
   });
 });

@@ -1419,6 +1419,24 @@ describe("a list that keeps up", () => {
     expect(note(list.view).hidden).toBe(true);
   });
 
+  test("a row whose stored time cannot be read keeps the row and drops the time", async () => {
+    const list = await liveList([summary("one", "succeeded"), { ...summary("two", "succeeded"), created_at: "not a time at all" }]);
+    const view = list.view;
+
+    // Echoing the string back would put a wrong time on the page dressed up as a right one.
+    expect(view.textContent).not.toContain("not a time at all");
+    const row = one(
+      view.querySelectorAll(".runrow").find((r) => r.textContent.includes("two")) ?? null,
+      "the row with the unreadable time",
+    );
+    expect(row.textContent).not.toContain("started");
+    const good = one(
+      view.querySelectorAll(".runrow").find((r) => r.textContent.includes("one")) ?? null,
+      "the row with a real time",
+    );
+    expect(good.textContent).toContain("started");
+  });
+
   test("a first read that fails does not leave the page saying it is loading", async () => {
     const list = await liveList([], true);
     expect(list.view.querySelector("[role=alert]")).not.toBeNull();
@@ -1555,6 +1573,18 @@ describe("a run screen that keeps up", () => {
     // Counting up from there would read as a countdown that went wrong.
     await clock.advance(42_000);
     expect(rowOf(view, "build").textContent).toContain("Another attempt is due now.");
+  });
+
+  test("a retry with no readable time to wait for says it is waiting, not how long", async () => {
+    const clock = new FakeClock();
+    clock.set(T0);
+    const run = runFixture([step("build", "waiting_retry"), step("report", "pending", ["build"])], "running");
+    run.steps.build!.next_attempt_at = "not a time at all";
+    const view = await openRun(new FakeServer(run), clock);
+
+    // "Another attempt in ." is the sentence with the number missing, which is the same bug wearing a hat.
+    expect(rowOf(view, "build").textContent).toContain("Waiting to retry.");
+    expect(rowOf(view, "build").textContent).not.toContain("Another attempt in .");
   });
 
   test("a stored time this build cannot read says nothing rather than NaN", async () => {

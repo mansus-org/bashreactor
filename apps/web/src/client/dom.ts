@@ -129,12 +129,15 @@ export function clock(total: number): string {
  * ISO at the sixteenth character. Nothing on any of them said which zone was meant. So this says it
  * once, in the one zone the browser reads in, and it says it to the second — the minute is where two
  * runs started a breath apart stop being tellable apart. A string with no zone marker in it is only
- * ever the reader's own time, so whatever shows it puts `isoInstant` beside it.
+ * ever the reader's own time, so whatever shows it puts `isoInstant` beside it. A string that will not
+ * parse returns the empty string rather than being echoed back: a time the API got wrong is not shown
+ * as a time, and every caller hides the line when this is empty.
  */
 export function when(iso: string | null): string {
   if (!iso) return "";
   const at = Date.parse(iso);
-  if (Number.isNaN(at)) return iso;
+  // Echoing back a string that will not parse puts a wrong time on the page dressed up as a right one.
+  if (Number.isNaN(at)) return "";
   const d = new Date(at);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }

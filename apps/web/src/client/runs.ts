@@ -317,6 +317,7 @@ function runRow(run: RunSummary): HTMLElement {
   // The words are the reader's own clock; `datetime` and the title carry that same instant in UTC, so
   // two screens and a server log line up without anybody doing sums.
   const stored = isoInstant(run.created_at);
+  const printed = when(run.created_at);
   const exact = stored === "" ? {} : { datetime: stored, title: stored };
   return el(
     "a",
@@ -325,11 +326,11 @@ function runRow(run: RunSummary): HTMLElement {
       "span",
       {},
       el("span", { class: "runrow__id" }, run.id),
-      el(
-        "time",
-        { class: "runrow__meta", ...exact },
-        ` · ${run.pipeline}, started ${when(run.created_at)}`,
-      ),
+      // A time this build cannot read is left out rather than echoed back at the reader: the pipeline is
+      // still worth the row, and a wrong time on a list is worse than a missing one.
+      printed === ""
+        ? el("span", { class: "runrow__meta" }, ` · ${run.pipeline}`)
+        : el("time", { class: "runrow__meta", ...exact }, ` · ${run.pipeline}, started ${printed}`),
     ),
     // The stamp is the state: it carries the sign and the word, so the row does not repeat the shape
     // at 70 px next to it.
@@ -591,13 +592,12 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
     // wrong step. Said once, in the row, where the state is.
     const onScreen = step.id === selected ? "On screen. " : "";
     if (step.status === "waiting_retry") {
-      if (step.next_attempt_at !== null) {
-        const wait = (Date.parse(step.next_attempt_at) - clock.now()) / 1000;
-        // The engine's clock and the browser's are two clocks; counting backwards is never the truth.
-        if (wait <= 0) return `${onScreen}Another attempt is due now.`;
-        return `${onScreen}Another attempt in ${duration(wait)}.`;
-      }
-      return `${onScreen}Waiting to retry.`;
+      const due = step.next_attempt_at === null ? Number.NaN : Date.parse(step.next_attempt_at);
+      // A retry time that cannot be read is not a countdown, and one that has gone past is not either:
+      // the engine's clock and the browser's are two clocks, and counting backwards is never the truth.
+      if (Number.isNaN(due)) return `${onScreen}Waiting to retry.`;
+      if (due <= clock.now()) return `${onScreen}Another attempt is due now.`;
+      return `${onScreen}Another attempt in ${duration((due - clock.now()) / 1000)}.`;
     }
     if (step.status === "pending") {
       const open = step.needs.filter((need) => runSteps[need]?.status !== "succeeded");
@@ -621,9 +621,10 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
     const elapsed = ((run.finished_at !== null ? Date.parse(run.finished_at) : clock.now()) - Date.parse(run.created_at)) / 1000;
     // A time this build cannot read is not shown at all: "started NaN" is worse than the word with
     // nothing after it, and the exact instant is only worth putting up if it is a real instant.
-    const stored = Number.isNaN(Date.parse(run.created_at)) ? "" : isoInstant(run.created_at);
-    metaStarted.hidden = stored === "";
-    metaStarted.textContent = stored === "" ? "started" : `started ${when(run.created_at)}`;
+    const stored = isoInstant(run.created_at);
+    const printed = when(run.created_at);
+    metaStarted.hidden = printed === "";
+    metaStarted.textContent = printed === "" ? "started" : `started ${printed}`;
     metaStarted.title = stored;
     const counted = duration(elapsed);
     metaElapsed.hidden = counted === "";

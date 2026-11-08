@@ -44,7 +44,10 @@ steps:
  */
 function versionOption(entry: { version: number; created_at: string }): HTMLElement {
   const stored = isoInstant(entry.created_at);
-  const label = `v${entry.version}, ${when(entry.created_at)}`;
+  const printed = when(entry.created_at);
+  // A time this build cannot read is left out of the label rather than echoed into it: the version number
+  // still tells people which is which, and "v3, " with nothing after it reads as a broken control.
+  const label = printed === "" ? `v${entry.version}` : `v${entry.version}, ${printed}`;
   const exact = stored === "" ? {} : { title: `stored ${stored}`, "aria-label": `${label}, stored ${stored}` };
   return el("option", { value: String(entry.version), ...exact }, label);
 }
