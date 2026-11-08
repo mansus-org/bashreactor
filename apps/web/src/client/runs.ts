@@ -642,11 +642,19 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
 
     // The controls already exist; only what they allow changes. Rebuilding them every second is what
     // made the jump box forget what you typed and dropped your focus off Cancel.
+    //
+    // Each one is offered only where it can work, because a button whose only answer is a refusal is
+    // a trap. SPEC 4.6 allows a manual retry on a failed or cancelled run and on no other, so a
+    // succeeded run gets no Retry. SPEC 4.7 refuses resume while an engine holds the run, and this
+    // server holds every run it is driving, so a live claim gets no Resume; a stale claim does, since
+    // that run is the one worth taking up. A response without `claim` says nobody, which is read as no
+    // holder rather than a crash.
     const live = run.status === "running";
+    const held = run.claim?.live === true;
     const writable = canWrite();
     cancelButton.hidden = !(writable && live);
-    resumeButton.hidden = !(writable && live);
-    retryButton.hidden = !(writable && !live);
+    resumeButton.hidden = !(writable && live && !held);
+    retryButton.hidden = !(writable && (run.status === "failed" || run.status === "cancelled"));
     readOnly.hidden = writable;
     cancelButton.disabled = busy;
     resumeButton.disabled = busy;
