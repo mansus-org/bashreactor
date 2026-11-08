@@ -18,6 +18,11 @@ function text(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** A block whose header names it, so a test can store several without repeating the header shape. */
+function script(name: string, body: string): string {
+  return `#!/usr/bin/env bash\n# ---\n# name: ${name}\n# ---\n${body}\n`;
+}
+
 function writeFixture(store: Store): { runId: string } {
   const block = store.addBlockVersion("generate", "#!/usr/bin/env bash\n# ---\n# name: generate\n# ---\n");
   const pipeline = store.savePipeline({
@@ -72,6 +77,22 @@ describe("block library", () => {
     store.close();
   });
 
+  test("lists every block by name, with its newest version and how many there are", () => {
+    const store = new Store(makeDir());
+    expect(store.listBlockNames()).toEqual([]);
+
+    store.addBlockVersion("fetch", script("fetch", "echo v1"));
+    store.addBlockVersion("fetch", script("fetch", "echo v2"));
+    store.addBlockVersion("accent", script("accent", "echo hi"));
+
+    // One entry per name, names sorted, so a client can fill a list without asking per name.
+    expect(store.listBlockNames()).toEqual([
+      { name: "accent", latest: 1, versions: 1 },
+      { name: "fetch", latest: 2, versions: 2 },
+    ]);
+    store.close();
+  });
+
   test("rejects a bad name and reports a missing version", () => {
     const store = new Store(makeDir());
     expect(() => store.addBlockVersion("Bad_Name", "x")).toThrow(expect.objectContaining({ code: "invalid_argument" }));
@@ -101,6 +122,25 @@ describe("pipelines", () => {
     expect(store.getPipeline("hello", 1).yaml).toBe(p1.yaml);
     expect(store.listPipelineVersions("hello").map((p) => p.version)).toEqual([1, 2]);
     expect(store.latestPipeline("hello")?.version).toBe(2);
+    store.close();
+  });
+
+  test("lists every pipeline by name, without carrying the YAML of each", () => {
+    const store = new Store(makeDir());
+    const save = (name: string, description?: string) =>
+      store.savePipeline({
+        name,
+        yaml: `name: ${name}\n${description === undefined ? "" : `description: ${description}\n`}steps:\n  greet:\n    uses: ./greet.sh\n`,
+        parsed: { name, ...(description === undefined ? {} : { description }), steps: [{ id: "greet", uses: "./greet.sh" }] },
+      });
+    save("word-report");
+    save("nightly");
+    save("word-report", "second");
+
+    expect(store.listPipelineNames()).toEqual([
+      { name: "nightly", latest: 1, versions: 1 },
+      { name: "word-report", latest: 2, versions: 2 },
+    ]);
     store.close();
   });
 });

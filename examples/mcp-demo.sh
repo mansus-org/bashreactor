@@ -61,9 +61,17 @@ step "1. the tools"
 tools=$(curl -sS -X POST "$url" -H "authorization: Bearer $token" -H 'content-type: application/json' \
   -H 'accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 note "$(jq -r '[.result.tools[].name] | join(" ")' <<<"$tools")"
-check "one tool per route the API offers" "20" "$(jq -r '.result.tools | length' <<<"$tools")"
+check "one tool per route the API offers" "22" "$(jq -r '.result.tools | length' <<<"$tools")"
 
 step "2. the library, and a block's contract"
+# list_blocks is the one call that answers "what is in here", which until now no surface could: an
+# agent had to be told a name to get anywhere.
+check "list_blocks names what the library holds" "check-corpus count-words generate-corpus render-report" \
+  "$(call list_blocks '{}' | jq -r '[.blocks[].name] | join(" ")')"
+check "and says how many versions each has" "1" \
+  "$(call list_blocks '{}' | jq -r '.blocks[] | select(.name == "generate-corpus") | .versions')"
+check "list_pipelines names the stored pipelines" "word-report" \
+  "$(call list_pipelines '{}' | jq -r '[.pipelines[].name] | join(" ")')"
 check "list_block_versions" "1" "$(call list_block_versions '{"name":"generate-corpus"}' | jq '.versions | length')"
 # get_block_content is the tool worth its name here: a block's contract is its header, and no other
 # surface hands you the whole file this cheaply.

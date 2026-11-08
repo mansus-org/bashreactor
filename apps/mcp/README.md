@@ -86,9 +86,11 @@ agent calls.
 | Tool | Needs | Route | Gives you |
 | --- | --- | --- | --- |
 | `whoami` | read | `GET /v1/whoami` | Which token this is, and its scope |
+| `list_blocks` | read | `GET /v1/blocks` | Every block name, with its latest version and how many there are |
 | `list_block_versions` | read | `GET /v1/blocks/:name` | Every version of one block |
 | `get_block_version` | read | `GET /v1/blocks/:name/:version` | One version's metadata |
 | `get_block_content` | read | `GET /v1/blocks/:name/:version/content` | The block's bytes, header and all — its contract |
+| `list_pipelines` | read | `GET /v1/pipelines` | Every stored pipeline name, with its latest version and how many there are |
 | `list_pipeline_versions` | read | `GET /v1/pipelines/:name` | Every version of one pipeline |
 | `get_pipeline_version` | read | `GET /v1/pipelines/:name/:version` | One version, with its YAML and parsed form |
 | `validate_pipeline` | read | `POST /v1/pipelines/validate` | Every rule a document breaks, and nothing created |
@@ -243,9 +245,6 @@ server reaching past the API is one where it cannot.
 - **A successful `resume_run` is not exercised.** It needs a run left `running` by an engine that
   died, which is the engine's restart test to stage. The suite covers what the API honestly answers
   instead: `run_claimed` for a run being driven, `run_not_active` for one that finished.
-- **No route lists every block or every pipeline**, because the store has no `listBlockNames()` or
-  `listPipelineNames()` and BASHR-5 could not add one. `list_block_versions` needs the name. This is
-  the API's open item, and the tools inherit it.
 - **SPEC 5 still has no codes** for `unauthenticated`, `forbidden`, `pipeline_not_found`,
   `token_not_found` or `internal_error`. All three surfaces are waiting on the same line in the spec.
 - **Nothing runs the MCP server in the image.** `Dockerfile` and `.k3s/` are BASHR-2's and BASHR-9's;

@@ -51,6 +51,29 @@ outputs:
     expect((listed.versions as Record<string, unknown>[]).map((entry) => entry.version)).toEqual([1, 2]);
   });
 
+  test("the library lists every name it holds, newest version and count included", async () => {
+    const other = blockFile(
+      "other-block",
+      `name: other-block
+description: Nothing at all.
+inputs: {}
+outputs:
+  result:
+    type: string`,
+      `printf 'ok' > "$OUTPUT_RESULT"`,
+    );
+    expect((await server.call("POST", "/v1/blocks/other-block/versions", { body: { content: other.content } })).status).toBe(201);
+
+    const listed = await body(await server.call("GET", "/v1/blocks"));
+    const entries = listed.blocks as Record<string, unknown>[];
+    const hello = entries.find((entry) => entry.name === "hello");
+    expect(hello).toEqual({ name: "hello", latest: 2, versions: 2 });
+    // In order by name, so two calls answer the same list and a client can page its own way through it.
+    expect(entries.indexOf(hello!)).toBeLessThan(entries.findIndex((entry) => entry.name === "other-block"));
+    // Names and counts, never the source: the bytes are one request per block, not a dump of the library.
+    expect(JSON.stringify(listed)).not.toInclude("#!/usr/bin/env bash");
+  });
+
   test("one version is readable by number, and by latest", async () => {
     const one = await body(await server.call("GET", "/v1/blocks/hello/1"));
     expect(one.version).toBe(1);

@@ -135,6 +135,14 @@ export function createApi(deps: ApiDependencies): Api {
 
   // --- the block library ---------------------------------------------------
 
+  /**
+   * Every block the library holds, one entry per name (SPEC 4.1). Everything else in this API is
+   * addressed by name, so before this route the only way to find out what the library held was to
+   * already know: the CLI had a list of three names typed into it, and the editor could only offer
+   * blocks a document had already named.
+   */
+  route("GET", "/v1/blocks", "read", () => json(200, { blocks: store.listBlockNames() }));
+
   route("GET", "/v1/blocks/:name", "read", ({ params }) => {
     const name = blockName(params.name!);
     const versions = store.listBlockVersions(name).map(blockRecord);
@@ -186,6 +194,9 @@ export function createApi(deps: ApiDependencies): Api {
   });
 
   // --- pipeline versions ---------------------------------------------------
+
+  /** Every pipeline that has been stored, same shape and same reason as `/v1/blocks`. */
+  route("GET", "/v1/pipelines", "read", () => json(200, { pipelines: store.listPipelineNames() }));
 
   route("GET", "/v1/pipelines/:name", "read", ({ params }) => {
     const name = pipelineName(params.name!);

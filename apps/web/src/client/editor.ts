@@ -7,7 +7,7 @@
 // is a POST. Ported from mockup/editor.js.
 
 import { api, ApiError, canWrite } from "./api.js";
-import type { ValidationIssue } from "./api.js";
+import type { LibraryName, ValidationIssue } from "./api.js";
 import { announce, el, errorBox, isoInstant, sign, when } from "./dom.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
@@ -227,6 +227,10 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   let lastGood: Analysis | null = null;
   let selected: string | null = null;
   let library: Library = {};
+  // Every name the library holds, from `GET /v1/blocks`, newest version each. Names only: a step's
+  // contract still comes from the source `ensureLibrary` fetches, so this is the list of what is on
+  // offer, which is not the same as what has been read.
+  let listed: LibraryName[] = [];
   const fetched = new Set<string>();
   let openName: string | null = null;
   let openVersion: number | "latest" = "latest";
@@ -282,10 +286,13 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     id: "open-name",
     type: "text",
     spellcheck: "false",
-    autocomplete: "off",
+    list: "pipeline-names",
     placeholder: "word-report",
     "aria-describedby": "open-name-help",
   });
+  // Filled from `GET /v1/pipelines`: the names that have been stored, so the box asks for less than
+  // it used to. A person who knows a name the list has not still types it and gets the same answer.
+  const pipelineNames = el("datalist", { id: "pipeline-names" });
   const openButton = el("button", { class: "btn", type: "button", onclick: () => void openChosen() }, "Open");
   const openError = el("p", { class: "form-error", id: "open-error", role: "alert", hidden: true });
   const versionSelect = el("select", {
@@ -377,12 +384,12 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
           "div",
           { class: "field" },
           el("label", { class: "label", for: "open-name" }, "Stored pipeline"),
-          el("div", { class: "row" }, openNameInput, openButton, versionSelect),
+          el("div", { class: "row" }, openNameInput, pipelineNames, openButton, versionSelect),
           openError,
           el(
             "p",
             { class: "help", id: "open-name-help" },
-            "The API has no route that lists every pipeline, so a document is opened by name.",
+            "Choose a stored pipeline, or type its name.",
           ),
         ),
         newButton,
@@ -599,6 +606,40 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   }
 
   // ---------- the library, which is the API's ----------
+
+  /**
+   * Every block a step can be pointed at, newest version each: the whole library by name, plus any
+   * version this document already names that the list has not (yet) reported.
+   *
+   * Before `GET /v1/blocks` there was nothing to ask, so this could only offer the blocks the
+   * document already named — which is empty on a new pipeline, and the reason Add step used to
+   * answer "publish a block first" at a library full of them.
+   */
+  function offers(): { name: string; uses: string }[] {
+    const newest = new Map(listed.map((block) => [block.name, block.latest]));
+    for (const [name, entry] of Object.entries(library)) {
+      const version = entry.versions.length === 0 ? undefined : latest(entry).version;
+      if (version !== undefined && version > (newest.get(name) ?? 0)) newest.set(name, version);
+    }
+    return [...newest.entries()]
+      .toSorted(([first], [second]) => (first < second ? -1 : 1))
+      .map(([name, version]) => ({ name, uses: libraryRef(name, version) }));
+  }
+
+  /** The library's own names, asked for once: what a step can point at, and what the box above the
+   * editor can open. Neither is worth making the document on screen wait for — a list that will not
+   * answer leaves the names this document already names, which is what there was before there was a
+   * list route at all.
+   */
+  async function loadNames(): Promise<void> {
+    const [blocks, pipelines] = await Promise.allSettled([api.allBlocks(), api.allPipelines()]);
+    if (blocks.status === "fulfilled") listed = blocks.value.blocks;
+    if (pipelines.status === "fulfilled") {
+      pipelineNames.replaceChildren(...pipelines.value.pipelines.map((pipeline) => el("option", { value: pipeline.name })));
+    }
+    if (gone()) return;
+    render("names");
+  }
 
   /**
    * Every block this document names, fetched once, so a step's contract is its own file's header.
@@ -878,9 +919,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     }
 
     const active = inspector.contains(document.activeElement) ? document.activeElement?.id ?? null : null;
-    const usesOptions = Object.keys(library)
-      .toSorted()
-      .map((name) => libraryRef(name, latest(library[name]!).version));
+    const usesOptions = offers().map((offer) => offer.uses);
     const usesSelect = el(
       "select",
       {
@@ -1175,8 +1214,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   // ---------- dialogs ----------
 
   function openAddDialog(): void {
-    const names = Object.keys(library).toSorted();
-    if (names.length === 0) {
+    const onOffer = offers();
+    if (onOffer.length === 0) {
       announce("There is no block in the library yet. Publish one on the Blocks screen first.");
       status.textContent = "Add a step by typing it in the YAML, or publish a block on the Blocks screen.";
       return;
@@ -1184,18 +1223,18 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const usesSelect = el(
       "select",
       { id: "add-uses" },
-      names.map((name) => el("option", { value: name }, libraryRef(name, latest(library[name]!).version))),
+      onOffer.map((offer) => el("option", { value: offer.uses }, offer.uses)),
     );
     // The first block in the library is the one on offer, said out loud rather than left to whatever
     // the browser picks for a select it has just filled.
-    usesSelect.value = names[0]!;
+    usesSelect.value = onOffer[0]!.uses;
     const idInput = el("input", { id: "add-id", type: "text", spellcheck: "false", autocomplete: "off" });
     const error = el("p", { class: "form-error", role: "alert", hidden: true });
     const suggest = (): void => {
       if (!analysis.ok) return;
       // A block name is `a-z0-9-` and a step id is `a-z0-9_` (SPEC 1.1), so the name has to be
       // translated rather than copied: suggesting `check-corpus` would offer an id the rule refuses.
-      const base = usesSelect.value.replace(/-/g, "_").slice(0, 64);
+      const base = (readUses(usesSelect.value)?.name ?? "").replace(/-/g, "_").slice(0, 64);
       let candidate = base;
       for (let n = 2; analysis.ok && analysis.byId[candidate] !== undefined; n++) candidate = `${base}_${n}`.slice(0, 64);
       idInput.value = candidate;
@@ -1226,7 +1265,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
               idInput.focus();
               return;
             }
-            const next = addStep(text, model, id, { uses: libraryRef(usesSelect.value, latest(library[usesSelect.value]!).version) });
+            const next = addStep(text, model, id, { uses: usesSelect.value });
             addDialog.close();
             edit(next, null, id);
             // The edit re-analysed the text, so the new step's lines are in the current analysis.
@@ -1323,6 +1362,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   // ---------- start ----------
 
   textarea.value = text;
+  void loadNames();
   const name = route.parts[1];
   const version = routeVersion(route.parts[2]);
   if (name === undefined) {

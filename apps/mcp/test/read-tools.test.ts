@@ -25,6 +25,16 @@ describe("whoami", () => {
 });
 
 describe("the block library", () => {
+  test("lists every name it holds, without being told one", async () => {
+    const { json, isError } = await session.call("list_blocks");
+    expect(isError).toBe(false);
+    expect(json.blocks.find((entry: { name: string }) => entry.name === "hello")).toEqual({
+      name: "hello",
+      latest: 1,
+      versions: 1,
+    });
+  });
+
   test("lists a block's versions", async () => {
     const { json, isError } = await session.call("list_block_versions", { name: "hello" });
     expect(isError).toBe(false);
@@ -52,6 +62,16 @@ describe("the block library", () => {
 });
 
 describe("pipeline versions", () => {
+  test("lists every name that has been stored, without being told one", async () => {
+    const { json, isError } = await session.call("list_pipelines");
+    expect(isError).toBe(false);
+    expect(json.pipelines.find((entry: { name: string }) => entry.name === "hello-pipeline")).toEqual({
+      name: "hello-pipeline",
+      latest: 1,
+      versions: 1,
+    });
+  });
+
   test("lists them and reads one back exactly", async () => {
     const listed = await session.call("list_pipeline_versions", { name: "hello-pipeline" });
     expect(listed.json.latest).toBe(1);

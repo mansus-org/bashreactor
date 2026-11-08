@@ -58,6 +58,14 @@ describe("pipeline versions", () => {
     expect(latest.yaml).toBe(TWO_STEPS);
   });
 
+  test("the library lists every pipeline name it holds", async () => {
+    const listed = await body(await server.call("GET", "/v1/pipelines"));
+    const entries = listed.pipelines as Record<string, unknown>[];
+    expect(entries.find((entry) => entry.name === "test-pipeline")).toEqual({ name: "test-pipeline", latest: 2, versions: 2 });
+    // Names to pick from, not the documents: the YAML is one request per pipeline, same as a block.
+    expect(JSON.stringify(listed)).not.toInclude("uses:");
+  });
+
   test("a pipeline or version that is not there is 404", async () => {
     expect((await server.call("GET", "/v1/pipelines/nope")).status).toBe(404);
     expect((await server.call("GET", "/v1/pipelines/nope/latest")).status).toBe(404);

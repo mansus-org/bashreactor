@@ -24,6 +24,24 @@ export interface BlockVersion {
   createdAt: string;
 }
 
+/**
+ * One block name in the library, without opening any of its files. `versions` is the count of
+ * versions stored, and `addBlockVersion` numbers them from 1 up with nothing removed, so it equals
+ * `latest` for anything this store wrote.
+ */
+export interface BlockName {
+  name: string;
+  latest: number;
+  versions: number;
+}
+
+/** The same three facts about one pipeline name. */
+export interface PipelineName {
+  name: string;
+  latest: number;
+  versions: number;
+}
+
 export interface PipelineRecord {
   name: string;
   version: number;

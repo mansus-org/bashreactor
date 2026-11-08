@@ -26,6 +26,13 @@ export interface BlockList {
   versions: BlockVersion[];
 }
 
+/** One name out of `GET /v1/blocks` or `GET /v1/pipelines`, which list the library by name. */
+export interface LibraryName {
+  name: string;
+  latest: number;
+  versions: number;
+}
+
 export interface PipelineVersionMeta {
   name: string;
   version: number;
@@ -277,6 +284,8 @@ export const api = {
   health: () => fetch(`${session.base}/healthz`, { cache: "no-store" }).then((r) => r.json() as Promise<Health>),
 
   blocks: (name: string) => send("GET", `blocks/${encodeURIComponent(name)}`).then(json<BlockList>),
+  /** Every block the library holds, so a list can be filled without knowing the names first. */
+  allBlocks: () => send("GET", "blocks").then(json<{ blocks: LibraryName[] }>),
   blockContent: (name: string, version: number | "latest") =>
     send("GET", `blocks/${encodeURIComponent(name)}/${version}/content`).then(async (response) => {
       if (!response.ok) throw await errorOf(response);
@@ -290,6 +299,8 @@ export const api = {
     }).then(json<BlockVersion>),
 
   pipelines: (name: string) => send("GET", `pipelines/${encodeURIComponent(name)}`).then(json<PipelineList>),
+  /** Every pipeline that has been stored, names only. */
+  allPipelines: () => send("GET", "pipelines").then(json<{ pipelines: LibraryName[] }>),
   pipelineVersion: (name: string, version: number | "latest") =>
     send("GET", `pipelines/${encodeURIComponent(name)}/${version}`).then(json<PipelineVersion>),
   validate: (yaml: string) => send("POST", "pipelines/validate", { body: { yaml } }).then(json<ValidationReport>),

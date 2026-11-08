@@ -118,6 +118,16 @@ export interface BlockList {
   versions: BlockVersion[];
 }
 
+/**
+ * One name out of `GET /v1/blocks` or `GET /v1/pipelines`. The library by name, with no versions
+ * and no content: those are one call per name after this.
+ */
+export interface LibraryName {
+  name: string;
+  latest: number;
+  versions: number;
+}
+
 export interface PipelineVersion {
   name: string;
   version: number;
