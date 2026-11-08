@@ -1,4 +1,4 @@
-// `GET /v1/disk` (SPEC 6): the number a probe or a cron watches, so that a full volume is news
+// `GET /v1/disk` (SPEC 4.11): the number a probe or a cron watches, so that a full volume is news
 // before it is a failed run.
 
 import { describe, expect, test } from "bun:test";

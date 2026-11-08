@@ -1,4 +1,4 @@
-// How much room `$BASHREACTOR_HOME` has left, for `GET /v1/disk` (SPEC 6).
+// How much room `$BASHREACTOR_HOME` has left, for `GET /v1/disk` (SPEC 4.11).
 //
 // Before this, the only way to find out the volume was full was that a run failed: the write that
 // noticed was a block's log append, hours deep into a pipeline, and the error was an `EIO` or an

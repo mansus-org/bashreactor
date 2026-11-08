@@ -27,7 +27,7 @@ export interface ApiConfig {
   settleMs: number;
   /**
    * How long a run that has finished is kept before the server deletes it, in milliseconds; null
-   * when the server never removes anything on its own (SPEC 6, `BASHREACTOR_RETENTION`).
+   * when the server never removes anything on its own (SPEC 4.11, `BASHREACTOR_RETENTION`).
    */
   retentionMs: number | null;
 }
@@ -75,7 +75,7 @@ export function resolveAdminHash(env: Record<string, string | undefined>): strin
 }
 
 /**
- * `BASHREACTOR_RETENTION` (SPEC 6): how long a run that has finished is kept before the server
+ * `BASHREACTOR_RETENTION` (SPEC 4.11): how long a run that has finished is kept before the server
  * deletes it, written in the SPEC 1.3 duration format (`7d`, `12h`, `90m`).
  *
  * Unset, empty, `off`, `none` and `0` all mean one thing, and it is the default: the server never

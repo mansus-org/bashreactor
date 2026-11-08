@@ -1,4 +1,4 @@
-// Trimming the volume (SPEC 6).
+// Trimming the volume (SPEC 4.11).
 //
 // `$BASHREACTOR_HOME` is given a size — 1 Gi in `.k3s/values.yaml` — and a run writes as much log as
 // its blocks produce: one test block wrote 3 MB in under a second. With nothing ever removed, the
@@ -143,7 +143,7 @@ export async function sweepRuns(
 }
 
 /**
- * Say out loud what is going to happen to old runs, and start doing it (SPEC 6).
+ * Say out loud what is going to happen to old runs, and start doing it (SPEC 4.11).
  *
  * Both entries call this — `apps/api/src/main.ts` and the entry the image actually runs, in
  * `apps/web/src/server.ts` — rather than each writing its own sentence, because the two would drift
@@ -179,7 +179,7 @@ export interface RetentionOptions {
 /**
  * Start the periodic trim, and hand back the function that stops it. Does nothing at all when
  * `retentionMs` is null, which is the default and means "the operator trims, not us" — the caller
- * says which of the two is happening at startup, so neither is a surprise (SPEC 6).
+ * says which of the two is happening at startup, so neither is a surprise (SPEC 4.11).
  *
  * The timer is unref'd: it must be the last thing keeping the process alive, and a test that builds an
  * API would otherwise hang on exit.

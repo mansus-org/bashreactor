@@ -1,4 +1,4 @@
-// Taking a run away again (SPEC 4.2) and knowing when you have to (SPEC 6), from the CLI:
+// Taking a run away again (SPEC 4.2) and knowing when you have to (SPEC 4.11), from the CLI:
 // `bashreactor runs rm` and `bashreactor disk`.
 
 import { afterEach, describe, expect, test } from "bun:test";

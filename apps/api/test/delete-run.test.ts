@@ -1,4 +1,4 @@
-// `DELETE /v1/runs/:id` (SPEC 4.2, SPEC 6): the way an operator, or the server on a schedule, takes
+// `DELETE /v1/runs/:id` (SPEC 4.2, SPEC 4.11): the way an operator, or the server on a schedule, takes
 // a run's directory back. Everything the engine refuses, the API has to pass on as an answer rather
 // than a stack trace — and a run that is still being written into is exactly the one it must refuse.
 

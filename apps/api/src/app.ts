@@ -79,7 +79,7 @@ export function createApi(deps: ApiDependencies): Api {
   route("GET", "/v1/whoami", "read", ({ identity }) => json(200, identity));
 
   /**
-   * The filesystem `$BASHREACTOR_HOME` sits on (SPEC 6). Until now the only way to find out the volume
+   * The filesystem `$BASHREACTOR_HOME` sits on (SPEC 4.11). Until now the only way to find out the volume
    * was full was that a run failed: the first thing to notice an over-full volume is a block's log
    * append, hours into a pipeline, and it reports as a step failure, not as a server that has
    * nowhere to write. This is the same fact, said before the runs start dying.
@@ -297,7 +297,7 @@ export function createApi(deps: ApiDependencies): Api {
   });
 
   /**
-   * Remove a run and everything it wrote (SPEC 4.2, SPEC 6). This is the only way anything outside the
+   * Remove a run and everything it wrote (SPEC 4.2, SPEC 4.11). This is the only way anything outside the
    * engine can take a run away, because the engine owns the directory: `runs/<id>/` holds the record,
    * every block's log and every file a block made, and a caller that reached for `rm -rf` would be
    * guessing at a layout it does not own.
@@ -407,7 +407,7 @@ export function createApi(deps: ApiDependencies): Api {
         throw new ApiError("method_not_allowed", "the deploy probe is GET /healthz");
       }
       // Deliberately still exactly `{status, version}`, and deliberately not the place the volume's
-      // free space is reported (SPEC 6): this is the readiness probe, and a full `$BASHREACTOR_HOME`
+      // free space is reported (SPEC 4.11): this is the readiness probe, and a full `$BASHREACTOR_HOME`
       // is not something a restart fixes — it would pull a pod out of rotation with a run mid-flight
       // to say something that was already true. The number is at `GET /v1/disk`.
       return json(200, { status: "ok", version: config.version });

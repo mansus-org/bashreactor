@@ -1,4 +1,4 @@
-// Taking a run away (SPEC 4.2, and the gap SPEC 6 left open). The engine owns `runs/<id>/` — the
+// Taking a run away (SPEC 4.2, SPEC 4.11). The engine owns `runs/<id>/` — the
 // record, every block's log, every file a block made — so it is the only thing allowed to delete
 // one, and the only thing that can tell whether a process is still writing into it.
 
@@ -146,7 +146,8 @@ describe("deleteRun", () => {
     const engine = new Engine({ store });
     const record = await engine.start(fixture("ok.yaml"));
     // Started and never driven: `running` on paper, with no process and no claim behind it. A pod
-    // that was killed mid-start leaves exactly this, and a sweep must be able to clear it.
+    // that was killed mid-start leaves exactly this, and the sweep will never clear it — a sweep only
+    // touches final runs — so whoever runs `bashreactor runs rm <id>` has to be able to.
     expect((await store.loadRun(record.id))!.status).toBe("running");
     expect(await store.loadClaim(record.id)).toBeNull();
 
