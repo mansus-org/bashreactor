@@ -14,12 +14,14 @@ import type {
   Attempt,
   AttemptStatus,
   AttemptUpdate,
+  BlockName,
   BlockVersion,
   Failure,
   LogChunk,
   NewAttempt,
   NewRun,
   NewStep,
+  PipelineName,
   PipelineRecord,
   Run,
   RunStatus,
@@ -58,6 +60,13 @@ interface BlockRow {
   sha256: string;
   size: number;
   created_at: string;
+}
+
+/** One row of a `GROUP BY name` over either library table. */
+interface NameRow {
+  name: string;
+  latest: number;
+  versions: number;
 }
 
 interface PipelineRow {
@@ -295,6 +304,14 @@ export class Store {
     return rows.map(blockVersionFromRow);
   }
 
+  /** Every block the library holds, one entry per name, names sorted. */
+  listBlockNames(): BlockName[] {
+    this.#assertOpen();
+    return this.#libraryNames(
+      "SELECT name, MAX(version) AS latest, COUNT(*) AS versions FROM block_versions GROUP BY name ORDER BY name ASC",
+    );
+  }
+
   readBlockVersion(name: string, version: number): Uint8Array {
     this.#assertOpen();
     const row = this.#db
@@ -346,6 +363,27 @@ export class Store {
       .query("SELECT name, version, sha256, yaml, parsed_json, created_at FROM pipelines WHERE name = ? ORDER BY version ASC")
       .all(name) as PipelineRow[];
     return rows.map(pipelineFromRow);
+  }
+
+  /** Every pipeline that has been stored, one entry per name, names sorted. */
+  listPipelineNames(): PipelineName[] {
+    this.#assertOpen();
+    return this.#libraryNames(
+      "SELECT name, MAX(version) AS latest, COUNT(*) AS versions FROM pipelines GROUP BY name ORDER BY name ASC",
+    );
+  }
+
+  /**
+   * The `GROUP BY name` both library listings run. The counts are counted out rather than handed
+   * through, because a row object carries whatever the driver decided an aggregate is, and the two
+   * callers above differ only in the table they ask.
+   */
+  #libraryNames(sql: string): { name: string; latest: number; versions: number }[] {
+    return (this.#db.query(sql).all() as NameRow[]).map((row) => ({
+      name: row.name,
+      latest: Number(row.latest),
+      versions: Number(row.versions),
+    }));
   }
 
   // --- Runs ------------------------------------------------------------------

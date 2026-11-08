@@ -110,6 +110,7 @@ store.addBlockVersion(name: string, content: Uint8Array | string): BlockVersion
 store.getBlockVersion(name: string, version: number): BlockVersion
 store.latestBlockVersion(name: string): BlockVersion | null
 store.listBlockVersions(name: string): BlockVersion[]
+store.listBlockNames(): BlockName[] // every name, sorted: { name, latest, versions }
 store.readBlockVersion(name: string, version: number): Uint8Array
 
 // Pipelines
@@ -117,6 +118,7 @@ store.savePipeline(input: { name: string; yaml: string; parsed: unknown }): Pipe
 store.getPipeline(name: string, version: number): PipelineRecord
 store.latestPipeline(name: string): PipelineRecord | null
 store.listPipelineVersions(name: string): PipelineRecord[]
+store.listPipelineNames(): PipelineName[] // every name, sorted, without the YAML of each
 
 // Runs and step state
 store.createRun(run: NewRun): Run
