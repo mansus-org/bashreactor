@@ -160,10 +160,10 @@ $ echo $?
 A wrong token and a wrong argument are visibly different: the first is the API's `unauthenticated`
 at exit 1, the second is `invalid_argument` at exit 2 with nothing sent.
 
-The CLI adds two codes of its own, both already used elsewhere in the repo: `invalid_argument` (the
-store's, for an argument that cannot be right) and `runtime_missing` (the spec's, for a server that
-is not there rather than one that refused). Everything else — `unauthenticated`, `forbidden`,
-`pipeline_not_found`, `internal_error` — is the API's list and is passed through unchanged.
+Every code it prints is in SPEC 5. `invalid_argument` is its own, for a command line that was wrong
+before anyone was asked; a server that is not there at all is `api_unreachable`, the same code the
+MCP server and the web UI print for it, and not `runtime_missing`, which is the engine saying a
+runtime binary is missing. Everything else is the API's answer, passed through unchanged.
 
 ## Logs
 

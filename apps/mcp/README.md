@@ -166,10 +166,10 @@ Arguments are checked here before anything is called, with the same three codes 
 request body: an absent field is `missing_input`, an unknown one is `unknown_input`, a wrong one is
 `type_mismatch`, each with the field as its `path`.
 
-Four codes here are not in SPEC section 5. Three of them (`unauthenticated`, `forbidden`,
-`internal_error`) are the API's own, reused for the same reasons and with the same meanings, so all
-three surfaces agree. The fourth is `api_unreachable`, for the one failure the API cannot answer
-for: it is not answering at all. A tool that cannot reach it says so rather than pretending.
+Every code here is in SPEC section 5. `unauthenticated`, `forbidden` and `internal_error` are the
+API's, reused for the same reasons and with the same meanings, so all three surfaces agree. The one
+this server has to carry itself is `api_unreachable`, for the failure the API cannot answer for: it
+is not answering at all. A tool that cannot reach it says so rather than pretending.
 
 A tool name that does not exist is a JSON-RPC error, not a tool error: that is a broken client, not
 a Bashreactor problem.
@@ -235,7 +235,8 @@ server reaching past the API is one where it cannot.
 - **`get_block_content` is a tool of its own.** A block's contract is its header, and
   `get_block_version` does not contain it; folding the bytes into every metadata read would make the
   cheap call expensive.
-- **`api_unreachable`** as this server's one new code.
+- **`api_unreachable`**, the one code for a server that is not there, shared with the CLI and the
+  web UI now that SPEC 5 lists it.
 
 ## Open
 

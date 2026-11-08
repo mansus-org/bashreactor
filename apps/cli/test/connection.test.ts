@@ -28,7 +28,9 @@ describe("health", () => {
     const result = await cli(["health", "--url", "http://127.0.0.1:1"], { token: null });
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
-    expect(parsed({ ...result, stdout: result.stderr }).code).toBe("runtime_missing");
+    // SPEC 5: a server that is not there is `api_unreachable`, never `runtime_missing`, which is
+    // the engine saying a runtime binary is missing.
+    expect(parsed({ ...result, stdout: result.stderr }).code).toBe("api_unreachable");
   });
 });
 
