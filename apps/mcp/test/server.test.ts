@@ -54,9 +54,11 @@ describe("tools/list", () => {
   test("the table is the same set the task asked for", () => {
     expect(TOOLS.map((tool) => tool.name)).toEqual([
       "whoami",
+      "list_blocks",
       "list_block_versions",
       "get_block_version",
       "get_block_content",
+      "list_pipelines",
       "list_pipeline_versions",
       "get_pipeline_version",
       "validate_pipeline",

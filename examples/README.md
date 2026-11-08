@@ -341,11 +341,16 @@ refuses connections tells nobody anything (SPEC 1.5).
 ### What the CLI left in the library
 
 ```bash
+curl -s -H "authorization: Bearer $ADMIN" $BR/v1/blocks | jq -r '.blocks[] | "\(.name)@v\(.latest)"'
 curl -s -H "authorization: Bearer $ADMIN" $BR/v1/blocks/generate-corpus | jq '{name, latest, sha256: .versions[-1].sha256}'
 curl -s -H "authorization: Bearer $ADMIN" $BR/v1/pipelines/word-report/latest | jq -r .yaml | grep uses:
 ```
 
 ```
+check-corpus@v1
+count-words@v1
+generate-corpus@v1
+render-report@v1
 {
   "name": "generate-corpus",
   "latest": 1,
@@ -357,9 +362,9 @@ curl -s -H "authorization: Bearer $ADMIN" $BR/v1/pipelines/word-report/latest | 
     uses: render-report@1
 ```
 
-There is no route that lists every block or every pipeline, so a client has to know a name. That is a
-known gap in BASHR-5 (`packages/store` has no `listBlockNames()`), and the web UI has the same
-limitation for the same reason: it opens a pipeline by name too.
+`GET /v1/blocks` and `GET /v1/pipelines` are where a client that knows nothing starts: one entry per
+name, with its latest version and how many there are. Names and counts only — the source and the YAML
+are one request per name after that, which is what the other two calls above are.
 
 ### Start a run of the stored pipeline
 

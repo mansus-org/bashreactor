@@ -99,10 +99,12 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | `GET` | `/v1/tokens` | admin | the agent tokens, without their secrets |
 | `POST` | `/v1/tokens` | admin | create one; the secret appears here and nowhere else |
 | `DELETE` | `/v1/tokens/:id` | admin | revoke it, effective on the next request |
+| `GET` | `/v1/blocks` | read | every block name in the library, each with `latest` and `versions` |
 | `GET` | `/v1/blocks/:name` | read | every version of a block |
 | `GET` | `/v1/blocks/:name/:version` | read | one version's metadata |
 | `GET` | `/v1/blocks/:name/:version/content` | read | the block's exact bytes |
 | `POST` | `/v1/blocks/:name/versions` | write | add a version (`content`, or `content_b64`); same bytes, same version |
+| `GET` | `/v1/pipelines` | read | every pipeline name stored, same shape as `/v1/blocks` |
 | `GET` | `/v1/pipelines/:name` | read | every version of a pipeline, metadata only |
 | `GET` | `/v1/pipelines/:name/:version` | read | one version, with its YAML and parsed form |
 | `POST` | `/v1/pipelines/validate` | read | validate YAML, report every issue, create nothing |

@@ -69,12 +69,22 @@ export const TOOLS: readonly ToolDef[] = [
 
   // --- the block library -----------------------------------------------------
   {
+    name: "list_blocks",
+    title: "List the block library",
+    description:
+      "Every block the library holds, one entry per name: name, latest version, how many versions. " +
+      "Start here rather than guessing a name; the source is one call per block after this.",
+    access: "read",
+    annotations: read,
+    args: {},
+    run: (client) => client.json("/v1/blocks"),
+  },
+  {
     name: "list_block_versions",
     title: "List a block's versions",
     description:
       `Every stored version of one block, oldest first: version, sha256, size, created_at. ${NAME_ARG} ` +
-      "There is no route that lists every block name, so you have to know it. A block with no versions " +
-      "is block_not_found.",
+      "A block with no versions is block_not_found.",
     access: "read",
     annotations: read,
     args: { name: { type: "string", required: true, description: NAME_ARG } },
@@ -124,6 +134,17 @@ export const TOOLS: readonly ToolDef[] = [
   },
 
   // --- pipeline versions -----------------------------------------------------
+  {
+    name: "list_pipelines",
+    title: "List the stored pipelines",
+    description:
+      "Every pipeline that has been stored, one entry per name: name, latest version, how many " +
+      "versions. Names to pick from, not documents — the YAML is one call per version after this.",
+    access: "read",
+    annotations: read,
+    args: {},
+    run: (client) => client.json("/v1/pipelines"),
+  },
   {
     name: "list_pipeline_versions",
     title: "List a pipeline's versions",
