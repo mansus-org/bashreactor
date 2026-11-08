@@ -21,16 +21,17 @@ if (api !== null) {
     console.log("bashreactor: /v1 is disabled, no admin token is set in the environment");
   }
 
-  // SPEC 6: the volume has a size and a run never stops writing to it, so what happens to old runs is
-  // said out loud at startup either way. "Off" is the default and a legitimate answer — an operator
-  // trims from outside — but it must not be a silent one.
-  stopRetention = announceRetention(api.engine, config.retentionMs);
-
   // A rollout replaces the pod mid-run, so every run still marked `running` is taken up again before
   // anything else is served (SPEC 4.7). With no engine there is nothing to take up.
   void resumeRunningRuns(api.engine).catch((error: unknown) => {
     console.log(`bashreactor: could not resume runs: ${error instanceof Error ? error.message : String(error)}`);
   });
+
+  // SPEC 4.11: the volume has a size and a run never stops writing to it, so what happens to old runs
+  // is said out loud at startup either way. "Off" is the default and a legitimate answer — an operator
+  // trims from outside — but it must not be a silent one. After the resume, so that the first thing to
+  // walk the home is the thing that decides which runs are live.
+  stopRetention = announceRetention(api.engine, config.retentionMs);
 }
 
 // SPEC 4.7: SIGTERM and SIGINT stop the engine's runs gracefully; runs left `running` are picked up by
