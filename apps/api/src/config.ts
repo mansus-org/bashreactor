@@ -86,6 +86,7 @@ export function resolveAdminHash(env: Record<string, string | undefined>): strin
  * A value that does not parse is fatal, the way a bad port is. Starting with retention that was asked
  * for and not understood is how a deployment deletes the wrong year.
  */
+export const MAX_RETENTION_MS = 100 * 365 * 24 * 3_600_000;
 export function resolveRetentionMs(env: Record<string, string | undefined>): number | null {
   const raw = env.BASHREACTOR_RETENTION?.trim().toLowerCase();
   // `0` is included with `off` because it is what a Helm value renders for "not set", and because
@@ -101,7 +102,16 @@ export function resolveRetentionMs(env: Record<string, string | undefined>): num
   // Anything under a second is the same instruction as `off`, and rounding it to zero would be the
   // one reading worse than deleting nothing: deleting everything.
   if (seconds < 1) return null;
-  return seconds * 1000;
+  const ms = seconds * 1000;
+  // A `Date` stops at about 275,000 years, and past it the sweep throws on `toISOString` every pass
+  // forever. A window nobody can wait out is a typo, and a typo is worth stopping the server for.
+  if (ms > MAX_RETENTION_MS) {
+    throw new BashreactorError(
+      "runtime_missing",
+      `BASHREACTOR_RETENTION "${raw}" is longer than the 100 years the server can name; it reads as a mistake, not as a window`,
+    );
+  }
+  return ms;
 }
 
 export function resolveConfig(

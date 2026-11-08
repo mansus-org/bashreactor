@@ -86,9 +86,24 @@ describe("BASHREACTOR_RETENTION", () => {
   });
 
   test("a duration that does not parse stops the server rather than guessing", () => {
-    for (const raw of ["7", "seven days", "7 days", "d7", "7w"]) {
+    for (const raw of ["7", "seven days", "7 days", "d7", "7w", "-1d", "1.5h", "30 d"]) {
       expect(() => resolveRetentionMs({ BASHREACTOR_RETENTION: raw })).toThrow(
         expect.objectContaining({ code: "runtime_missing", message: expect.stringContaining("BASHREACTOR_RETENTION") }),
+      );
+    }
+  });
+
+  test("a window is a duration, so it is read in the SPEC 1.3 format however it is written", () => {
+    expect(resolveRetentionMs({ BASHREACTOR_RETENTION: "1d2h30m" })).toBe(95_400_000);
+  });
+
+  test("a window too long to be a date is a typo, and a typo stops the server", () => {
+    // `999999999999d` parses as a duration, but past a `Date`'s own limit the sweep throws on
+    // `toISOString` every pass forever — a log line nobody reads, where a startup that fails is one
+    // everybody reads.
+    for (const raw of ["999999999999d", "999999999999999999d"]) {
+      expect(() => resolveRetentionMs({ BASHREACTOR_RETENTION: raw })).toThrow(
+        expect.objectContaining({ code: "runtime_missing", message: expect.stringContaining("100 years") }),
       );
     }
   });
@@ -123,11 +138,10 @@ describe("sweepRuns", () => {
     expect(report.cutoff).toBe(new Date(NOW.getTime() - 7 * DAY).toISOString());
   });
 
-  test("a run that is running, waiting, or has no finished_at is never touched", async () => {
+  test("a run that is running, or has no finished_at, is never touched", async () => {
     const ancient = new Date(NOW.getTime() - 400 * DAY).toISOString();
     const engine = fakeEngine(
       run("running", "running", ancient),
-      run("waiting", "waiting", ancient),
       run("no-finished-at", "succeeded", null),
       run("garbage-finished-at", "succeeded", "yesterday"),
     );
@@ -136,7 +150,7 @@ describe("sweepRuns", () => {
 
     expect(report.deleted).toEqual([]);
     expect(engine.calls).toEqual([]);
-    expect(report.kept).toBe(4);
+    expect(report.kept).toBe(3);
     expect(report.problem).toBeNull();
   });
 
@@ -367,5 +381,18 @@ describe("startRetention", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("removed 1 run(s)");
     expect(lines[0]).toContain("EIO");
+  });
+
+  test("a window shorter than the sweep interval is said out loud, once, at the start", async () => {
+    // `15m` with an hourly sweep keeps a run for up to an hour and fifteen minutes. Whoever wrote it
+    // meant fifteen, so the gap is news at startup rather than a mystery read off log timestamps.
+    const lines: string[] = [];
+    const engine = fakeEngine(run("recent", "succeeded", new Date().toISOString()));
+    const stop = startRetention(engine, 15 * 60_000, { intervalMs: HOUR, log: (line) => lines.push(line) });
+    await Bun.sleep(20);
+    await stop();
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("the window (15m) is shorter than the sweep interval (1h)");
   });
 });

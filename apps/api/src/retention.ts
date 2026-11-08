@@ -154,6 +154,7 @@ export function announceRetention(
   engine: RunsThatCanBeDeleted,
   retentionMs: number | null,
   log: (line: string) => void = (line: string) => console.log(line),
+  intervalMs: number = DEFAULT_SWEEP_INTERVAL_MS,
 ): () => Promise<void> {
   if (retentionMs === null) {
     log(
@@ -162,8 +163,10 @@ export function announceRetention(
     );
     return async () => {};
   }
-  log(`bashreactor: retention: a run that finished over ${durationText(retentionMs)} ago is deleted`);
-  return startRetention(engine, retentionMs, { log });
+  log(
+    `bashreactor: retention: a run that finished over ${durationText(retentionMs)} ago is deleted, at startup and then every ${durationText(intervalMs)}`,
+  );
+  return startRetention(engine, retentionMs, { log, intervalMs });
 }
 
 export interface RetentionOptions {
@@ -196,6 +199,15 @@ export function startRetention(
   const intervalMs = options.intervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
   const log = options.log ?? ((line: string) => console.log(line));
   const sweep = options.sweep ?? ((e, older) => sweepRuns(e, older));
+
+  // A window shorter than the interval is one the sweep cannot honour: a run goes somewhere between
+  // the window and the window plus an interval. That is almost never what whoever wrote `15m` meant,
+  // so it is said once here rather than inferred from log timestamps afterwards.
+  if (retentionMs < intervalMs) {
+    log(
+      `bashreactor: retention: the window (${durationText(retentionMs)}) is shorter than the sweep interval (${durationText(intervalMs)}), so a run is kept up to that much longer than asked`,
+    );
+  }
 
   let inFlight: Promise<void> | null = null;
   let skipNoted = false;
