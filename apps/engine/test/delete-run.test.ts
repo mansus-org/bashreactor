@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { BashreactorError } from "@bashreactor/core";
 import { Engine } from "../src/engine.ts";
 import { FsRunStore } from "../src/run-store.ts";
+import type { EngineClaim } from "../src/run-store.ts";
 import { readProcStartTime } from "../src/proc.ts";
 
 const fixtures = new URL("./fixtures/", import.meta.url);
@@ -33,7 +34,8 @@ function deadPid(): number {
   throw new Error("no dead pid to be found");
 }
 
-/** One finished run, with its log and outputs on disk — the thing a retention sweep is after. */async function finishedRun(root: string) {
+/** One finished run, with its log and outputs on disk — the thing a retention sweep is after. */
+async function finishedRun(root: string) {
   const store = new FsRunStore(root);
   const engine = new Engine({ store });
   const record = await engine.start(fixture("ok.yaml"));
@@ -82,6 +84,50 @@ describe("deleteRun", () => {
 
     expect(existsSync(join(root, "runs", id))).toBe(true);
     expect((await store.loadRun(id))!.status).toBe("succeeded");
+  });
+
+  test("the claim is held for the whole of the delete, not just checked at the door", async () => {
+    // The gap that would matter is the one between the check and the walk: a claim that landed in it
+    // would have an engine writing steps into a directory being unlinked under it. So by the time the
+    // removal starts, the claim on disk is already this engine's — held, not merely verified.
+    const root = newRoot();
+    const { id } = await finishedRun(root);
+    const seen: Array<EngineClaim | null> = [];
+    class Watching extends FsRunStore {
+      override async removeRun(runId: string): Promise<void> {
+        seen.push(await this.loadClaim(runId));
+        await super.removeRun(runId);
+      }
+    }
+
+    await new Engine({ store: new Watching(root) }).deleteRun(id);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.pid).toBe(process.pid);
+    expect(existsSync(join(root, "runs", id))).toBe(false);
+  });
+
+  test("a failed delete does not hand back a claim that is no longer its own", async () => {
+    // Releasing the claim on failure is right when the claim is still ours and wrong when it is not:
+    // giving back a lock another engine holds would let a third one into a directory that is half
+    // removed. Contrived here by moving the claim over inside the failed removal.
+    const root = newRoot();
+    const { id } = await finishedRun(root);
+    const other = deadPid();
+    class Stealing extends FsRunStore {
+      override async removeRun(runId: string): Promise<void> {
+        await this.releaseClaim(runId);
+        await this.tryClaim(runId, { pid: other, pid_start: 4_242 });
+        throw new BashreactorError("run_delete_failed", "EIO: i/o error, unlink");
+      }
+    }
+
+    await expect(new Engine({ store: new Stealing(root) }).deleteRun(id)).rejects.toThrow(
+      expect.objectContaining({ code: "run_delete_failed" }),
+    );
+
+    expect((await new FsRunStore(root).loadClaim(id))?.pid).toBe(other);
+    expect(existsSync(join(root, "runs", id))).toBe(true);
   });
 
   test("a claim left by an engine that died does not hold the directory", async () => {
@@ -149,7 +195,8 @@ describe("deleteRun", () => {
     expect(existsSync(join(root, "runs", id))).toBe(false);
   });
 
-  test("a directory on disk that no record was ever written for is deletable", async () => {    const root = newRoot();
+  test("a directory on disk that no record was ever written for is deletable", async () => {
+    const root = newRoot();
     const { engine } = await finishedRun(root);
     // A `createRun` interrupted before `run.json` landed: the directory is real, it is in no listing,
     // and it is invisible to every other code path in the engine.

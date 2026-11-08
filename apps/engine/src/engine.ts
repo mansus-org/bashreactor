@@ -300,14 +300,19 @@ export class Engine {
     // directory — lock file and all — goes with it. It also answers `run_not_found` for a directory
     // that is not there, and deliberately does not read `run.json`: a run whose record is corrupt or
     // gone is exactly the one only a delete can clear.
-    await this.takeClaim(runId);
+    const ours = await this.takeClaim(runId);
     try {
       await this.store.removeRun(runId);
     } catch (error) {
       // The claim goes back with the failure. A claim this process wrote and never released answers
       // `run_claimed` to every later attempt forever, from a pid that is alive and will not let go —
-      // and the run is still listed, so there is something left to try again.
-      await this.store.releaseClaim(runId);
+      // and the run is still listed, so there is something left to try again. Ours to give back and
+      // nobody else's: releasing a lock another engine holds would hand the run to a third party
+      // while its directory is half removed.
+      const held = await this.store.loadClaim(runId);
+      if (held !== null && held.pid === ours.pid && held.pid_start === ours.pid_start) {
+        await this.store.releaseClaim(runId);
+      }
       throw error;
     }
   }
