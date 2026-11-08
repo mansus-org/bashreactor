@@ -80,13 +80,31 @@ export function stateStamp(state: State): HTMLElement {
   return el("span", { class: "stamp" }, sign(state), state);
 }
 
-/** Two digits, for the durations that are read as a clock rather than counted. */
+/**
+ * Write a new state into a stamp already on the page.
+ *
+ * A live view redraws itself while you are looking at it, and a stamp rebuilt from scratch takes the
+ * focus off anything inside it. The shape and the word are replaced together, because one without the
+ * other is how a row ends up saying `succeeded` in the shape of `running`.
+ */
+export function restamp(stamp: HTMLElement, state: State): void {
+  stamp.replaceChildren(sign(state), state);
+}
+
+/** Two digits, for the durations and times that are read as a clock rather than counted. */
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** Seconds to "4 m 07 s", the way a person reads a duration off a running job. */
+/**
+ * Seconds to "4 m 07 s", the way a person reads a duration off a running job.
+ *
+ * Nothing to count means nothing to say: a time the API did not give, or did not give in a shape that
+ * parses, comes back empty rather than as `NaN s`, because a duration on these screens is a promise
+ * that both ends of it are known.
+ */
 export function duration(total: number): string {
+  if (!Number.isFinite(total)) return "";
   const seconds = Math.max(0, Math.floor(total));
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -103,12 +121,40 @@ export function clock(total: number): string {
   return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 }
 
-/** An ISO time from run.json, in the reader's own clock, or nothing when the field is null. */
+/**
+ * An ISO time from run.json, in the reader's own clock, or nothing when the field is null.
+ *
+ * The old version ended its string with ` UTC`, and that was the whole of a bug: one screen said UTC,
+ * the one beside it said the browser's own zone, and a version picker said neither by cutting the raw
+ * ISO at the sixteenth character. Nothing on any of them said which zone was meant. So this says it
+ * once, in the one zone the browser reads in, and it says it to the second — the minute is where two
+ * runs started a breath apart stop being tellable apart. A string with no zone marker in it is only
+ * ever the reader's own time, so whatever shows it puts `isoInstant` beside it. A string that will not
+ * parse returns the empty string rather than being echoed back: a time the API got wrong is not shown
+ * as a time, and every caller hides the line when this is empty.
+ */
 export function when(iso: string | null): string {
   if (!iso) return "";
   const at = Date.parse(iso);
-  if (Number.isNaN(at)) return iso;
-  return new Date(at).toLocaleString();
+  // Echoing back a string that will not parse puts a wrong time on the page dressed up as a right one.
+  if (Number.isNaN(at)) return "";
+  const d = new Date(at);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * The same instant the API was answered with, in UTC, for the `title` of something showing `when`.
+ *
+ * What is on the page is the reader's own clock, so the exact instant has to be written down next to
+ * it for anyone comparing two screens or matching a run against a server log. UTC always, even when
+ * the answer came in some other offset, so that two screens always agree.
+ */
+export function isoInstant(iso: string | null): string {
+  if (!iso) return "";
+  const at = Date.parse(iso);
+  // The `.000` that `toISOString` adds is noise nobody asked for, and a title that reads differently
+  // from the string in the API's JSON makes people think the two disagree. Real milliseconds stay.
+  return Number.isNaN(at) ? "" : new Date(at).toISOString().replace(/\.000Z$/, "Z");
 }
 
 /** The e-ink repaint. Reading layout restarts it when the same node repaints twice in a row. */

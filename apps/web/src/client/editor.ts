@@ -8,7 +8,7 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { ValidationIssue } from "./api.js";
-import { announce, el, errorBox, sign } from "./dom.js";
+import { announce, el, errorBox, isoInstant, sign, when } from "./dom.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
 import {
@@ -34,6 +34,23 @@ description: What this pipeline does.
 
 steps:
 `;
+
+/**
+ * One version in the picker: its number and when it was stored, in the zone the person reading it is
+ * in, to the second. Two saves either side of a fix are a breath apart, and a picker that shows
+ * minutes cannot say which is which. A time with no zone in it is only ever the reader's own, so the
+ * exact instant goes beside it: in the title, and again in the label, because no browser shows a
+ * tooltip on an `<option>`.
+ */
+function versionOption(entry: { version: number; created_at: string }): HTMLElement {
+  const stored = isoInstant(entry.created_at);
+  const printed = when(entry.created_at);
+  // A time this build cannot read is left out of the label rather than echoed into it: the version number
+  // still tells people which is which, and "v3, " with nothing after it reads as a broken control.
+  const label = printed === "" ? `v${entry.version}` : `v${entry.version}, ${printed}`;
+  const exact = stored === "" ? {} : { title: `stored ${stored}`, "aria-label": `${label}, stored ${stored}` };
+  return el("option", { value: String(entry.version), ...exact }, label);
+}
 
 /** SPEC 1.1: a step id starts with a lowercase letter and takes only lowercase letters, digits and `_`. */
 const STEP_ID = /^[a-z][a-z0-9_]{0,63}$/;
@@ -1067,9 +1084,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       baseline = record.yaml;
       openNameInput.value = name;
       versionSelect.hidden = false;
-      versionSelect.replaceChildren(
-        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
-      );
+      versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(wanted);
       setText(record.yaml, { source: "load" });
       announce(`${name} version ${wanted} opened.`);
@@ -1126,9 +1141,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       if (gone()) return;
       versions = list.versions.map((entry) => ({ version: entry.version, created_at: entry.created_at }));
       versionSelect.hidden = false;
-      versionSelect.replaceChildren(
-        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
-      );
+      versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(record.version);
       openNameInput.value = name;
       sessionStorage.removeItem(wasKey);

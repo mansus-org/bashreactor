@@ -86,12 +86,16 @@ steps:
     uses: gone@1
 `;
 
+const defaultCreated = (version: number) => `2026-01-0${version}T09:00:00Z`;
+/** What the fake server writes for a version's `created_at`, so a test can hand over a nonsense one. */
+let created = defaultCreated;
+
 const meta = (name: string, version: number) => ({
   name,
   version,
   sha256: `${name}-${version}`,
   size: 64,
-  created_at: `2026-01-0${version}T09:00:00Z`,
+  created_at: created(version),
 });
 
 const BLOCKS: Record<string, Record<number, string>> = {
@@ -1034,5 +1038,43 @@ describe("the version in the address bar", () => {
     expect(openError(view)!.hidden).toBe(false);
     expect(openError(view)!.textContent).toContain("no version");
     expect(openError(view)!.textContent).toContain("abc");
+  });
+});
+
+// ---------- the clock the version list is written in (finding #49) ----------
+
+describe("the time a stored version was written", () => {
+  test("is the reader's own clock, with the exact instant kept on the option", async () => {
+    const view = await open(PINNED);
+    const option = view
+      .querySelector('[id="open-version"]')!
+      .children.find((node) => node.value === "1")!;
+
+    // Printed in the zone the browser is already in, and never stamped "UTC" in a box of times that
+    // are not: the pipeline screen used to name a third clock next to the run's two. To the second,
+    // because two saves either side of a fix are a breath apart and minutes cannot tell them apart.
+    expect(option.textContent).toMatch(/^v1, \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(option.textContent).not.toMatch(/UTC|GMT|Z$/);
+    // The instant the server actually said, for anyone who wants the exact one rather than the local
+    // one. No browser shows a tooltip on an `<option>`, so it is in the label a screen reader reads too.
+    expect(option.getAttribute("title")).toBe("stored 2026-01-01T09:00:00Z");
+    expect(option.getAttribute("aria-label")).toBe(`${option.textContent}, stored 2026-01-01T09:00:00Z`);
+  });
+
+  test("a version whose time cannot be read is named on its own rather than with an empty time", async () => {
+    created = () => "not a time at all";
+    try {
+      const view = await open(PINNED);
+      const option = view
+        .querySelector('[id="open-version"]')!
+        .children.find((node) => node.value === "1")!;
+
+      // "v1, " with nothing after the comma reads as a control that lost its text, and echoing the
+      // string back would dress a wrong time up as a right one.
+      expect(option.textContent).toBe("v1");
+      expect(option.getAttribute("title")).toBeNull();
+    } finally {
+      created = defaultCreated;
+    }
   });
 });

@@ -431,6 +431,9 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
   .runhead__tools .field { flex: 1 1 11rem; width: auto; }
 }
 .runhead__meta a, .logpanel__meta a { position: relative; }
+/* A run whose poll is lost is not a run that has gone quiet: what is up here is the last state that
+   got through. Bold is the whole of the emphasis; the words carry the rest. */
+.runhead__stale { font-weight: 700; }
 /* A 44 px hit area drawn over the link, so the row's rhythm does not change. */
 .runhead__meta a::after, .logpanel__meta a::after {
   content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%);
@@ -518,6 +521,9 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 .runrow[aria-current="true"]:focus-visible { outline-color: var(--paper); }
 .runrow__id { font-weight: 800; overflow-wrap: anywhere; }
 .runrow__meta { font-size: 0.875rem; }
+/* The one line that says what the reading is doing: loading, or still trying after a lost read. It
+   sits above the rows and is the only thing above them that moves while the list is live. */
+.runlist__note { margin: 0 0 14px; font-weight: 700; font-size: 0.9375rem; }
 
 /* ---------- block library ---------- */
 

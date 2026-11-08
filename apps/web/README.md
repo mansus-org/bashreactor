@@ -10,8 +10,11 @@ handling on purpose: a container that is PID 1 gets no default signal handling a
 runs if it skips them.
 
 The browser is a client of `/v1` like the CLI and the MCP server: bearer token, same scopes, same
-error objects. There is no websocket and no second API — the run screen polls `GET /v1/runs/:id` once a
-second (`POLL_MS` in `src/client/runs.ts`).
+error objects. There is no websocket and no second API — the screens poll. A run reads
+`GET /v1/runs/:id` once a second (`POLL_MS` in `src/client/runs.ts`) and stops asking once it is
+finished; the Runs list reads `GET /v1/runs` once a second while anything on it is running and every
+fifteen seconds (`IDLE_POLL_MS`) while nothing is, because a run started from the CLI has to turn up
+by itself. Neither reads while the tab is hidden, and both read the moment it is looked at again.
 
 ## What it serves
 
