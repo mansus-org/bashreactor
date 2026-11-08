@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { HELLO_BLOCK, cli, libraryDir, parsed, startServer, treeDigest } from "./helpers.ts";
+import { HELLO_BLOCK, cli, libraryDir, lines, parsed, startServer, treeDigest } from "./helpers.ts";
 
 let server: Awaited<ReturnType<typeof startServer>> | null = null;
 const dirs: string[] = [];
@@ -273,6 +273,25 @@ describe("pipelines", () => {
 
     const json = await cli(["pipelines", "get", "hello-pipeline", "--json"], { url: server.url });
     expect(parsed(json).parsed.inputs[0].name).toBe("name");
+  });
+
+  // Finding 43, the CLI half: a client used to have to be told a name to see anything. `ls` with no
+  // name is the library, which is the same question one size up.
+  test("ls with no name lists what has been stored", async () => {
+    server = await startServer();
+    const empty = await cli(["pipelines", "ls"], { url: server.url });
+    expect(empty.code).toBe(0);
+    expect(empty.stdout.trim()).toBe("no pipeline has been stored yet");
+
+    const path = pipelineDir("hello-pipeline", GOOD, { "hello.sh": HELLO_BLOCK });
+    await cli(["pipelines", "add", "hello-pipeline", path], { url: server.url });
+
+    const list = await cli(["pipelines", "ls"], { url: server.url });
+    expect(list.code).toBe(0);
+    expect(lines(list.stdout)).toEqual(["NAME            LATEST  VERSIONS", "hello-pipeline  v1      1"]);
+
+    const json = await cli(["pipelines", "ls", "--json"], { url: server.url });
+    expect(parsed(json)).toEqual({ pipelines: [{ name: "hello-pipeline", latest: 1, versions: 1 }] });
   });
 
   test("a pipeline file that is not there is exit 2", async () => {

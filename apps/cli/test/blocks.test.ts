@@ -62,6 +62,33 @@ describe("blocks", () => {
     expect(record.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  // Finding 43, the CLI half: a client that has to be told a name cannot find out what is in the
+  // library. `ls` with no name is that, and it is the same command because it is the same question
+  // one size up.
+  test("ls with no name lists the library, with a count per name", async () => {
+    server = await startServer();
+    await cli(["blocks", "add", "hello", file("hello.sh", HELLO_BLOCK)], { url: server.url });
+    const again = HELLO_BLOCK.replace("name: hello", "name: again");
+    await cli(["blocks", "add", "again", file("again.sh", again)], { url: server.url });
+    await cli(["blocks", "add", "again", file("again2.sh", `${again}\n# a second version\n`)], {
+      url: server.url,
+    });
+
+    const list = await cli(["blocks", "ls"], { url: server.url });
+    expect(list.code).toBe(0);
+    expect(lines(list.stdout)[0]).toBe("NAME   LATEST  VERSIONS");
+    expect(lines(list.stdout)[1]).toBe("again  v2      2");
+    expect(lines(list.stdout)[2]).toBe("hello  v1      1");
+
+    const json = await cli(["blocks", "ls", "--json"], { url: server.url });
+    expect(parsed(json)).toEqual({
+      blocks: [
+        { name: "again", latest: 2, versions: 2 },
+        { name: "hello", latest: 1, versions: 1 },
+      ],
+    });
+  });
+
   test("a block whose header names something else is the API's own refusal", async () => {
     server = await startServer();
     const path = file("other.sh", HELLO_BLOCK.replace("name: hello", "name: different"));

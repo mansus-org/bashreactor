@@ -75,6 +75,12 @@ step "1. store the four blocks and the pipeline"
 # checkout (apps/cli/README.md, "A pipeline file on your disk").
 cli pipelines validate "$pipeline"
 cli pipelines add word-report "$pipeline"
+# With no name, `ls` is the library answering for itself: one call per kind, names and version counts
+# back, no need to have been told what to ask for.
+check "the library holds the four blocks" "check-corpus count-words generate-corpus render-report" \
+  "$(cli blocks ls --json | jq -r '[.blocks[].name] | join(" ")')"
+check "and the one pipeline" "word-report" \
+  "$(cli pipelines ls --json | jq -r '[.pipelines[].name] | join(" ")')"
 cli pipelines ls word-report
 
 step "2. run it with the defaults, and follow the log while it runs"

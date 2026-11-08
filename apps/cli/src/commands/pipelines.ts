@@ -7,16 +7,33 @@ import type { CommandSpec } from "../args.ts";
 import { localTime } from "../output.ts";
 import { publishRelativeBlocks, readPipelineFile, validateLocalPipelineFile } from "../local.ts";
 import { VERSION_FLAG, versionOf } from "./flags.ts";
-import type { PipelineList, PipelineVersion } from "../types.ts";
+import type { LibraryName, PipelineList, PipelineVersion } from "../types.ts";
 
 export const pipelineCommands: CommandSpec[] = [
   {
     group: "pipelines",
     name: "ls",
-    summary: "every version of one pipeline",
-    args: [{ name: "<name>" }],
+    summary: "every pipeline in the library, or every version of one",
+    args: [{ name: "<name>", optional: true }],
     run: async (ctx) => {
-      const list = await ctx.client.json<PipelineList>("GET", `/v1/pipelines/${encodeURIComponent(ctx.args[0]!)}`);
+      const name = ctx.args[0];
+      // One command, two sizes of the same question: what is stored, and what is stored under one
+      // name. With no name you get the names to ask about.
+      if (name === undefined) {
+        const library = await ctx.client.json<{ pipelines: LibraryName[] }>("GET", "/v1/pipelines");
+        ctx.printer.emit(library, (p) => {
+          if (library.pipelines.length === 0) {
+            p.line("no pipeline has been stored yet");
+            return;
+          }
+          p.table(
+            ["NAME", "LATEST", "VERSIONS"],
+            library.pipelines.map((pipeline) => [pipeline.name, `v${pipeline.latest}`, String(pipeline.versions)]),
+          );
+        });
+        return 0;
+      }
+      const list = await ctx.client.json<PipelineList>("GET", `/v1/pipelines/${encodeURIComponent(name)}`);
       ctx.printer.emit(list, (p) => {
         p.line(`${list.name} — ${list.versions.length} version(s), latest ${list.latest}`);
         p.table(

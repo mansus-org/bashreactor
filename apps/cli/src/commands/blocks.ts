@@ -8,7 +8,7 @@ import { localTime } from "../output.ts";
 import { isReadableFile } from "../connection.ts";
 import { blockUploadBody } from "../local.ts";
 import { VERSION_FLAG, versionOf } from "./flags.ts";
-import type { BlockList, BlockVersion } from "../types.ts";
+import type { BlockList, BlockVersion, LibraryName } from "../types.ts";
 
 const SHORT_SHA = 12;
 
@@ -16,10 +16,27 @@ export const blockCommands: CommandSpec[] = [
   {
     group: "blocks",
     name: "ls",
-    summary: "every version of one block",
-    args: [{ name: "<name>" }],
+    summary: "every block in the library, or every version of one",
+    args: [{ name: "<name>", optional: true }],
     run: async (ctx) => {
-      const list = await ctx.client.json<BlockList>("GET", `/v1/blocks/${encodeURIComponent(ctx.args[0]!)}`);
+      const name = ctx.args[0];
+      // One command, two sizes of the same question: what the library holds, and what one block
+      // holds. With no name you get the names to ask about.
+      if (name === undefined) {
+        const library = await ctx.client.json<{ blocks: LibraryName[] }>("GET", "/v1/blocks");
+        ctx.printer.emit(library, (p) => {
+          if (library.blocks.length === 0) {
+            p.line("the library has no blocks yet");
+            return;
+          }
+          p.table(
+            ["NAME", "LATEST", "VERSIONS"],
+            library.blocks.map((block) => [block.name, `v${block.latest}`, String(block.versions)]),
+          );
+        });
+        return 0;
+      }
+      const list = await ctx.client.json<BlockList>("GET", `/v1/blocks/${encodeURIComponent(name)}`);
       ctx.printer.emit(list, (p) => {
         p.line(`${list.name} — ${list.versions.length} version(s), latest ${list.latest}`);
         p.table(

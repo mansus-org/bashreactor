@@ -51,10 +51,12 @@ token and passes back whatever the API says.
 | --- | --- | --- |
 | `health` | `GET /healthz` | none |
 | `whoami` | `GET /v1/whoami` | read |
+| `blocks ls` | `GET /v1/blocks` | read |
 | `blocks ls <name>` | `GET /v1/blocks/:name` | read |
 | `blocks get <name>` | `GET /v1/blocks/:name/:version` | read |
 | `blocks content <name>` | `GET /v1/blocks/:name/:version/content` | read |
 | `blocks add <name> <file>` | `POST /v1/blocks/:name/versions` | write |
+| `pipelines ls` | `GET /v1/pipelines` | read |
 | `pipelines ls <name>` | `GET /v1/pipelines/:name` | read |
 | `pipelines get <name>` | `GET /v1/pipelines/:name/:version` | read |
 | `pipelines validate <file>` | nothing: the file is checked here | none, or read for a `name@version` |
