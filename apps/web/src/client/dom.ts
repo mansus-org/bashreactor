@@ -80,7 +80,18 @@ export function stateStamp(state: State): HTMLElement {
   return el("span", { class: "stamp" }, sign(state), state);
 }
 
-/** Two digits, for the durations that are read as a clock rather than counted. */
+/**
+ * Write a new state into a stamp already on the page.
+ *
+ * A live view redraws itself while you are looking at it, and a stamp rebuilt from scratch takes the
+ * focus off anything inside it. The shape and the word are replaced together, because one without the
+ * other is how a row ends up saying `succeeded` in the shape of `running`.
+ */
+export function restamp(stamp: HTMLElement, state: State): void {
+  stamp.replaceChildren(sign(state), state);
+}
+
+/** Two digits, for the durations and times that are read as a clock rather than counted. */
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
@@ -103,12 +114,32 @@ export function clock(total: number): string {
   return `${pad(Math.floor(seconds / 3600))}:${pad(Math.floor((seconds % 3600) / 60))}:${pad(seconds % 60)}`;
 }
 
-/** An ISO time from run.json, in the reader's own clock, or nothing when the field is null. */
+/**
+ * An ISO time from run.json, in the reader's own clock, or nothing when the field is null.
+ *
+ * The old version ended its string with ` UTC`, and that was the whole of a bug: one screen said UTC,
+ * the one beside it said the browser's own zone, and a version picker said neither by cutting the raw
+ * ISO at the sixteenth character. Nothing on any of them said which zone was meant. So this says it
+ * once, in the one zone the browser reads in, and it says it to the second — the minute is where two
+ * runs started a breath apart stop being tellable apart. A string with no zone marker in it is only
+ * ever the reader's own time, so whatever shows it puts `isoInstant` beside it.
+ */
 export function when(iso: string | null): string {
   if (!iso) return "";
   const at = Date.parse(iso);
   if (Number.isNaN(at)) return iso;
-  return new Date(at).toLocaleString();
+  const d = new Date(at);
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/** The same instant the API was answered with, unchanged, for the `title` of something showing `when`. */
+export function isoInstant(iso: string | null): string {
+  return iso ?? "";
+}
+
+/** `when` without the seconds, for a picker where a version is told apart by the minute, not the second. */
+export function whenMinute(iso: string | null): string {
+  return when(iso).slice(0, 16);
 }
 
 /** The e-ink repaint. Reading layout restarts it when the same node repaints twice in a row. */

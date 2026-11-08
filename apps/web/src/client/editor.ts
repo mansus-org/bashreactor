@@ -8,7 +8,7 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { ValidationIssue } from "./api.js";
-import { announce, el, errorBox, sign } from "./dom.js";
+import { announce, el, errorBox, isoInstant, sign, whenMinute } from "./dom.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
 import {
@@ -34,6 +34,17 @@ description: What this pipeline does.
 
 steps:
 `;
+
+/**
+ * One version in the picker: its number and when it was stored, in the zone the person reading it is
+ * in. It used to be the raw UTC string cut at the sixteenth character, which named no zone at all and
+ * was the wrong time for anyone east of Greenwich. A time with no zone in it is only ever the reader's
+ * own, so the exact instant goes in the label for anyone who needs it.
+ */
+function versionOption(entry: { version: number; created_at: string }): HTMLElement {
+  const label = `v${entry.version}, ${whenMinute(entry.created_at)}`;
+  return el("option", { value: String(entry.version), "aria-label": `${label}, stored ${isoInstant(entry.created_at)}` }, label);
+}
 
 /** SPEC 1.1: a step id starts with a lowercase letter and takes only lowercase letters, digits and `_`. */
 const STEP_ID = /^[a-z][a-z0-9_]{0,63}$/;
@@ -1067,9 +1078,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       baseline = record.yaml;
       openNameInput.value = name;
       versionSelect.hidden = false;
-      versionSelect.replaceChildren(
-        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
-      );
+      versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(wanted);
       setText(record.yaml, { source: "load" });
       announce(`${name} version ${wanted} opened.`);
@@ -1126,9 +1135,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       if (gone()) return;
       versions = list.versions.map((entry) => ({ version: entry.version, created_at: entry.created_at }));
       versionSelect.hidden = false;
-      versionSelect.replaceChildren(
-        ...versions.toReversed().map((entry) => el("option", { value: String(entry.version) }, `v${entry.version}, ${entry.created_at.slice(0, 16)}`)),
-      );
+      versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(record.version);
       openNameInput.value = name;
       sessionStorage.removeItem(wasKey);

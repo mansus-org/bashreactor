@@ -20,6 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAssets } from "../assets.ts";
 import type { Attempt, Run, RunStep, RunSummary } from "./api.ts";
+import type { Clock } from "./runs.ts";
 import type { State as DomState } from "./dom.ts";
 
 // ---------- the stand-in DOM ----------
@@ -64,6 +65,15 @@ class FakeElement {
 
   set hidden(value: boolean) {
     this.setFlag("hidden", value);
+  }
+
+  /** `title` is an attribute that reads as a property, and it is where the exact instant lives. */
+  get title(): string {
+    return this.attrs.get("title") ?? "";
+  }
+
+  set title(value: string) {
+    this.attrs.set("title", value);
   }
 
   get disabled(): boolean {
@@ -135,6 +145,17 @@ class FakeElement {
     loseFocusIf(this);
     this.parent?.children.splice(this.parent.children.indexOf(this), 1);
     this.parent = null;
+  }
+
+  /**
+   * Put `node` before `ref`, or at the end when `ref` is null. A live list moves its rows to the order
+   * the server just said rather than rebuilding them, and this is the only way to do that.
+   */
+  insertBefore(node: FakeElement, ref: FakeElement | null): void {
+    node.parent?.children.splice(node.parent.children.indexOf(node), 1);
+    const at = ref === null ? this.children.length : this.children.indexOf(ref);
+    this.children.splice(at < 0 ? this.children.length : at, 0, node);
+    node.parent = this;
   }
 
   get childElementCount(): number {
@@ -286,6 +307,8 @@ const storage = () => {
 const fakeDocument = {
   body: new FakeElement("body"),
   title: "",
+  /** Whether the tab is in the background. Neither live view reads while it is. */
+  hidden: false,
   get activeElement(): FakeElement {
     return activeElement ?? this.body;
   },
@@ -294,8 +317,24 @@ const fakeDocument = {
   getElementById(id: string) {
     return this.body.querySelector(`[id="${id}"]`);
   },
-  addEventListener(): void {},
+  addEventListener(_type: string, handler: () => void): void {
+    visibilityHandlers.push(handler);
+  },
+  removeEventListener(_type: string, handler: () => void): void {
+    const at = visibilityHandlers.indexOf(handler);
+    if (at >= 0) visibilityHandlers.splice(at, 1);
+  },
 };
+
+const visibilityHandlers: (() => void)[] = [];
+
+/** Switch tabs the way the browser does: a live view stops reading, or starts again. */
+function showTab(hidden: boolean): void {
+  if (fakeDocument.hidden === hidden) return;
+  fakeDocument.hidden = hidden;
+  // Walking a copy: a handler can take itself off the list in the middle of the switch.
+  for (const handler of visibilityHandlers.slice()) handler();
+}
 
 const globals = globalThis as unknown as Record<string, unknown>;
 const installed = {
@@ -342,15 +381,17 @@ for (const name of ["dom", "api", "logs", "runs"]) {
 }
 writeFileSync(join(served, "app.js"), "export function navigate() {}\n");
 
-const { sign } = (await import(join(served, "dom.js"))) as typeof import("./dom.ts");
+const { sign, when, isoInstant, duration } = (await import(join(served, "dom.js"))) as typeof import("./dom.ts");
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { MAX_DRAWN_LINES } = (await import(join(served, "logs.js"))) as typeof import("./logs.ts");
-const { renderRuns } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
+const { renderRuns, POLL_MS } = (await import(join(served, "runs.js"))) as typeof import("./runs.ts");
 
 // Most of what is tested here is a button, and a read-only token is never offered one.
 session.identity = { name: "tester", scope: "write", admin: false };
 
 const controllers: AbortController[] = [];
+/** Undo anything a test put on the globals, so the next file gets the ones it came with. */
+const cleanups: (() => void)[] = [];
 
 /** One run, and an empty log for whichever attempt the pane asks for. Nothing else is answered. */
 function serve(run: Run): void {
@@ -409,6 +450,7 @@ async function render(run: Run, serving: () => void = () => serve(run), keepOpen
 
 afterAll(() => {
   for (const controller of controllers) controller.abort();
+  for (const stop of cleanups) stop();
   URL.createObjectURL = realCreateObjectURL;
   URL.revokeObjectURL = realRevokeObjectURL;
   for (const [name, value] of Object.entries(installed)) {
@@ -726,6 +768,15 @@ class FakeServer {
     this.routes.set(`POST ${this.runPath}/${action}`, () => reply(after ?? this.run));
   }
 
+  /** Stop answering the read of the run, until `answerPollAgain`. This is what a lost poll looks like. */
+  refusePoll(message = "the api is down"): void {
+    this.routes.set(`GET ${this.runPath}`, () => reply({ code: "internal_error", message }, 500));
+  }
+
+  answerPollAgain(): void {
+    this.routes.delete(`GET ${this.runPath}`);
+  }
+
   private get runPath(): string {
     return `/v1/runs/${this.run.id}`;
   }
@@ -779,10 +830,60 @@ class FakeServer {
   }
 }
 
+/**
+ * A clock a test turns by hand.
+ *
+ * Both live views ask for the time and arm their next read through one object, so a test can say what
+ * time it is and when the next read is owed instead of sleeping for a poll that would only tell it
+ * what it already knows. `waking` is the whole of finding 45 reduced to a number: a live view is one
+ * that has a read waiting, and a finished one is a view that has none.
+ */
+class FakeClock {
+  private hand = 0;
+  private readonly armed: { at: number; run: () => void }[] = [];
+
+  /** How many reads are waiting to be woken. */
+  get waking(): number {
+    return this.armed.length;
+  }
+
+  now(): number {
+    return this.hand;
+  }
+
+  after(ms: number, run: () => void): () => void {
+    const job = { at: this.hand + ms, run };
+    this.armed.push(job);
+    return () => {
+      const at = this.armed.indexOf(job);
+      if (at >= 0) this.armed.splice(at, 1);
+    };
+  }
+
+  /** Stand the clock at a wall-clock instant, written the way run.json writes them. */
+  set(instant: string): void {
+    this.hand = Date.parse(instant);
+  }
+
+  /** Move the hand on and wake whatever came due, each read landing before the next is considered. */
+  async advance(ms: number): Promise<void> {
+    this.hand += ms;
+    for (;;) {
+      const due = this.armed.filter((job) => job.at <= this.hand).toSorted((a, b) => a.at - b.at)[0];
+      if (due === undefined) break;
+      this.armed.splice(this.armed.indexOf(due), 1);
+      due.run();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    // The last read has to finish and arm (or refuse to arm) its successor before the test looks.
+    for (let turn = 0; turn < 20; turn++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 /** Opens one run and leaves it open, because these tests are about what a poll does to the page. */
 let previous: AbortController | null = null;
 
-async function openRun(server: FakeServer): Promise<FakeElement> {
+async function openRun(server: FakeServer, clock?: Clock): Promise<FakeElement> {
   previous?.abort();
   const view = new FakeElement("div");
   const controller = new AbortController();
@@ -793,6 +894,7 @@ async function openRun(server: FakeServer): Promise<FakeElement> {
     view as unknown as HTMLElement,
     { path: `/runs/${server.run.id}`, parts: ["runs", server.run.id], query: new URLSearchParams() },
     controller.signal,
+    clock,
   );
   await waitFor("the steps to be drawn", () => {
     const rows = view.querySelectorAll(".steprow");
@@ -1159,6 +1261,254 @@ describe("following a log", () => {
   });
 });
 
+// ---------- a live view keeps up with the run ----------
+//
+// Both screens are a read of run.json on a timer, and the whole of finding 45 was that the timer was
+// never there: the list was painted once and left, so a run that started, finished or was retried
+// while you were looking only turned up after a reload. What is pinned here is the loop and not the
+// wait. Each test hands the screen a clock it turns itself and counts the reads the screen asked for,
+// so "it polled, and then it stopped" is a number rather than a nap, and "running for 4 m 07 s" is
+// measured against a now the test chose rather than whatever the machine running the suite believes.
+
+/**
+ * The Runs list, on a clock the test turns. `answer` and `fail` say what the next read will say and
+ * `reads` counts them, so a test can watch the screen ask rather than wait to see whether it did.
+ */
+async function liveList(runs: RunSummary[]): Promise<{
+  view: FakeElement;
+  clock: FakeClock;
+  reads(): number;
+  answer(runs: RunSummary[]): void;
+  fail(message: string): void;
+}> {
+  previous?.abort();
+  const controller = new AbortController();
+  controllers.push(controller);
+  previous = controller;
+  const view = new FakeElement("div");
+  const clock = new FakeClock();
+  let asked = 0;
+  let next: () => Promise<FakeResponse> = async () => reply(runs);
+  const saved = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (!url.endsWith("/v1/runs")) return saved(input);
+    asked += 1;
+    return next();
+  }) as typeof fetch;
+  cleanups.push(() => {
+    globalThis.fetch = saved;
+  });
+  renderRuns(
+    view as unknown as HTMLElement,
+    { path: "/runs", parts: ["runs"], query: new URLSearchParams() },
+    controller.signal,
+    clock,
+  );
+  await waitFor("the list to be drawn", () => view.querySelectorAll(".runrow").length > 0);
+  return {
+    view,
+    clock,
+    reads: () => asked,
+    answer: (list) => {
+      next = async () => reply(list);
+    },
+    fail: (message) => {
+      next = async () => {
+        throw new Error(message);
+      };
+    },
+  };
+}
+
+const note = (view: FakeElement): FakeElement => one(view.querySelector(".runlist__note"), "the line under the heading");
+const panelTitle = (view: FakeElement): string => one(view.querySelector('[id="panel-title"]'), "the log panel's title").textContent;
+const metaLine = (view: FakeElement, starts: string): FakeElement =>
+  one(
+    view.querySelectorAll(".runhead__meta span").find((node) => node.textContent.startsWith(starts)) ?? null,
+    `the head line starting "${starts}"`,
+  );
+
+describe("a list that keeps up", () => {
+  test("reads again while a run on it is going", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    expect(list.clock.waking).toBe(1);
+
+    list.answer([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    await list.clock.advance(POLL_MS);
+
+    expect(list.reads()).toBe(2);
+    expect(word(one(list.view.querySelector(".stamp"), "the row's state"))).toBe("succeeded");
+  });
+
+  test("stops reading the moment nothing on it is running, and leaves no timer behind", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    list.answer([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    await list.clock.advance(POLL_MS);
+
+    expect(list.clock.waking).toBe(0);
+    const reads = list.reads();
+    await list.clock.advance(POLL_MS * 10);
+    expect(list.reads()).toBe(reads);
+  });
+
+  test("a run that starts while you are looking turns up, and the row you were on is the same row", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    const row = one(list.view.querySelector(".runrow"), "the row for the run already there");
+    row.focus();
+
+    // Newest first, so the old row has to move down a place.
+    list.answer([summary("20261104T111500Z-1a2b3c4d", "running"), summary("20261104T101500Z-3fa9c2d1", "running")]);
+    await list.clock.advance(POLL_MS);
+
+    const rows = list.view.querySelectorAll(".runrow");
+    expect(rows.length).toBe(2);
+    expect(rows[1]).toBe(row);
+    // The reason rows are patched rather than rebuilt: a rebuilt one takes the focus off you.
+    expect(fakeDocument.activeElement).toBe(row);
+  });
+
+  test("says the reading is lost while the server is down, and stops saying it when it is not", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    list.fail("the api is down");
+    await list.clock.advance(POLL_MS);
+
+    expect(note(list.view).hidden).toBe(false);
+    expect(note(list.view).textContent).toContain("Lost the server");
+    // The rows stay: a list that cannot read is not a list that is empty.
+    expect(list.view.querySelectorAll(".runrow").length).toBe(1);
+    // and it keeps trying, because the run may still be going.
+    expect(list.clock.waking).toBe(1);
+
+    list.answer([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+    await list.clock.advance(POLL_MS);
+    expect(note(list.view).hidden).toBe(true);
+  });
+
+  test("a tab nobody is looking at reads nothing, and reads the moment it is looked at again", async () => {
+    const list = await liveList([summary("20261104T101500Z-3fa9c2d1", "running")]);
+    showTab(true);
+    try {
+      await list.clock.advance(POLL_MS * 5);
+      expect(list.reads()).toBe(1);
+      expect(list.clock.waking).toBe(0);
+
+      list.answer([summary("20261104T101500Z-3fa9c2d1", "succeeded")]);
+      showTab(false);
+      await waitFor("the row to say the run is over", () => list.view.textContent.includes("succeeded"));
+      expect(word(one(list.view.querySelector(".stamp"), "the row's state"))).toBe("succeeded");
+    } finally {
+      showTab(false);
+    }
+  });
+});
+
+describe("a run screen that keeps up", () => {
+  test("stops asking once the run is finished, and leaves no timer behind", async () => {
+    const server = new FakeServer(runFixture([step("build", "running")], "running"));
+    const clock = new FakeClock();
+    const view = await openRun(server, clock);
+    expect(clock.waking).toBe(1);
+
+    server.run = runFixture([step("build", "succeeded")], "succeeded");
+    await clock.advance(POLL_MS);
+
+    expect(runStamp(view)).toBe("succeeded");
+    expect(clock.waking).toBe(0);
+    const polls = server.polls;
+    await clock.advance(POLL_MS * 10);
+    expect(server.polls).toBe(polls);
+  });
+
+  test("says the poll is lost, and stops saying it when the server answers again", async () => {
+    const server = new FakeServer(LIVE);
+    const clock = new FakeClock();
+    const view = await openRun(server, clock);
+
+    server.refusePoll();
+    await clock.advance(POLL_MS);
+    expect(metaLine(view, "lost the server").textContent).toBe("lost the server, still trying");
+    expect(metaLine(view, "lost the server").getAttribute("title")).toContain("the api is down");
+    // The state on screen stays the last good one, because that is the last thing known about it.
+    expect(runStamp(view)).toBe("running");
+
+    server.answerPollAgain();
+    await clock.advance(POLL_MS);
+    expect(metaLine(view, "lost the server").hidden).toBe(true);
+  });
+
+  test("follow moves the pane to the step that is running now", async () => {
+    const server = new FakeServer(runFixture([step("fetch", "running")], "running"));
+    const clock = new FakeClock();
+    const view = await openRun(server, clock);
+    expect(panelTitle(view)).toBe("fetch");
+
+    // `render` starts and `fetch` finishes on the same poll, which is the case the old rule missed:
+    // there was no new attempt to notice, so the pane sat on a finished log while the run went on.
+    server.run = runFixture([step("fetch", "succeeded"), step("render", "running", ["fetch"])], "running");
+    await clock.advance(POLL_MS);
+
+    expect(panelTitle(view)).toBe("render");
+  });
+
+  test("follow off pins the pane to the step it was left on", async () => {
+    const server = new FakeServer(runFixture([step("fetch", "running")], "running"));
+    const clock = new FakeClock();
+    const view = await openRun(server, clock);
+    click(buttonNamed(view, "Follow"));
+    expect(buttonNamed(view, "Follow").getAttribute("aria-pressed")).toBe("false");
+
+    server.run = runFixture([step("fetch", "succeeded"), step("render", "running", ["fetch"])], "running");
+    await clock.advance(POLL_MS);
+
+    // Somebody chose this step and turned following off to keep it: the run moving on is not their
+    // business. Only the pane moving is, and only when they asked for it.
+    expect(panelTitle(view)).toBe("fetch");
+  });
+
+  test("the time it has been going is counted from the run's own clock, not the machine's", async () => {
+    const server = new FakeServer(LIVE);
+    const clock = new FakeClock();
+    clock.set("2026-11-04T10:19:07Z"); // 4 m 07 s after the run was created
+    const view = await openRun(server, clock);
+
+    expect(metaLine(view, "running for").textContent).toBe("running for 4 m 07 s");
+  });
+
+  test("a run that has finished says how long it took, and stops counting", async () => {
+    const server = new FakeServer(DONE);
+    const clock = new FakeClock();
+    clock.set("2026-11-04T13:00:00Z"); // hours after it was over
+    const view = await openRun(server, clock);
+
+    expect(metaLine(view, "took").textContent).toBe(`took ${duration(41)}`);
+    expect(clock.waking).toBe(0);
+  });
+});
+
+describe("one clock on the screen", () => {
+  test("a time is the reader's own clock, and does not name a zone", () => {
+    const stamp = when("2026-11-04T10:15:00Z");
+    expect(stamp).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    // Read back as the reader's own local time it is the same instant: nothing is printed in a zone
+    // the reader did not choose, which is what made three screens disagree by hours.
+    expect(Date.parse(stamp)).toBe(Date.parse("2026-11-04T10:15:00Z"));
+  });
+
+  test("the exact instant is on the page for anyone who wants it", async () => {
+    const server = new FakeServer(LIVE);
+    const view = await openRun(server);
+
+    expect(metaLine(view, "started").getAttribute("title")).toBe(LIVE.created_at);
+    expect(metaLine(view, "started").textContent).toBe(`started ${when(LIVE.created_at)}`);
+  });
+
+  test("a time that is not there is nothing, not a date invented", () => {
+    expect(when(null)).toBe("");
+    expect(isoInstant(null)).toBe("");
+  });
+});
+
 // ---------- the words on the page, and the box they have to fit in ----------
 //
 // Everything above is what the screen says; this is whether it still fits when what it says is the
@@ -1238,6 +1588,14 @@ describe("a run in the list", () => {
 
   test("the stylesheet leaves no column for a sign in front of the stamp", () => {
     expect(ruleBody(".runrow")).toMatch(/grid-template-columns:\s*minmax\(0, ?1fr\) auto/);
+  });
+
+  test("the line that reports the reading is a control, not a caption", () => {
+    // Both live views read on their own now, so "loading" and "lost the server, still trying" are
+    // things the page tells you rather than things you find out by reloading. They take the same
+    // emphasis as the line under the log, and nothing else on those screens is bold at that size.
+    expect(ruleBody(".runlist__note")).toMatch(/font-weight:\s*700/);
+    expect(ruleBody(".runhead__stale")).toMatch(/font-weight:\s*700/);
   });
 });
 

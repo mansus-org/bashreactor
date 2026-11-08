@@ -105,9 +105,11 @@ status. The subtitle states the design: a run is a directory, and this list is i
 
 The same list while a run is in flight, with the newest row reading `running`. That run is not one of
 the two `examples/demo.sh` starts; it was started on its own, with its own inputs. There is no
-websocket and no callback: the list is a snapshot you reload, and a run's own page is the one that
-polls, re-reading `GET /v1/runs/:id` once a second (`POLL_MS` in `apps/web/src/client/runs.ts`) until
-the run is final.
+websocket and no callback: both screens poll. The list re-reads `GET /v1/runs` once a second for as
+long as any run on it is `running`, and stops the moment none is; a run's own page re-reads
+`GET /v1/runs/:id` on the same beat (`POLL_MS` in `apps/web/src/client/runs.ts`) until the run is
+final. Neither reads while the tab is in another window, and both say so in the status line when a
+read fails rather than going quiet on you.
 
 One thing catches out everyone who reads a live run: a step whose first attempt is running reports
 `attempts_used: 0`, in `run.json`, in `GET /v1/runs/:id`, and in the `ATTEMPTS` column of
@@ -165,7 +167,9 @@ The log pane holds one attempt of one step, and its cursor is a byte offset (SPE
 *Read to byte 42*, which is all of `check` attempt 1: one line, `check-corpus: 50 lines, need at least
 100`. The pane asks for whatever comes after its offset on every poll, and *Pause* stops it asking.
 *Follow* is about keeping up rather than about fetching: it holds the pane at the newest line and moves
-it to a step's newest attempt. Because the cursor is an offset, an answer only carries what is new, and
+it to a step's newest attempt, and when the step you are watching ends while the run goes on, it moves
+the pane to the step that is running now — watch `one` in a pipeline of `one` and a dependent `two`,
+and the pane goes to `two` the moment `one` succeeds. Turn it off to pin the pane to one step. Because the cursor is an offset, an answer only carries what is new, and
 the page only goes forward: it starts over from byte 0 when you point the pane at another step or
 attempt, and otherwise never does. A poll is one `run.json` request and at least one log request, and
 each answer is capped at 1 MiB (`MAX_LOG_TEXT_BYTES` in `apps/api/src/app.ts`), so the page asks again
