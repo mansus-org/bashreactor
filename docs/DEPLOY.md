@@ -83,11 +83,12 @@ write. Two things answer it now, and neither of them is `/healthz`.
 
 **Retention** is `BASHREACTOR_RETENTION`, a SPEC 1.3 duration, set to `"30d"` in `.k3s/values.yaml` and
 therefore in the pod from the next Argo CD sync. A run that has reached a final status and has been
-finished longer than the window is deleted, at startup and then hourly: a run that is `running` or
-`waiting`, one with no `finished_at`, and one with a live claim are all kept, and one directory that
-will not go does not stop the pass. Unset, `off`, `none` and `0` all mean the server never deletes a run
-by itself, which is the default — right on a laptop, not on a 1 Gi volume. Whichever it is the entry says
-so, because "off" being silent is how a volume fills:
+finished longer than the window is deleted, at startup and then hourly: a run that is `running`, one
+with no `finished_at`, and one with a live claim are all kept, and one directory that will not go does
+not stop the pass. A `failed` or `cancelled` run goes on the same window as a success even though it can
+still be retried, so a retry is something done inside the window (SPEC 4.11). Unset, `off`, `none` and
+`0` all mean the server never deletes a run by itself, which is the default — right on a laptop, not on
+a 1 Gi volume. Whichever it is the entry says so, because "off" being silent is how a volume fills:
 
 ```console
 $ env BASHREACTOR_HOME=$tmp PORT=18094 BASHREACTOR_RETENTION=30d BASHREACTOR_ADMIN_TOKEN_SHA256=$HASH bun apps/web/src/server.ts

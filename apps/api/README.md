@@ -248,8 +248,10 @@ cost is paid on a route nobody polls at speed.
 
 `DELETE /v1/runs/:id` is the removal, and `BASHREACTOR_RETENTION` is the same call on a timer — hourly,
 starting at boot, for runs that reached a final status and have been finished longer than the window.
-A run that is `running` or `waiting`, one with no `finished_at`, and one with a live claim are all kept,
-and one directory that will not go does not stop the pass. The default is off, because a run directory is
+A run that is `running`, one with no `finished_at`, and one with a live claim are all kept,
+and one directory that will not go does not stop the pass. A `failed` or `cancelled` run is kept for
+exactly the same window as a success, even though it can still be retried: the runs that fill a volume
+are the ones that fail nightly (SPEC 4.11). The default is off, because a run directory is
 the only copy of what a pipeline produced; the server says "retention is off" at startup so that the
 default is a decision somebody made rather than a thing nobody noticed.
 

@@ -1089,10 +1089,9 @@ the default — a run directory is the only copy of what a pipeline produced, an
 which runs a person still wants. Whichever it is, the server says so at startup, because "off" being
 silent is how a volume fills.
 
-What the sweep will not touch: a run that is not in a final status (`running` is being written into,
-`waiting` is waiting on a person, and a sweep must not decide they never will), a run with no
-`finished_at` to age it by, and a run that refuses while it is being deleted. Anything it cannot account
-for is kept and counted, because the failure mode of keeping one run too long is a fuller disk and the
+What the sweep will not touch: a run that is not in a final status — in v1 the only one is `running`,
+which is being written into — a run with no `finished_at` to age it by, and a run that refuses while it is
+being deleted. Anything it cannot account for is kept and counted, because the failure mode of keeping one run too long is a fuller disk and the
 failure mode of deleting one too early is somebody's data. One directory that will not go does not end
 the pass; the error is logged once and the rest still go. Neither does a record that will not parse — a
 run nothing can read is the one only a delete can clear, so the engine does not read `run.json` in order
@@ -1104,6 +1103,25 @@ taken away whole, because half a run directory is in no listing and still spends
 One pass at a time: a sweep is a walk of the whole data directory, and a tick that arrives while one is
 still going is skipped rather than started, so two never delete over each other's heads. On shutdown the
 timer stops before the engine does, and a pass in flight is waited for.
+
+The window is one number for every run, and that is a decision rather than an oversight.
+
+A `failed` or `cancelled` run can still be retried, and a sweep takes away what a retry needs. It is
+deleted on the same window as a success anyway: the runs that fill a volume are the ones that fail
+nightly, and exempting failures would keep precisely what nobody wants and pay for it in the space
+that is left. A retry is something a person does inside the window, and a window of a day is the
+promise that a retry stays possible for a day.
+
+Nor is the newest run of a pipeline kept. "Newest" is per-pipeline state a sweep would have to compute
+over the whole home to protect one run while everything older goes, and it protects a pipeline that
+runs once a quarter no better than its age already does. What keeps a run in v1 is a window long
+enough, or no window at all; a marker that pins one run against the sweep is section 6 material, and
+so is a window per pipeline or per run.
+
+One thing comes with trusting `finished_at` and the clock the process is handed: a node that boots with
+a wrong clock and corrects it some minutes later can make every finished run look old at once, and one
+pass then clears the home. Nothing in v1 notices that; the line a pass logs, saying how many runs it
+removed, is the only trace there is. It is the argument for a window measured in days on a shared host.
 
 The room left is `GET /v1/disk`, which answers `path`, `total_bytes`, `used_bytes`, `free_bytes`,
 `low` and `runs_bytes` — a number for a probe or a cron to watch, said before the runs start dying.
