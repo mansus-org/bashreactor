@@ -1,4 +1,4 @@
-// The trim (SPEC 6): `BASHREACTOR_RETENTION` in, old run directories out.
+// The trim (SPEC 4.11): `BASHREACTOR_RETENTION` in, old run directories out.
 //
 // The sweep is the only code in this repo allowed to delete a run nobody asked for, so most of what
 // these tests pin down is what it refuses. They drive it against a fake engine that records calls —
@@ -152,6 +152,33 @@ describe("sweepRuns", () => {
     expect(engine.calls).toEqual([]);
     expect(report.kept).toBe(3);
     expect(report.problem).toBeNull();
+  });
+
+  test("a finished_at in the future is kept: the clock is not to be trusted", async () => {
+    // A node that boots before NTP has corrected it reports a `now` behind the timestamps it is given.
+    // Deleting on "not older than the window" alone would take every run in the home in one pass.
+    const engine = fakeEngine(run("from-the-future", "succeeded", new Date(NOW.getTime() + 60_000).toISOString()));
+
+    const report = await sweepRuns(engine, HOUR, { now: NOW });
+
+    expect(report.deleted).toEqual([]);
+    expect(engine.calls).toEqual([]);
+    expect(report.kept).toBe(1);
+  });
+
+  test("a home with no runs reports that, and still clears the leftovers", async () => {
+    const engine = fakeEngine();
+    engine.leftovers.push("runs/.tmp-abcdef0123456789abcdef0123456789");
+
+    const report = await sweepRuns(engine, DAY, { now: NOW });
+
+    expect(report).toEqual({
+      cutoff: new Date(NOW.getTime() - DAY).toISOString(),
+      deleted: [],
+      kept: 0,
+      temp: ["runs/.tmp-abcdef0123456789abcdef0123456789"],
+      problem: null,
+    });
   });
 
   test("a run that refuses is kept, and the sweep carries on with the rest", async () => {
