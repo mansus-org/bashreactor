@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { BLOCK_NAME_RE, parseBlock, parsePipeline, splitBlockHeaderBytes, validateBlockSource } from "@bashreactor/core";
 import { Engine, FsRunStore } from "@bashreactor/engine";
-import type { RunRecord } from "@bashreactor/engine";
+import type { ClaimState, RunRecord } from "@bashreactor/engine";
 import { Store } from "@bashreactor/store";
 import type { BlockVersion, PipelineRecord } from "@bashreactor/store";
 import { optionalInputs, optionalInteger, optionalString, parseIntegerParam, readBody, requireString } from "./body.ts";
@@ -58,6 +58,16 @@ interface Route {
   access: Access;
   handler: (ctx: Ctx) => Response | Promise<Response>;
 }
+
+/**
+ * A run as the API answers it: `run.json` (SPEC 4.9) plus `claim`, who holds the run's lock.
+ *
+ * `claim` is read every time and never stored, because the lock is a fact about the directory that
+ * outlives whatever `run.json` last said: a run left `running` by an engine that died is resumable,
+ * and a run being driven this second is not, and the two look identical in the record. Every response
+ * that carries a whole run carries it, so no client can be left holding a run without the field.
+ */
+export type RunView = RunRecord & { claim: ClaimState | null };
 
 export function createApi(deps: ApiDependencies): Api {
   const config = deps.config;
@@ -266,7 +276,7 @@ export function createApi(deps: ApiDependencies): Api {
       if (issues.length > 0) throw firstIssueAsError(issues);
       const record = await engine.start(staged.path, inputs);
       driveInBackground(record.id);
-      return json(201, record);
+      return json(201, await withClaim(record));
     } finally {
       staged.cleanup();
     }
@@ -484,15 +494,20 @@ export function createApi(deps: ApiDependencies): Api {
     return engine.store.layout(id).runDir;
   }
 
-  async function requiredRun(id: string): Promise<RunRecord> {
+  async function requiredRun(id: string): Promise<RunView> {
     const record = await engine.getRun(runId(id));
     if (record === null) throw new ApiError("run_not_found", `run "${id}" does not exist`);
-    return record;
+    return await withClaim(record);
+  }
+
+  /** The one place a claim is read, so a run never reaches a client without it. */
+  async function withClaim(record: RunRecord): Promise<RunView> {
+    return { ...record, claim: await engine.readClaim(record.id) };
   }
 
   async function acceptedRun(id: string): Promise<Response> {
     const record = await engine.getRun(id);
-    return json(202, record ?? { id });
+    return json(202, record === null ? { id } : await withClaim(record));
   }
 
   /**
@@ -511,7 +526,7 @@ export function createApi(deps: ApiDependencies): Api {
     const winner = await Promise.race([settled, timer]);
     if (winner === "settled") return await fallback();
     if ("error" in winner) throw winner.error;
-    return json(200, winner.record);
+    return json(200, await withClaim(winner.record));
   }
 
   /** Starts a run driving in the background, where a failure is a log line, not a lost response. */

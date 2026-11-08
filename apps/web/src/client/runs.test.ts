@@ -19,7 +19,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAssets } from "../assets.ts";
-import type { Attempt, Run, RunStep, RunSummary } from "./api.ts";
+import type { Attempt, Run, RunClaim, RunStep, RunSummary } from "./api.ts";
 import type { Clock } from "./runs.ts";
 import type { State as DomState } from "./dom.ts";
 
@@ -497,7 +497,7 @@ function step(id: string, status: string, needs: string[] = []): RunStep {
   };
 }
 
-function runFixture(steps: RunStep[], status: string): Run {
+function runFixture(steps: RunStep[], status: string, claim: RunClaim | null = null): Run {
   return {
     schema: 1,
     id: "20261104T101500Z-3fa9c2d1",
@@ -508,6 +508,7 @@ function runFixture(steps: RunStep[], status: string): Run {
     cancel_requested_at: null,
     inputs: { lines: 200 },
     outputs: null,
+    claim,
     steps: Object.fromEntries(steps.map((entry) => [entry.id, entry])),
   };
 }
@@ -942,6 +943,17 @@ const LIVE_RETRYING = (() => {
 /** A finished run with two steps that both printed something. */
 const DONE = runFixture([step("fetch", "succeeded"), step("render", "succeeded", ["fetch"])], "succeeded");
 
+/**
+ * Who holds a run's lock (SPEC 4.7). Nothing on the page can tell a live claim from a stale one
+ * without this, and it is the only thing that decides whether Resume can possibly work.
+ */
+const HELD: RunClaim = { pid: 4242, live: true };
+/** The same lock left behind by an engine that died: it blocks nothing, and it is worth taking up. */
+const STALE: RunClaim = { pid: 4242, live: false };
+
+/** A run an engine is driving this second, which is every run this server is driving. */
+const HELD_RUN = runFixture([step("fetch", "succeeded"), step("render", "running", ["fetch"])], "running", HELD);
+
 /** A step that failed twice, so its attempt picker has two buttons and the run is over. */
 const TWICE_FAILED = (() => {
   const failed = runFixture([step("render", "failed")], "failed");
@@ -961,10 +973,71 @@ const SIX_FAILED = runFixture(
   "failed",
 );
 
+// ---------- which actions a run is offered ----------
+
+describe("the actions a run is offered", () => {
+  test("a run an engine holds is offered cancel, and not resume", async () => {
+    // SPEC 4.7 refuses resume while a claim is live, and the server driving a run is that engine: the
+    // only answer to the click was `run_claimed`. Cancel is not held by the claim, because it just
+    // leaves a request for whoever does hold it (SPEC 4.6).
+    const view = await openRun(new FakeServer(HELD_RUN));
+
+    expect(buttonNamed(view, "Resume").hidden).toBe(true);
+    expect(buttonNamed(view, "Cancel run").hidden).toBe(false);
+    expect(buttonNamed(view, "Retry").hidden).toBe(true);
+  });
+
+  test("a run whose engine went away is offered resume", async () => {
+    // The claim is what an engine left behind, and the run is still `running` only because nothing was
+    // there to say otherwise. This is the run Resume exists for, so the claim must not hide it.
+    const view = await openRun(new FakeServer({ ...HELD_RUN, claim: STALE }));
+
+    expect(buttonNamed(view, "Resume").hidden).toBe(false);
+  });
+
+  test("a run that succeeded is offered none of them", async () => {
+    // SPEC 4.6: a manual retry sets failed, skipped and cancelled steps back to pending, and a run
+    // that succeeded has none of those. The engine answers `run_not_retryable`, so the page does not
+    // ask it.
+    const view = await openRun(new FakeServer(DONE));
+
+    expect(buttonNamed(view, "Cancel run").hidden).toBe(true);
+    expect(buttonNamed(view, "Resume").hidden).toBe(true);
+    expect(buttonNamed(view, "Retry").hidden).toBe(true);
+  });
+
+  test("a run that failed is offered retry", async () => {
+    const view = await openRun(new FakeServer(FAILED_RUN));
+    expect(buttonNamed(view, "Retry").hidden).toBe(false);
+  });
+
+  test("a run that was cancelled is offered retry", async () => {
+    // SPEC 4.6 counts a cancelled run alongside a failed one, and nothing on the head would tell you.
+    const view = await openRun(new FakeServer(runFixture([step("render", "cancelled")], "cancelled")));
+    expect(buttonNamed(view, "Retry").hidden).toBe(false);
+  });
+
+  test("resume arrives on the poll that finds the engine gone", async () => {
+    // A run is watched, not reopened, so a claim going stale has to be able to change the head while
+    // you are looking at it.
+    const server = new FakeServer(HELD_RUN);
+    const view = await openRun(server);
+    expect(buttonNamed(view, "Resume").hidden).toBe(true);
+
+    server.run = { ...HELD_RUN, claim: STALE };
+    const polls = server.polls;
+    await waitFor("a poll", () => server.polls > polls);
+
+    expect(buttonNamed(view, "Resume").hidden).toBe(false);
+  });
+});
+
 // ---------- what a refused action does ----------
 
 describe("an action the server refuses", () => {
   test("a refused resume stays on the page, in the server's own words, through a poll", async () => {
+    // The page offers Resume for a run nobody holds (LIVE has no claim), and the run can be claimed
+    // between that read and this click. SPEC 4.7 then says so, and the box has to outlast the poll.
     const server = new FakeServer(LIVE);
     server.refuse("resume", "run_claimed", "Another engine holds this run.");
     const view = await openRun(server);
@@ -1014,21 +1087,24 @@ describe("an action the server refuses", () => {
     expect(alarmOf(view).textContent).toBe("");
   });
 
-  test("retry on a run that already succeeded says so, and stays said", async () => {
-    const server = new FakeServer(DONE);
+  test("retry refused because the run finished under us stays said", async () => {
+    // The page offered Retry on a run that had failed, and the run reached its end between that read
+    // and this click. SPEC 4.6 then answers `run_not_retryable`, and the box is the whole point.
+    const server = new FakeServer(FAILED_RUN);
     server.refuse("retry", "run_not_retryable", "A run that succeeded is not retried.", 400);
     const view = await openRun(server);
 
     const retry = buttonNamed(view, "Retry");
     expect(retry.hidden).toBe(false);
+    // The alarm is already open on the run's own failure, so what has to change is what is in it.
     click(retry);
-    await waitFor("the refusal to be drawn", () => !alarmOf(view).hidden);
+    await waitFor("the refusal to be drawn", () => alarmOf(view).textContent.includes("Retry refused"));
 
-    expect(alarmOf(view).textContent).toContain("Retry refused");
     expect(alarmOf(view).textContent).toContain("run_not_retryable");
     // Nothing is polled for a finished run, so nothing is waiting to hide the reason again.
     await settle();
     expect(alarmOf(view).hidden).toBe(false);
+    expect(alarmOf(view).textContent).toContain("Retry refused");
   });
 });
 

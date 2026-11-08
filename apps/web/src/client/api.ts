@@ -86,7 +86,19 @@ export interface RunStep {
   attempts: Attempt[];
 }
 
-/** `run.json`, SPEC 4.9, exactly as `GET /v1/runs/:id` returns it. */
+/**
+ * Who holds a run's lock (SPEC 4.7). The API reads it when it reads the run; it is not a field of
+ * `run.json`, because the lock outlives whatever the record last said: a run left `running` by an
+ * engine that died and one being driven this second are the same words in the file.
+ */
+export interface RunClaim {
+  /** The pid of the engine that wrote the lock. */
+  pid: number;
+  /** Whether that pid is still the process that wrote it. A stale claim blocks nothing. */
+  live: boolean;
+}
+
+/** `run.json`, SPEC 4.9, plus the claim the API read beside it. */
 export interface Run {
   schema: number;
   id: string;
@@ -98,6 +110,7 @@ export interface Run {
   inputs: Record<string, unknown>;
   outputs: Record<string, unknown> | null;
   steps: Record<string, RunStep>;
+  claim: RunClaim | null;
 }
 
 export interface LogChunk {

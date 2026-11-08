@@ -109,7 +109,7 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | `POST` | `/v1/pipelines/:name/versions` | write | store a version (validated first) |
 | `GET` | `/v1/runs` | read | one page of runs, newest first; `?limit=` and `?cursor=`, `X-Next-Cursor` when there is more |
 | `POST` | `/v1/runs` | write | start a run and drive it in the background |
-| `GET` | `/v1/runs/:id` | read | the whole `run.json` |
+| `GET` | `/v1/runs/:id` | read | the whole `run.json`, plus `claim` (SPEC 4.7) |
 | `POST` | `/v1/runs/:id/cancel` | write | ask for a cancel (SPEC 4.6) |
 | `POST` | `/v1/runs/:id/retry` | write | manual retry of a failed or cancelled run |
 | `POST` | `/v1/runs/:id/resume` | write | take up a run left `running` |
@@ -317,6 +317,20 @@ At startup the server calls `resume` on every run still marked `running` and ski
 engine holds (SPEC 4.7), so a rollout picks jobs up rather than stranding them. On SIGTERM the server
 stops and exits; runs left `running` are picked up by the next process, which stops any block process
 still alive from the previous one.
+
+## Who holds a run, and what that rules out
+
+Every response that carries a whole run carries `claim`: `{"pid": <engine>, "live": true}` while an
+engine holds `lock`, `{"pid": <engine>, "live": false}` for the lock an engine that died left behind,
+and `null` where there is no lock at all. It is read off `lock` on the way out and never stored in
+`run.json`, because `run.json` says `running` both for a run being driven this second and for one whose
+engine was SIGKILLed, and those are different questions to whoever is reading (SPEC 4.7).
+
+It is what tells a client which of the three run actions can do anything at all. `resume` is refused
+`run_claimed` while the claim is live, so a run whose claim is live is not resumable and what is left to
+offer is a cancel, which only leaves a request for whoever does hold it. A run that `succeeded` has
+nothing for `retry` to reset (SPEC 4.6) and answers `run_not_retryable`. A page that offered either
+would be offering a refusal.
 
 ## Staging: how a library block reaches the engine
 

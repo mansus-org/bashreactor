@@ -142,6 +142,9 @@ describe("reading runs", () => {
     expect(done.cancel_requested_at).toBeNull();
     expect(Object.keys(done.steps)).toEqual(["greet"]);
     expect(done.steps.greet.block.name).toBe("hello");
+    // SPEC 4.7's lock, read afresh on every response rather than stored in run.json: the engine let go
+    // of it when the run ended, so nothing holds this run and `claim` says so instead of going missing.
+    expect(done.claim).toBeNull();
   });
 
   test("a run that does not exist is 404", async () => {
@@ -255,6 +258,12 @@ describe("cancel, retry and resume", () => {
     const response = await server.call("POST", `/v1/runs/${run.id}/resume`);
     expect(response.status).toBe(409);
     expect(await body(response)).toMatchObject({ code: "run_claimed" });
+
+    // The read says who holds it, which is how a client knows before it asks: the 409 above is the
+    // only answer that click could get, so there is no button to offer.
+    const held = await body(await server.call("GET", `/v1/runs/${run.id}`));
+    expect(held.claim).toEqual({ pid: expect.any(Number), live: true });
+
     await server.call("POST", `/v1/runs/${run.id}/cancel`);
     await server.waitForRun(run.id);
   });

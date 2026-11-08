@@ -33,7 +33,7 @@ import type {
 import { isLiveClaim, readProcStartTime } from "./proc.ts";
 import { FINAL_RUN_STATUSES, FINAL_STEP_STATUSES, RUN_ID_RE, nowIso, newRunId } from "./run.ts";
 import type { AttemptRecord, RunRecord, StepRecord } from "./run.ts";
-import type { EngineClaim, PruneResult, RunFiles, RunLayout, RunStore } from "./run-store.ts";
+import type { ClaimState, EngineClaim, PruneResult, RunFiles, RunLayout, RunStore } from "./run-store.ts";
 import { checkRuntime } from "./runtime.ts";
 import { spawnBlock } from "./spawn.ts";
 
@@ -270,6 +270,20 @@ export class Engine {
 
   async getRun(runId: string): Promise<RunRecord | null> {
     return this.store.loadRun(runId);
+  }
+
+  /**
+   * Who holds this run, and whether they are still there (SPEC 4.7). Nothing else outside the engine
+   * can tell: `run.json` says `running` for a run whose engine was SIGKILLed and for one being driven
+   * this second, and those are different questions to a client, because only one of them can be
+   * resumed. `null` is no `lock` at all, which blocks as little as a stale one does.
+   *
+   * This reads, it does not claim: a caller that learned the claim is stale has still to take it, and
+   * another engine may take it first.
+   */
+  async readClaim(runId: string): Promise<ClaimState | null> {
+    const claim = await this.store.loadClaim(runId);
+    return claim === null ? null : { pid: claim.pid, live: isLiveClaim(claim) };
   }
 
   /**

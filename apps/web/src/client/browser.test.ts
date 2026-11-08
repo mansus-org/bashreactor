@@ -285,25 +285,22 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
-      "a refused action says so and stays said",
+      "a run that has finished is offered nothing to press",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, `/app/runs/${run.id}`);
         await waitFor(page, ".steprow");
-        // A run that succeeded cannot be retried, and the server's own words have to reach the person
-        // who pressed the button. They used to be written into a box the same tick hid.
-        await press(page, "Retry");
-        await page.waitForFunction(() => document.querySelector(".alarm:not([hidden])") !== null);
-        expect(await textOf(page, ".alarm")).toContain("Retry refused");
-        expect(await textOf(page, ".alarm")).toContain("run_not_retryable");
-        expect((await visible(page, ".alarm")).shown).toBe(true);
-
-        await press(page, "Dismiss");
-        await page.waitForFunction(() => document.querySelector(".alarm[hidden]") !== null);
-
-        // The 409 is what a refusal is. What this test will not accept is the page falling over on
-        // the way there; the page's own CSP violation is named in the skipped test below.
+        // This run succeeded, so all three actions are refusals waiting to happen: `retry` has nothing
+        // to reset (SPEC 4.6) and `resume` is refused outright (SPEC 4.7). They used to be offered, and
+        // pressing one drew a box explaining why it could not work. Now there is nothing to press:
+        // hidden, so the keyboard cannot reach them either, and the page asks for nothing.
+        for (const action of ["retry", "resume", "cancel"]) {
+          expect((await visible(page, `[data-action="${action}"]`)).shown).toBe(false);
+        }
+        // Nothing failed on the way, which is the same fact from the network's side: no click, no call,
+        // no 409. What a refusal looks like when one does happen is covered in runs.test.ts, where the
+        // race that causes it can be made to order.
+        expect(pageWatch.http).toEqual([]);
         expect(pageWatch.pageErrors.filter((line) => line.startsWith("uncaught:"))).toEqual([]);
-        expect(pageWatch.http.map((row) => row.status)).toContain(409);
         await page.close();
       },
       60_000,
