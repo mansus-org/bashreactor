@@ -2,18 +2,18 @@
 // the versions and `.../content` for the bytes — so what this screen says a block declares is what
 // the file declares. Ported from mockup/blocks.js.
 //
-// Two things the mockup had are not here, because the API cannot answer them: there is no list of
-// every block (BASHR-5's own open item), so the library is opened by name and the list on the left
-// is this device's history, and a version has no note, because the store keeps no note.
+// The list on the left is the library's own, out of `GET /v1/blocks`: names and version counts, no
+// source. That is one small request, and it is made beside the block the address asked for rather
+// than before it, because the block is the reason the page was opened. A version has no note,
+// because the store keeps no note.
 
 import { api, ApiError, canWrite } from "./api.js";
 import { announce, el, errorBox, fill, sign, stateLine } from "./dom.js";
 import { latest, parseBlock } from "./model.js";
 import type { Contract, LibraryEntry, LibraryVersion } from "./model.js";
+import type { LibraryName } from "./api.js";
 import type { Route } from "./app.js";
 import { navigate } from "./app.js";
-
-const HISTORY = "bashreactor.blocks.opened";
 
 const STARTERS: Record<string, string> = {
   bash: `\nout="$(printf '%s' "$INPUT_EXAMPLE" | tr a-z A-Z)"\nprintf '%s' "$out" > "$OUTPUT_RESULT"\n`,
@@ -36,25 +36,6 @@ const FRONT = `#!/usr/bin/env bash
 #     description: Replace this with what the block produces.
 # ---
 `;
-
-function history(): string[] {
-  try {
-    const raw = localStorage.getItem(HISTORY);
-    const names = raw === null ? [] : (JSON.parse(raw) as unknown);
-    return Array.isArray(names) ? names.filter((name): name is string => typeof name === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function remember(name: string): void {
-  const names = [name, ...history().filter((known) => known !== name)].slice(0, 20);
-  try {
-    localStorage.setItem(HISTORY, JSON.stringify(names));
-  } catch {
-    // A browser that refuses storage keeps its own history out of the way; nothing else changes.
-  }
-}
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
@@ -118,7 +99,7 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
       el(
         "p",
         { class: "help", id: "block-name-help" },
-        "The API has no route that lists every block, so a block is opened by name. The list below is what this device has opened.",
+        "Type the name of a block to open it, or pick one out of the library below.",
       ),
     ),
     count,
@@ -128,23 +109,51 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
   const lib = el("div", { class: "lib" }, listPane, detail);
   view.replaceChildren(...heading(), lib);
 
-  function renderHistory(current: string | null): void {
-    const names = history();
+  /** Every block the library holds, once `loadList` has had an answer. */
+  let shelf: LibraryName[] = [];
+  /** Why the list is empty when it should not be, which is the list's own news to tell. */
+  let shelfProblem: string | null = null;
+
+  function renderList(current: string | null): void {
     list.replaceChildren(
-      ...names.map((name) =>
+      ...shelf.map((block) =>
         el(
           "li",
           {},
           el(
             "a",
-            { class: "blockrow", href: `/app/blocks/${name}`, "data-link": "", "aria-current": name === current ? "true" : null },
-            el("span", { class: "blockrow__name" }, name),
+            {
+              class: "blockrow",
+              href: `/app/blocks/${block.name}`,
+              "data-link": "",
+              "aria-current": block.name === current ? "true" : null,
+            },
+            el("span", { class: "blockrow__name" }, block.name),
+            el("span", { class: "blockrow__meta" }, plural(block.versions, "version")),
           ),
         ),
       ),
     );
-    count.textContent = names.length === 0 ? "" : `${plural(names.length, "block")} opened on this device.`;
-    count.hidden = names.length === 0;
+    count.textContent =
+      shelfProblem ??
+      (shelf.length === 0 ? "Nothing has been published yet. Write a block of your own." : `${plural(shelf.length, "block")} in the library.`);
+    count.hidden = shelfProblem === null && shelf.length === 0;
+  }
+
+  /**
+   * The library's own list of names, asked for once per visit and painted when it lands. The block
+   * the address named is the reason for the page, so it does not wait behind a list of the others;
+   * and a list that will not answer is the list's own news, told in the list, not a wall over the
+   * block on the right.
+   */
+  async function loadList(): Promise<void> {
+    try {
+      shelf = (await api.allBlocks()).blocks;
+      shelfProblem = null;
+    } catch (error) {
+      shelfProblem = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+    }
+    renderList(target ?? null);
   }
 
   const target = route.parts[1];
@@ -159,17 +168,19 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
   // a publish, a version, a sign-in — where a click handler would be gone by the next one.
   lib.classList.toggle("lib--open", target !== undefined || writing);
 
+  void loadList();
+
   if (writing) {
-    renderHistory(null);
+    renderList(null);
     renderWriter(detail, null);
     return;
   }
 
   if (target === undefined) {
-    renderHistory(null);
+    renderList(null);
     detail.replaceChildren(
       el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "No block open"),
-      el("p", { class: "help" }, "Type a name above, or write a block of your own."),
+      el("p", { class: "help" }, "Pick a block from the list, or write one of your own."),
     );
     return;
   }
@@ -192,14 +203,10 @@ export async function renderBlocks(view: HTMLElement, route: Route): Promise<voi
     );
     return;
   }
-  renderHistory(name);
+  renderList(name);
   detail.replaceChildren(stateLine(`Loading ${name}.`));
   try {
     const record = await api.blocks(name);
-    // Only a block the library confirmed belongs in the list on the left. Remembering the name first
-    // left every typo and every deleted block in it for good, under a heading that says these exist.
-    remember(name);
-    renderHistory(name);
     const versions: LibraryVersion[] = [];
     // One label per version, from the size the store kept beside the file: `size` is a byte count,
     // where `source.length` counts UTF-16 code units and is not one.

@@ -306,7 +306,11 @@ const button = (view: FakeElement, label: string): FakeElement | undefined =>
 describe("opening a stored pipeline", () => {
   test("fetches the blocks the document names", async () => {
     const view = await open(PINNED);
+    // The first two are the screen asking once what the library holds, which it does not wait on. The
+    // rest is the document: the list of versions, then the bytes, for each block it names.
     expect(calls).toEqual([
+      "/v1/blocks",
+      "/v1/pipelines",
       "/v1/pipelines/word-report",
       "/v1/pipelines/word-report/2",
       "/v1/blocks/generate-corpus",
@@ -840,7 +844,9 @@ describe("the step id Add step suggests", () => {
   test("turns the block name's hyphens into underscores, and passes the step id rule", async () => {
     const view = await open(PINNED);
     button(view, "Add step")!.fire("click");
-    expect(addDialog(view).querySelector('[id="add-uses"]')!.value).toBe("check-corpus");
+    // The option carries the ref the step will be written with, so the version on offer is the
+    // version that ends up in the file.
+    expect(addDialog(view).querySelector('[id="add-uses"]')!.value).toBe("check-corpus@1");
     expect(suggestedId(view)).toBe("check_corpus");
     expect(STEP_ID_RULE.test(suggestedId(view))).toBe(true);
 
@@ -1033,7 +1039,8 @@ describe("the version in the address bar", () => {
 
   test("says there is no such version, instead of asking the API for NaN", async () => {
     const view = await openAt("/pipeline/word-report/abc");
-    expect(calls).toEqual([]);
+    // Nothing asked the API for a version of the document; the library's own lists are not the document.
+    expect(calls.filter((call) => call.startsWith("/v1/pipelines/"))).toEqual([]);
     expect(view.querySelectorAll(".state--error").length).toBe(0);
     expect(openError(view)!.hidden).toBe(false);
     expect(openError(view)!.textContent).toContain("no version");

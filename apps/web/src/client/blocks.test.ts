@@ -83,6 +83,12 @@ const LIBRARY: Record<string, Record<number, string>> = {
 /** What the screen has posted, which is how "nothing was published" gets proved. */
 const posted: string[] = [];
 
+/** The versions the library lists for a block, including the ones whose bytes cannot be read. */
+const versionsOf = (name: string): number[] =>
+  [...new Set([...Object.keys(LIBRARY[name] ?? {}).map(Number), ...(LOST[name] ?? []), ...(BROKEN[name] ?? [])])].toSorted(
+    (a, b) => a - b,
+  );
+
 /** The three routes this screen asks about; everything else is a 404 the way apps/api answers it. */
 async function answer(href: string, init?: RequestInit): Promise<Response> {
   const parts = new URL(href).pathname.split("/").filter((part) => part !== "");
@@ -90,15 +96,24 @@ async function answer(href: string, init?: RequestInit): Promise<Response> {
     posted.push(String(init.body ?? ""));
     return json(meta("posted", 2, 1), 201);
   }
+  // `GET /v1/blocks`: one entry per name, newest version and how many there are, names sorted.
+  if (parts.join("/") === "v1/blocks") {
+    return json({
+      blocks: Object.keys(LIBRARY)
+        .toSorted()
+        .map((name) => {
+          const versions = versionsOf(name);
+          return { name, latest: versions[versions.length - 1], versions: versions.length };
+        }),
+    });
+  }
   const name = parts[2] ?? "";
   const block = LIBRARY[name];
   if (parts[0] !== "v1" || parts[1] !== "blocks" || block === undefined) {
     return json({ code: "block_not_found", message: `block "${name}" has no versions` }, 404);
   }
   // The store lists a block's versions oldest first, and the client's `latest()` is the last of them.
-  const versions = [
-    ...new Set([...Object.keys(block).map(Number), ...(LOST[name] ?? []), ...(BROKEN[name] ?? [])]),
-  ].toSorted((a, b) => a - b);
+  const versions = versionsOf(name);
   if (parts.length === 3) {
     return json({
       name,
@@ -225,6 +240,18 @@ describe("which pane the blocks screen shows", () => {
     expect(classes(view)).not.toContain("lib--open");
     expect(view.querySelector(".lib__list [id='block-name']")).not.toBeNull();
     expect(text(view)).toContain("No block open");
+  });
+
+  test("the list is the library's own names, not what this device happens to have opened", async () => {
+    // There was no route to ask before `GET /v1/blocks`, so the list on the left was a list of names
+    // typed into this browser, and a fresh one was told the library was empty when it was not.
+    const view = await open("/blocks");
+    await tick();
+
+    expect(listed(view)).toEqual(["accent", "count-words", "half-gone", "new", "sulk"]);
+    expect(text(view)).toContain("5 blocks in the library.");
+    // Each row says how many versions it has, which is the other half of what the route returns.
+    expect(lib(view).querySelector(".blockrow__meta")?.textContent).toBe("1 version");
   });
 
   test("going back to the library drops the class, so it is the route's and not a click's", async () => {
@@ -365,6 +392,7 @@ describe("the block writer", () => {
     area.fire("input");
 
     const away = await open("/blocks");
+    await tick(); // the library's own list arrives after the screen does
     expect(text(away)).toContain("count-words");
     const back = await open("/blocks-new");
     expect(back.querySelector("textarea")!.value).toBe(
@@ -456,14 +484,17 @@ describe("what a version is allowed to be said", () => {
   });
 
   test("a name the library has never heard of does not join the list of blocks", async () => {
-    const before = listed(await open("/blocks"));
+    const start = await open("/blocks");
+    await tick(); // the list is the library's answer, and it arrives after the screen does
+    const before = listed(start);
 
     const view = await open("/blocks/ghost-block");
     expect(text(view)).toContain("No such block");
-    // The list is what this device has opened *and confirmed*; a typo is not a block.
+    // The list is the library, asked for by name: a typo is not in it, and opening one does not add it.
     expect(listed(view)).toEqual(before);
 
-    // and a block that is there does join it, once
+    // and a block that is there is on the list before anyone opens it
+    expect(before).toContain("accent");
     expect(listed(await open("/blocks/accent"))).toContain("accent");
   });
 });
