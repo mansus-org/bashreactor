@@ -106,10 +106,11 @@ status. The subtitle states the design: a run is a directory, and this list is i
 The same list while a run is in flight, with the newest row reading `running`. That run is not one of
 the two `examples/demo.sh` starts; it was started on its own, with its own inputs. There is no
 websocket and no callback: both screens poll. The list re-reads `GET /v1/runs` once a second for as
-long as any run on it is `running`, and stops the moment none is; a run's own page re-reads
-`GET /v1/runs/:id` on the same beat (`POLL_MS` in `apps/web/src/client/runs.ts`) until the run is
-final. Neither reads while the tab is in another window, and both say so in the status line when a
-read fails rather than going quiet on you.
+long as any run on it is `running`, and drops to one read every fifteen seconds (`IDLE_POLL_MS`) once
+none is, because a run started from the CLI or in another tab has to turn up without a reload; a run's
+own page re-reads `GET /v1/runs/:id` on the same beat (`POLL_MS` in `apps/web/src/client/runs.ts`)
+until the run is final. Neither reads while the tab is in another window, and both say so in the status
+line when a read fails rather than going quiet on you.
 
 One thing catches out everyone who reads a live run: a step whose first attempt is running reports
 `attempts_used: 0`, in `run.json`, in `GET /v1/runs/:id`, and in the `ATTEMPTS` column of
