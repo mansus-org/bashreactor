@@ -1575,6 +1575,19 @@ describe("a run screen that keeps up", () => {
     expect(rowOf(view, "build").textContent).toContain("Another attempt is due now.");
   });
 
+  test("a retry with less than a second left still counts in a number above zero", async () => {
+    const clock = new FakeClock();
+    clock.set(T0);
+    const server = new FakeServer(runFixture([step("build", "waiting_retry"), step("report", "pending", ["build"])], "running"));
+    const view = await openRun(server, clock);
+
+    // Four tenths of a second left rounds to "1 s": "in 0 s" with time still to go reads as a timer
+    // that stopped, which is the same lie as a countdown going backwards.
+    await clock.advance(40_600);
+    expect(rowOf(view, "build").textContent).toContain("Another attempt in 1 s");
+    expect(rowOf(view, "build").textContent).not.toContain("in 0 s");
+  });
+
   test("a retry with no readable time to wait for says it is waiting, not how long", async () => {
     const clock = new FakeClock();
     clock.set(T0);

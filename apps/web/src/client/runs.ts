@@ -597,7 +597,8 @@ async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clo
       // the engine's clock and the browser's are two clocks, and counting backwards is never the truth.
       if (Number.isNaN(due)) return `${onScreen}Waiting to retry.`;
       if (due <= clock.now()) return `${onScreen}Another attempt is due now.`;
-      return `${onScreen}Another attempt in ${duration((due - clock.now()) / 1000)}.`;
+      // Rounded up, because "in 0 s" with a moment still to go reads as a timer that has stopped.
+      return `${onScreen}Another attempt in ${duration(Math.ceil((due - clock.now()) / 1000))}.`;
     }
     if (step.status === "pending") {
       const open = step.needs.filter((need) => runSteps[need]?.status !== "succeeded");
