@@ -217,11 +217,16 @@ so a cron can watch it without reading prose:
 
 ```
 $ bashreactor disk
-path  /data
-free  205 MiB of 1.0 GiB
-used  819 MiB  (80%)
-low   no
+path   /tmp/bashr42-disk.BmOQ4j
+free   411 GB of 937 GB
+used   525 GB  (56%)
+runs/  22 KB
+low    no
 ```
+
+Keep the two kinds of number apart. `free` and `used` are the filesystem the server sits on, which on a
+cluster is often the node's whole disk rather than the volume that was asked for; `runs/` is the run
+directories and nothing else, and it is the one to watch against whatever size the deployment gave.
 
 What removes runs by itself is `BASHREACTOR_RETENTION` on the server (apps/api/README.md, "Room to
 write in"), off by default; the CLI never deletes anything it was not told to.

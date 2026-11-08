@@ -162,6 +162,8 @@ export interface Health {
 export interface Disk {
   path: string;
   total_bytes: number;
+  /** The bytes under `runs/` — what bashreactor itself is holding, unlike the filesystem's own. */
+  runs_bytes: number;
   used_bytes: number;
   free_bytes: number;
   low: boolean;

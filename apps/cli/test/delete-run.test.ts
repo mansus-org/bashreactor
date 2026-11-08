@@ -144,6 +144,8 @@ describe("bashreactor disk", () => {
     expect(body.total_bytes).toBeGreaterThan(0);
     expect(body.free_bytes).toBeGreaterThan(0);
     expect(typeof body.low).toBe("boolean");
+    // The filesystem's numbers can belong to a bigger disk than the volume; this one is ours.
+    expect(body.runs_bytes).toBeNumber();
     // `low` is the news, so it is also the exit code — but the test must not depend on how full the
     // machine running it happens to be.
     expect(answer.code).toBe(body.low ? 1 : 0);
@@ -156,5 +158,6 @@ describe("bashreactor disk", () => {
     expect(text.stdout).toContain(server.home);
     expect(text.stdout).toContain("free");
     expect(text.stdout).toContain("used");
+    expect(text.stdout).toContain("runs/");
   });
 });

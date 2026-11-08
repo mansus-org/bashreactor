@@ -65,6 +65,9 @@ export const systemCommands: CommandSpec[] = [
           ["path", disk.path],
           ["free", `${sizeText(disk.free_bytes)} of ${sizeText(disk.total_bytes)}`],
           ["used", `${sizeText(disk.used_bytes)}${share(disk)}`],
+          // The filesystem's `used` belongs to a disk that may be far larger than the volume this was
+          // given, so the number that can be acted on is what is sitting in `runs/`.
+          ["runs/", sizeText(disk.runs_bytes)],
           ["low", disk.low ? "yes" : "no"],
         ]);
       });
