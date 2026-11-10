@@ -213,6 +213,7 @@ needs the cluster or Argo CD.
    the `bashreactor` namespace with the cluster's Sealed Secrets key, replace
    `sealedSecrets[0].encryptedData.BASHREACTOR_ADMIN_TOKEN_SHA256` in `.k3s/values.yaml`, and let
    Argo CD sync. Nothing else has to be touched; the old token stops working at the rollout.
+   The token itself is in the owner's Vaultwarden, item "bashreactor admin token".
 
 Already done, so nobody needs to redo it: the repo is picked up by the `mansus-apps` ApplicationSet,
 the `bashreactor` Application exists and syncs, `bashreactor.mansus.org` resolves, cert-manager has
