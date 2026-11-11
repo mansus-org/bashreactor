@@ -54,6 +54,7 @@ describe("the pipelines list", () => {
     expect(rowsOf(view).length).toBe(2);
     expect(text(rowNamed(view, "word-report"))).toContain("v2");
     expect(text(rowNamed(view, "word-report"))).toContain("Turn a corpus into a report.");
+    expect(rowNamed(view, "word-report").querySelector(".pipelines-description")).not.toBeNull();
     expect(text(rowNamed(view, "word-report"))).toContain("3 min ago");
     expect(rowNamed(view, "word-report").querySelectorAll(".history-strip__link").length).toBe(2);
     expect(text(rowNamed(view, "nightly-sync"))).toContain("Copy the night's files.");

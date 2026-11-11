@@ -70,9 +70,9 @@ export async function renderPipelines(view: HTMLElement, _route: Route, signal: 
     // The cells are made first and filled when their answer arrives, so the row exists as soon as
     // the names are known and an answer cannot rebuild the row it belongs to.
     cells.set(pipeline.name, {
-      description: el("span", { class: "pipelines-pending" }, "…"),
-      lastRun: el("span", { class: "pipelines-pending" }, "…"),
-      recent: el("span", { class: "pipelines-pending" }, "…"),
+      description: el("span", { class: "pipelines-description" }, el("span", { class: "pipelines-pending" }, "…")),
+      lastRun: el("span", { class: "pipelines-last-run" }, el("span", { class: "pipelines-pending" }, "…")),
+      recent: el("span", { class: "pipelines-recent" }, el("span", { class: "pipelines-pending" }, "…")),
     });
   }
 
