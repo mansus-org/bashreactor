@@ -94,7 +94,7 @@ agent calls.
 | `list_pipeline_versions` | read | `GET /v1/pipelines/:name` | Every version of one pipeline |
 | `get_pipeline_version` | read | `GET /v1/pipelines/:name/:version` | One version, with its YAML and parsed form |
 | `validate_pipeline` | read | `POST /v1/pipelines/validate` | Every rule a document breaks, and nothing created |
-| `list_runs` | read | `GET /v1/runs` | Every run, newest first |
+| `list_runs` | read | `GET /v1/runs` | Runs, newest first, filtered by pipeline, status, since and limit |
 | `get_run` | read | `GET /v1/runs/:id` | The whole `run.json` |
 | `get_run_log` | read | `GET /v1/runs/:id/logs/:step/:attempt?offset=` | One attempt's log from a byte offset |
 | `list_run_files` | read | `GET /v1/runs/:id/files` | What the run wrote, by output name and by step, with sizes |
@@ -116,6 +116,14 @@ A tool's text is the API's JSON response body, unchanged, so what an agent reads
 printed. Two exceptions: `get_block_content` wraps bytes the API answers as a plain file
 (`{name, version, sha256, content}`), and the four run operations carry the HTTP status the API used
 (`{status, run}`), because `201`, `202` and `200` mean different things to the caller.
+
+### Listing and filtering runs
+
+`list_runs` takes the same filters as `GET /v1/runs`: `pipeline`, `status` (an array of `running`,
+`succeeded`, `failed` and `cancelled`), `since` (a UTC instant) and `limit`. They combine, and the
+newest match still comes first. Each listed run carries `step_counts` and `pipeline_version`, so an
+agent can see how far a run got without calling `get_run`; a malformed filter is a
+`type_mismatch`.
 
 ### Long runs
 

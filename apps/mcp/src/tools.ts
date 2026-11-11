@@ -190,13 +190,44 @@ export const TOOLS: readonly ToolDef[] = [
     name: "list_runs",
     title: "List runs",
     description:
-      "Every run, newest first, with id, pipeline, status, created_at, finished_at and " +
-      "cancel_requested_at. A status is running, succeeded, failed or cancelled. Call get_run for one " +
-      "run's steps.",
+      "Every run, newest first, with id, pipeline, pipeline_version, status, created_at, finished_at, " +
+      "cancel_requested_at and step_counts. A status is running, succeeded, failed or cancelled. " +
+      "step_counts is {total, pending, running, waiting_retry, succeeded, failed, skipped, cancelled}; " +
+      "pipeline_version is the stored version the run started from, or null for inline YAML. Narrow " +
+      "the page with `pipeline`, `status` (one or more run statuses), `since` and `limit`; the filters " +
+      "combine and the newest match still comes first. Call get_run for one run's steps.",
     access: "read",
     annotations: read,
-    args: {},
-    run: (client) => client.json("/v1/runs"),
+    args: {
+      pipeline: { type: "string", description: `Only runs of this pipeline. ${NAME_ARG}` },
+      status: {
+        type: "array",
+        items: {
+          type: "string",
+          enum: ["running", "succeeded", "failed", "cancelled"],
+          description: "One run status.",
+        },
+        description: "Only runs with any of these statuses. Omit for every status.",
+      },
+      since: {
+        type: "string",
+        description: "Only runs created at or after this UTC instant, such as 2026-11-11T00:00:00Z.",
+      },
+      limit: {
+        type: "integer",
+        minimum: 0,
+        description: "How many runs to return. 0 or absent is the default 100; more than 500 is clamped to 500.",
+      },
+    },
+    run: (client, args) =>
+      client.json("/v1/runs", {
+        query: {
+          pipeline: args.pipeline === undefined ? undefined : String(args.pipeline),
+          status: Array.isArray(args.status) ? args.status.map(String).join(",") : undefined,
+          since: args.since === undefined ? undefined : String(args.since),
+          limit: args.limit === undefined ? undefined : Number(args.limit),
+        },
+      }),
   },
   {
     name: "get_run",

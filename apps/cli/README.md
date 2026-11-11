@@ -97,6 +97,10 @@ Per command:
 | Flag | On | Does |
 | --- | --- | --- |
 | `--version <n\|latest>` | `blocks get`, `blocks content`, `pipelines get`, `runs start` | which version; the default is `latest` |
+| `--pipeline <name>` | `runs ls` | only runs of that pipeline |
+| `--status <s>[,<s>…]` | `runs ls` | only runs with any of these statuses: `running`, `succeeded`, `failed`, `cancelled` |
+| `--since <instant>` | `runs ls` | only runs created at or after a UTC instant such as `2026-11-11T00:00:00Z` |
+| `--limit <n>` | `runs ls` | how many runs to ask for; the default is 100 and the most is 500 |
 | `--input <name>=<value>` | `runs start` | a run input, repeatable; read with the text form of SPEC 1.2 against the type the pipeline declares |
 | `--wait` | `runs start` | poll until the run is final, and exit with its status |
 | `--attempt <n>` | `runs logs` | which attempt to read; the default is the step's last one, and `--follow` without it reads them all, in order |
@@ -112,9 +116,22 @@ id that is never shortened, because it is the thing you copy into the next comma
 
 ```
 $ bashreactor runs ls
-RUN                        PIPELINE     STATUS     CREATED              FINISHED             TOOK
-20261105T152616Z-4458ce1b  word-report  succeeded  2026-11-05 16:26:16  2026-11-05 16:26:17  2s
+RUN                        PIPELINE     VERSION  STATUS     STEPS  CREATED              FINISHED             TOOK
+20261105T152616Z-4458ce1b  word-report  v3       succeeded  4/4    2026-11-05 16:26:16  2026-11-05 16:26:17  2s
 ```
+
+`VERSION` is the stored pipeline version the run started from, or `-` for a run started from YAML
+that was not stored. `STEPS` is `succeeded/total`.
+
+`runs ls` takes the API's own filters, and they combine:
+
+```bash
+bashreactor runs ls --pipeline word-report --status failed,running
+bashreactor runs ls --since 2026-11-11T00:00:00Z --limit 50
+```
+
+The values are passed through as query parameters, not checked a second time here: a malformed one
+is the API's `type_mismatch` at exit 1, with the parameter as its `path`.
 
 `--json` prints the API's own JSON, verbatim, one object or an array, one line, so `jq` works and
 nothing is reformatted:

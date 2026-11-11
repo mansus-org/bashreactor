@@ -45,6 +45,11 @@ function runId(result: Result): string {
   return id;
 }
 
+/** The run ids a `runs ls --json` answer holds. */
+function listedIds(result: Result): string[] {
+  return parsed(result).map((run: { id: string }) => run.id);
+}
+
 /** Poll `runs get` until the run is no longer running, the way a person follows one along. */
 async function statusOf(id: string, tries = 60): Promise<string> {
   for (let i = 0; i < tries; i += 1) {
@@ -326,6 +331,73 @@ describe("runs ls and get", () => {
     const json = await cli(["runs", "get", id, "--json"], { url: server.url });
     expect(parsed(json).id).toBe(id);
     expect(parsed(json).schema).toBe(1);
+  });
+
+  test("the table says each run's steps and pipeline version", async () => {
+    server = await startServer();
+    await library();
+    await store("hello-run", helloPipeline("hello-run"));
+
+    const stored = runId(
+      await cli(["runs", "start", "hello-run", "--wait", "--interval", "100"], { url: server.url }),
+    );
+    const inlinePath = write("inline-run.yaml", "name: inline-run\nsteps:\n  greet:\n    uses: hello@1\n");
+    const inline = runId(
+      await cli(["runs", "start", inlinePath, "--wait", "--interval", "100"], { url: server.url }),
+    );
+
+    const list = await cli(["runs", "ls"], { url: server.url });
+    expect(list.code).toBe(0);
+    expect(list.stdout).toMatch(/^RUN\s+PIPELINE\s+VERSION\s+STATUS\s+STEPS\s+CREATED\s+FINISHED\s+TOOK$/m);
+    expect(list.stdout).toMatch(new RegExp(`${stored}\\s+hello-run\\s+v1\\s+succeeded\\s+1/1`));
+    expect(list.stdout).toMatch(new RegExp(`${inline}\\s+inline-run\\s+-\\s+succeeded\\s+1/1`));
+  });
+
+  test("--pipeline, --status, --since and --limit are the API's own filters", async () => {
+    server = await startServer();
+    await library();
+    await store("hello-run", helloPipeline("hello-run"));
+    await store("failing-run", FAILING_PIPELINE);
+
+    const hello = runId(
+      await cli(["runs", "start", "hello-run", "--wait", "--interval", "100"], { url: server.url }),
+    );
+    const failed = runId(
+      await cli(["runs", "start", "failing-run", "--wait", "--interval", "100"], { url: server.url }),
+    );
+
+    const byPipeline = await cli(["runs", "ls", "--pipeline", "hello-run", "--json"], { url: server.url });
+    expect(listedIds(byPipeline)).toEqual([hello]);
+
+    const byStatus = await cli(["runs", "ls", "--status", "failed", "--json"], { url: server.url });
+    expect(listedIds(byStatus)).toEqual([failed]);
+
+    const anyOf = await cli(["runs", "ls", "--status", "succeeded,failed", "--json"], { url: server.url });
+    expect(new Set(listedIds(anyOf))).toEqual(new Set([hello, failed]));
+
+    const sincePast = await cli(["runs", "ls", "--since", "2000-01-01T00:00:00Z", "--json"], { url: server.url });
+    expect(new Set(listedIds(sincePast))).toEqual(new Set([hello, failed]));
+    const sinceFuture = await cli(["runs", "ls", "--since", "2999-01-01T00:00:00Z", "--json"], {
+      url: server.url,
+    });
+    expect(listedIds(sinceFuture)).toEqual([]);
+
+    const limited = await cli(["runs", "ls", "--limit", "1", "--json"], { url: server.url });
+    expect(listedIds(limited)).toHaveLength(1);
+  });
+
+  test("a malformed filter is the API's type_mismatch, not a second check here", async () => {
+    server = await startServer();
+    for (const [flag, value, path] of [
+      ["--pipeline", "Not-A-Name", "pipeline"],
+      ["--status", "stuck", "status"],
+      ["--since", "yesterday", "since"],
+      ["--limit", "many", "limit"],
+    ] as const) {
+      const result = await cli(["runs", "ls", flag, value], { url: server.url });
+      expect(result.code).toBe(1);
+      expect(parsed({ ...result, stdout: result.stderr })).toMatchObject({ code: "type_mismatch", path });
+    }
   });
 
   test("an id that is not a run id is the API's 404", async () => {

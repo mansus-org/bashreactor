@@ -95,6 +95,17 @@ export interface RunStepFiles {
   }[];
 }
 
+export interface RunStepCounts {
+  total: number;
+  pending: number;
+  running: number;
+  waiting_retry: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
+}
+
 export interface RunSummary {
   id: string;
   pipeline: string;
@@ -102,6 +113,8 @@ export interface RunSummary {
   created_at: string;
   finished_at: string | null;
   cancel_requested_at: string | null;
+  step_counts: RunStepCounts;
+  pipeline_version: number | null;
 }
 
 export interface BlockVersion {
