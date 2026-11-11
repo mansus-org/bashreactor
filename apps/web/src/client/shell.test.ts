@@ -34,6 +34,7 @@ menuButton.setAttribute("hidden", "");
 document.body.append(menuButton, menuBox);
 
 const ANSWER = new Map<string, () => unknown>();
+const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request) => {
   const path = new URL(String(input), "http://x").pathname;
   const answer = ANSWER.get(path);
@@ -210,6 +211,7 @@ describe("the sign-in gate", () => {
 });
 
 afterAll(() => {
+  globalThis.fetch = realFetch;
   api.session.identity = null;
   api.signOut();
   api.session.onUnauthorized = () => {};

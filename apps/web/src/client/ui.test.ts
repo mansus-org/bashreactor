@@ -16,6 +16,26 @@ const count = (node: Element, selector: string): number => node.querySelectorAll
 const fake = (node: Element): FakeElement => node as unknown as FakeElement;
 const fakes = (nodes: NodeListOf<Element>): FakeElement[] => [...nodes].map(fake);
 
+const run = (id: string, status: string, extra: Partial<{ failed: number; version: number | null }> = {}) => ({
+  id,
+  pipeline: "word-report",
+  status,
+  created_at: new Date(Date.UTC(2026, 10, 5, 20, 0, 0)).toISOString(),
+  finished_at: new Date(Date.UTC(2026, 10, 5, 20, 1, 5)).toISOString(),
+  cancel_requested_at: null,
+  step_counts: {
+    total: 4,
+    pending: 0,
+    running: 0,
+    waiting_retry: 0,
+    succeeded: 3,
+    failed: extra.failed ?? 0,
+    skipped: 0,
+    cancelled: 0,
+  },
+  pipeline_version: extra.version === undefined ? 3 : extra.version,
+});
+
 describe("formatters", () => {
   const now = Date.UTC(2026, 10, 5, 21, 12, 58);
   const ago = (seconds: number): string => new Date(now - seconds * 1000).toISOString();
@@ -79,26 +99,6 @@ describe("formatters", () => {
 });
 
 describe("runsTable", () => {
-  const run = (id: string, status: string, extra: Partial<{ failed: number; version: number | null }> = {}) => ({
-    id,
-    pipeline: "word-report",
-    status,
-    created_at: new Date(Date.UTC(2026, 10, 5, 20, 0, 0)).toISOString(),
-    finished_at: new Date(Date.UTC(2026, 10, 5, 20, 1, 5)).toISOString(),
-    cancel_requested_at: null,
-    step_counts: {
-      total: 4,
-      pending: 0,
-      running: 0,
-      waiting_retry: 0,
-      succeeded: 3,
-      failed: extra.failed ?? 0,
-      skipped: 0,
-      cancelled: 0,
-    },
-    pipeline_version: extra.version === undefined ? 3 : extra.version,
-  });
-
   test("inserts in order, patches in place and flashes only the row that changed", () => {
     const table = ui.runsTable({ columns: ["status", "run", "version", "steps"] });
     table.update([run("b", "succeeded")]);

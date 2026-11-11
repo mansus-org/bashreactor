@@ -24,6 +24,7 @@ echo done
 `;
 
 const reads: string[] = [];
+const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request) => {
   const url = new URL(String(input));
   reads.push(url.pathname);
@@ -56,6 +57,7 @@ describe("fetchLibrary", () => {
 });
 
 afterAll(() => {
+  globalThis.fetch = realFetch;
   apiModule.signOut();
   uninstallDom(dom);
   rmSync(served, { recursive: true, force: true });

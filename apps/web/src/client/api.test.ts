@@ -13,6 +13,7 @@ const api = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 
 type Call = { method: string; url: URL; body: string | null };
 const calls: Call[] = [];
+const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input));
   calls.push({ method: init?.method ?? "GET", url, body: typeof init?.body === "string" ? init.body : null });
@@ -80,6 +81,7 @@ describe("the client API", () => {
 });
 
 afterAll(() => {
+  globalThis.fetch = realFetch;
   api.signOut();
   uninstallDom(dom);
   rmSync(served, { recursive: true, force: true });
