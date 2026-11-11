@@ -1,1 +1,42 @@
-/* The settings screen. Its rules go here. */
+/* The settings screen's layout. Its components — the page header, the stamps, the table, the meter,
+   the alarm and the dialog — come from ui.ts and keep their own rules. */
+
+.settings { display: grid; min-width: 0; }
+.settings__section { display: grid; gap: var(--s3); padding: var(--s3) 0; }
+.settings__section + .settings__section { border-top: var(--rule); }
+.settings__section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2) var(--s4);
+}
+.settings__section-body { display: grid; gap: var(--s3); min-width: 0; }
+
+.settings__identity { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
+.settings__name { font-weight: 700; overflow-wrap: anywhere; }
+
+.settings__facts { display: grid; gap: var(--s2); margin: 0; min-width: 0; }
+.settings__fact {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--s4);
+  min-width: 0;
+}
+.settings__fact dt { font-weight: 700; }
+.settings__fact dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.settings__licence { font-size: var(--fs-ui); }
+
+.settings__disk { display: grid; gap: var(--s2); min-width: 0; }
+.settings__disk-line { font-size: var(--fs-ui); overflow-wrap: anywhere; }
+.settings__path { font-size: var(--fs-ui); overflow-wrap: anywhere; }
+
+.settings__tokens { min-width: 0; }
+.settings__dialog-form { display: grid; gap: var(--s4); }
+.settings__dialog-error:empty { display: none; }
+.settings__secret { font-family: var(--font-code); }
+
+@media (max-width: 640px) {
+  .settings__fact { grid-template-columns: minmax(0, 1fr); gap: var(--s1); }
+}

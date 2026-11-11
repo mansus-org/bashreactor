@@ -109,7 +109,7 @@ describe("the routes", () => {
     expect(text(view())).toContain("BASHR-57");
 
     await go("/settings");
-    expect(text(view())).toContain("BASHR-60");
+    expect(text(view())).toContain("Settings");
   });
 
   test("the editor opens new and stored, at its new addresses", async () => {
