@@ -43,21 +43,22 @@
 .editor__inspector { min-height: 0; overflow: auto; padding: var(--s3); border: var(--rule); }
 .editor .editor__yaml .bar, .editor .editor__graph .bar { margin-bottom: var(--s2); }
 
-/* ---------- the graph, as the editor draws it ---------- */
+/* ---------- the graph, shared by every screen that draws one ---------- */
 
-.editor .stage {
-  position: relative; flex: 1 1 auto; min-height: 0;
+.stage {
+  position: relative; min-height: 0;
   border: var(--rule); overflow: auto;
 }
-.editor .canvas { position: relative; }
-.editor .wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
-.editor .wire { fill: none; stroke: currentColor; stroke-width: 2; }
-.editor .wire--needs { stroke-dasharray: 2 2; }
-.editor .wire.is-on { stroke-width: 4; }
-.editor .wire--needs.is-on { stroke-dasharray: 4 4; }
-.editor .stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
+.editor .stage { flex: 1 1 auto; }
+.canvas { position: relative; }
+.wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
+.wire { fill: none; stroke: currentColor; stroke-width: 2; }
+.wire--needs { stroke-dasharray: 2 2; }
+.wire.is-on { stroke-width: 4; }
+.wire--needs.is-on { stroke-dasharray: 4 4; }
+.stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
 
-.editor .node {
+.node {
   position: absolute; display: grid; gap: var(--s1);
   min-height: var(--row-h);
   padding: var(--s2) var(--s3);
@@ -66,56 +67,52 @@
   font: inherit; font-size: var(--fs-ui); line-height: 1.5;
   text-align: left; cursor: pointer;
 }
-.editor .node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.editor .node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
-.editor .node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
-.editor .node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s1) var(--s2); }
-.editor .node__id { font-weight: 700; font-size: var(--fs-h2); overflow-wrap: anywhere; }
-.editor .node__title { line-height: 1.3; }
-.editor .node__uses { font-family: var(--font-code); font-variant-ligatures: none; overflow-wrap: anywhere; }
-.editor .node__problem { margin-top: 2px; }
-.editor .node__ports { display: grid; gap: 2px; margin-top: var(--s1); }
+.node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
+.node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s1) var(--s2); }
+.node__id { font-weight: 700; overflow-wrap: anywhere; }
+.node__title { line-height: 1.3; }
+.node__uses { font-family: var(--font-code); font-variant-ligatures: none; overflow-wrap: anywhere; }
+.node__problem { margin-top: 2px; }
+.node__ports { display: grid; gap: 2px; margin-top: var(--s1); }
 
 /* One column of ports, not one per side. The graph sets a step's width from the room its columns
    leave behind, and two columns of names inside that width is how `total_words` came out as
    `total_wor/ds` at desktop width. The mark on each side still says which way the name runs. */
-.editor .ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
-.editor .port {
+.ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
+.port {
   position: relative; display: block;
   font-family: var(--font-code); font-variant-ligatures: none;
   line-height: 1.5; overflow-wrap: anywhere;
 }
-.editor .port__mark {
+.port__mark {
   position: absolute; top: var(--s1); left: -18px; width: 10px; height: 10px;
   background: var(--ink); outline: 2px solid var(--paper);
 }
-.editor .port__mark--value { background: var(--paper); outline: var(--control-border); outline-offset: -2px; }
-.editor .stage--flow .port--out { text-align: right; }
-.editor .stage--flow .port--out .port__mark { left: auto; right: -18px; }
-
-/* run-page.test.ts reads this exact selector from the served stylesheet; the rule is shared with the
-   run page's graph tab, and the editor's scoped copy below only adds the editor's own layout. */
+.port__mark--value { background: var(--paper); outline: var(--control-border); outline-offset: -2px; }
 .stage--flow .port--out { text-align: right; }
+.stage--flow .port--out .port__mark { left: auto; right: -18px; }
 
-.editor .stage--stale .node { background: var(--tone-faint) var(--paper); cursor: default; }
-.editor .stage--stale .node > * { justify-self: start; background: var(--paper); }
-.editor .stage--stale .node__ports { background: none; }
-.editor .stage--stale .port__name { background: var(--paper); }
+.stage--stale .node { background: var(--tone-faint) var(--paper); cursor: default; }
+.stage--stale .node > * { justify-self: start; background: var(--paper); }
+.stage--stale .node__ports { background: none; }
+.stage--stale .port__name { background: var(--paper); }
 .editor .stale-note {
   margin: 0 0 var(--s2); padding: var(--s2) var(--s3);
   border: var(--control-border); font-weight: 700;
 }
 
-.editor .legend {
+.legend {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s4);
   margin-top: var(--s2); font-size: var(--fs-ui); line-height: 20px;
 }
-.editor .legend > span { display: inline-flex; align-items: center; gap: var(--s1); }
-.editor .sw { display: inline-block; flex: none; }
-.editor .sw--wired { width: 10px; height: 10px; background: var(--ink); }
-.editor .sw--value { width: 10px; height: 10px; border: var(--control-border); }
-.editor .sw--data { width: var(--s5); height: 2px; background: var(--ink); }
-.editor .sw--needs { width: var(--s5); height: 2px; border-top: 2px dashed var(--ink); }
+.legend > span { display: inline-flex; align-items: center; gap: var(--s1); }
+.sw { display: inline-block; flex: none; }
+.sw--wired { width: 10px; height: 10px; background: var(--ink); }
+.sw--value { width: 10px; height: 10px; border: var(--control-border); }
+.sw--data { width: var(--s5); height: 2px; background: var(--ink); }
+.sw--needs { width: var(--s5); height: 2px; border-top: 2px dashed var(--ink); }
 
 /* ---------- the step inspector ---------- */
 
