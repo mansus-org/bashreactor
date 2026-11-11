@@ -1,0 +1,23 @@
+name: daily-export
+description: Export the day's rows and publish them, retrying a dropped connection.
+
+steps:
+  export:
+    name: Export the rows
+    uses: ./flaky-export.sh
+    with:
+      rows: 1200
+    retry:
+      max_attempts: 3
+      delay: 1s
+
+  publish:
+    name: Publish the export
+    uses: ./sleep-for.sh
+    needs: [export]
+    with:
+      seconds: 2
+      label: publish
+
+outputs:
+  exported: ${{ steps.export.outputs.exported }}

@@ -1,0 +1,42 @@
+name: nightly-sync
+description: Pull the night's exports, reshape them and load them into the warehouse.
+
+max_parallel: 2
+
+inputs:
+  seconds:
+    type: integer
+    description: How long the transform works.
+    default: 900
+
+steps:
+  fetch:
+    name: Fetch the exports
+    uses: ./sleep-for.sh
+    with:
+      seconds: 3
+      label: fetch
+
+  transform:
+    name: Reshape the rows
+    uses: ./sleep-for.sh
+    needs: [fetch]
+    with:
+      seconds: ${{ inputs.seconds }}
+      label: transform
+
+  index:
+    name: Rebuild the indexes
+    uses: ./sleep-for.sh
+    needs: [fetch]
+    with:
+      seconds: 4
+      label: index
+
+  load:
+    name: Load into the warehouse
+    uses: ./sleep-for.sh
+    needs: [transform, index]
+    with:
+      seconds: 5
+      label: load
