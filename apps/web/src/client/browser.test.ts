@@ -202,10 +202,12 @@ for (const viewport of VIEWPORTS) {
     test(
       "the pipeline editor opens a stored pipeline and draws its graph",
       async () => {
-        const { page, watch: pageWatch } = await screen(viewport, "/app/pipeline/shout-report");
+        const { page, watch: pageWatch } = await screen(viewport, "/app/pipelines/shout-report/edit");
         await waitFor(page, ".node");
         expect(await valueOf(page, "textarea#doc")).toContain("name: shout-report");
-        expect(await textOf(page, 'p.help[role="status"]')).toContain("Stored as v1, unchanged.");
+        expect(await textOf(page, ".editor__toolbar .editor__name")).toBe("shout-report");
+        expect(await textOf(page, ".editor__id .stamp--type")).toBe("from v1");
+        expect(await page.evaluate(() => document.querySelector(".title"))).toBeNull();
         expect(await page.evaluate(() => document.querySelectorAll(".node").length)).toBe(2);
         expect((await visible(page, ".stage")).shown).toBe(true);
         expect((await visible(page, ".node")).shown).toBe(true);
@@ -219,13 +221,13 @@ for (const viewport of VIEWPORTS) {
     test(
       "edit the YAML, press Start a run, and the run is the edit",
       async () => {
-        const { page, watch: pageWatch } = await screen(viewport, "/app/pipeline/shout-report");
+        const { page, watch: pageWatch } = await screen(viewport, "/app/pipelines/shout-report/edit");
         await waitFor(page, ".node");
 
         await replaceInYaml(page, "default: hello", "default: changed");
-        await page.waitForFunction(() => document.querySelector('p.help[role="status"]')?.textContent === "Unsaved changes.");
+        await page.waitForFunction(() => document.querySelector(".editor__toolbar .stamp--status")?.textContent === "unsaved" && !document.querySelector(".editor__toolbar .stamp--status")?.hasAttribute("hidden"));
 
-        await press(page, "Start a run");
+        await press(page, "Run");
         await waitFor(page, "dialog[open]");
         expect((await visible(page, "dialog[open]")).shown).toBe(true);
         expect(await textOf(page, "dialog[open]")).toContain("unsaved changes");
@@ -329,7 +331,7 @@ suite("the graph at desktop width", () => {
       // same labels measure 214 px and none of them break, which is why nobody noticed. The fix is to
       // size a node from its longest port name, or give the port column a `max-content` minimum:
       // the stylesheet and graph.ts, both files BASHR-30 is editing.
-      const { page } = await screen(DESKTOP, "/app/pipeline/word-report");
+      const { page } = await screen(DESKTOP, "/app/pipelines/word-report/edit");
       await waitFor(page, ".node");
       const tall = await page.evaluate(() =>
         [...document.querySelectorAll(".port")]
@@ -347,21 +349,17 @@ suite("the graph at desktop width", () => {
 });
 
 suite("what a stylesheet is for", () => {
-  test.skip(
+  test(
     "a long unbroken description does not widen the page",
     async () => {
-      // SKIPPED, AND IT FAILS IF YOU UN-SKIP IT. Finding #37, still here, and wider than the review
-      // thought. Paste a description of 300 `y` characters into the editor and the document measures
-      // 2635 px wide at a 1440 px viewport (2608 px at 390 px) and scrolls sideways. The widest
-      // offenders are the `span.yaml__line` marks in `.yaml__paint`, which reach 3931 px: the YAML
-      // pane does not clip its own unbroken line, so the page grows instead of the pane scrolling.
-      // `.lead` is a second symptom rather than the cause — one 724 px line 26 px tall, because
-      // `.title` beside it has `overflow-wrap: anywhere` and `.lead` does not
-      // (`src/client/styles/base.css`, the `.lead` rule). Both rules are in the stylesheet.
+      // Finding #37: a 300-character description measured the editor 2635 px wide at 1440 and
+      // 2608 px at 390, because the painted YAML line was never clipped and the description was printed
+      // beside the title. The workbench puts the description nowhere on this screen and clips the YAML
+      // pane, so the page keeps its width and the long line scrolls inside the pane.
       for (const viewport of VIEWPORTS) {
-        const { page } = await screen(viewport, "/app/pipeline");
+        const { page } = await screen(viewport, "/app/pipelines-new");
         await pasteYaml(page, `name: long-one-line\ndescription: ${"y".repeat(300)}\nsteps:\n  a:\n    uses: shout@1\n`);
-        await page.waitForFunction(() => (document.querySelector(".lead")?.textContent ?? "").length === 300);
+        await page.waitForFunction(() => (document.querySelector<HTMLTextAreaElement>("textarea#doc")?.value ?? "").includes("y".repeat(300)));
         expect(designProblems(await styleFacts(page), viewport)).toEqual([]);
         await page.close();
       }

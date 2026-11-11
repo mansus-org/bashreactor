@@ -1,155 +1,217 @@
-/* ---------- pipeline editor ---------- */
+/* ---------- the pipeline editor: a toolbar, YAML on the left, graph and inspector on the right ---------- */
 
-.ed { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: clamp(20px, 2.4vw, 36px); align-items: start; }
-.ed__yaml {
-  position: sticky; top: 12px;
-  display: flex; flex-direction: column;
-  height: calc(100dvh - 24px); min-height: 560px;
-}
-@media (max-width: 1140px) {
-  .ed { grid-template-columns: minmax(0, 1fr); }
-  .ed__yaml { position: static; height: auto; min-height: 0; }
-  .ed__yaml .yaml { flex: none; height: max(420px, 70dvh); }
+.editor {
+  display: flex; flex-direction: column; gap: var(--s3);
+  /* The shell gives main var(--s5) above and var(--s7) below; the panes take the rest, so the YAML
+     is the height of the viewport and the inspector scrolls inside its row. */
+  height: calc(100dvh - var(--s5) - var(--s7));
 }
 
-.stage {
-  position: relative; min-height: 260px;
-  border: 3px solid var(--ink); overflow: auto;
+.editor__toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4);
+  padding: var(--s2) 0;
+  border-bottom: var(--rule);
+  background: var(--paper);
 }
-.canvas { position: relative; }
-.wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
-.wire { fill: none; stroke: currentColor; stroke-width: 2; }
-.wire--needs { stroke-dasharray: 2 2; }
-.wire.is-on { stroke-width: 4; }
-.wire--needs.is-on { stroke-dasharray: 4 4; }
-.stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
+.editor__id { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
+.editor__name {
+  margin: 0;
+  font-family: var(--font-text); font-size: var(--fs-h2); font-weight: 700; line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.editor__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-left: auto; }
+.editor__version select { width: auto; min-width: 11rem; max-width: 100%; }
+.editor__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
+.editor__notice:empty { display: none; }
 
-.node {
-  position: absolute; display: grid; gap: 2px; min-height: 44px;
-  padding: 8px 12px 10px;
-  border: 3px solid var(--ink); border-radius: 0;
+.editor__panes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas: "left right";
+  gap: var(--s5);
+  flex: 1 1 auto; min-height: 0;
+}
+.editor__left { grid-area: left; display: flex; flex-direction: column; gap: var(--s2); min-height: 0; }
+.editor__right {
+  grid-area: right;
+  display: grid; grid-template-rows: minmax(0, 55fr) minmax(0, 45fr); gap: var(--s4);
+  min-height: 0;
+}
+.editor__yaml { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
+.editor__graph { display: flex; flex-direction: column; min-height: 0; }
+.editor__inspector { min-height: 0; overflow: auto; padding: var(--s3); border: var(--rule); }
+.editor .editor__yaml .bar, .editor .editor__graph .bar { margin-bottom: var(--s2); }
+
+/* ---------- the graph, as the editor draws it ---------- */
+
+.editor .stage {
+  position: relative; flex: 1 1 auto; min-height: 0;
+  border: var(--rule); overflow: auto;
+}
+.editor .canvas { position: relative; }
+.editor .wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
+.editor .wire { fill: none; stroke: currentColor; stroke-width: 2; }
+.editor .wire--needs { stroke-dasharray: 2 2; }
+.editor .wire.is-on { stroke-width: 4; }
+.editor .wire--needs.is-on { stroke-dasharray: 4 4; }
+.editor .stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
+
+.editor .node {
+  position: absolute; display: grid; gap: var(--s1);
+  min-height: var(--row-h);
+  padding: var(--s2) var(--s3);
+  border: var(--control-border); border-radius: 0;
   background: var(--paper); color: var(--ink);
-  font: inherit; text-align: left; cursor: pointer;
+  font: inherit; font-size: var(--fs-ui); line-height: 1.5;
+  text-align: left; cursor: pointer;
 }
-.node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
-.node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
-.node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; }
-.node__id { font-weight: 800; font-size: 1.0625rem; overflow-wrap: anywhere; }
-.node__title { font-size: 0.875rem; line-height: 1.3; }
-.node__uses { font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; overflow-wrap: anywhere; }
-.node__meta { font-size: 0.875rem; }
-.node__problem { margin-top: 2px; }
-.node__ports { display: grid; gap: 2px; margin-top: 6px; }
+.editor .node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.editor .node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.editor .node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
+.editor .node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s1) var(--s2); }
+.editor .node__id { font-weight: 700; font-size: var(--fs-h2); overflow-wrap: anywhere; }
+.editor .node__title { line-height: 1.3; }
+.editor .node__uses { font-family: var(--font-code); font-variant-ligatures: none; overflow-wrap: anywhere; }
+.editor .node__problem { margin-top: 2px; }
+.editor .node__ports { display: grid; gap: 2px; margin-top: var(--s1); }
+
 /* One column of ports, not one per side. The graph sets a step's width from the room its columns
    leave behind, and two columns of names inside that width is how `total_words` came out as
    `total_wor/ds` at desktop width. The mark on each side still says which way the name runs. */
-.stage--flow .ports + .ports { margin-top: 6px; }
-.port {
+.editor .ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
+.editor .port {
   position: relative; display: block;
-  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.5;
-  overflow-wrap: anywhere;
+  font-family: var(--font-code); font-variant-ligatures: none;
+  line-height: 1.5; overflow-wrap: anywhere;
 }
-.ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
-.port__mark {
-  position: absolute; top: 5px; left: -18px; width: 10px; height: 10px;
+.editor .port__mark {
+  position: absolute; top: var(--s1); left: -18px; width: 10px; height: 10px;
   background: var(--ink); outline: 2px solid var(--paper);
 }
-.port__mark--value { background: var(--paper); outline: 2px solid var(--ink); outline-offset: -2px; }
+.editor .port__mark--value { background: var(--paper); outline: var(--control-border); outline-offset: -2px; }
+.editor .stage--flow .port--out { text-align: right; }
+.editor .stage--flow .port--out .port__mark { left: auto; right: -18px; }
+
+/* run-page.test.ts reads this exact selector from the served stylesheet; the rule is shared with the
+   run page's graph tab, and the editor's scoped copy below only adds the editor's own layout. */
 .stage--flow .port--out { text-align: right; }
-.stage--flow .port--out .port__mark { left: auto; right: -18px; }
 
-.stage--stale .node { background: var(--sparse) var(--paper); cursor: default; }
-.stage--stale .node > * { justify-self: start; background: var(--paper); }
-.stage--stale .node__ports { background: none; }
-.stage--stale .port__name { background: var(--paper); }
-.stale-note { margin-bottom: 10px; padding: 8px 12px; border: 3px solid var(--ink); font-weight: 700; }
-
-.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin-top: 8px; font-size: 0.9375rem; }
-.legend > span { display: inline-flex; align-items: center; gap: 6px; }
-.sw { display: inline-block; flex: none; }
-.sw--wired { width: 10px; height: 10px; background: var(--ink); }
-.sw--value { width: 10px; height: 10px; border: 2px solid var(--ink); }
-.sw--data { width: 24px; height: 2px; background: var(--ink); }
-.sw--needs { width: 24px; height: 2px; background: var(--dots); }
-.keys { margin-top: 4px; }
-
-.inspector { margin-top: 28px; }
-.inspector__body { display: grid; gap: 16px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px 16px; }
-.wire-row {
-  display: grid; grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px 12px;
-  padding: 8px 0; background: var(--dots);
-}
-.wire-row__name { font-family: var(--font-code); font-variant-ligatures: none; font-weight: 700; font-size: 0.9375rem; overflow-wrap: anywhere; }
-.wire-row__name small { display: block; font-family: var(--font-text); font-weight: 420; font-size: 0.875rem; }
-.wire-row .wide { grid-column: 2 / -1; }
-.checks { display: flex; flex-wrap: wrap; gap: 0 18px; }
-@media (max-width: 640px) {
-  .wire-row { grid-template-columns: minmax(0, 1fr); }
-  .wire-row .wide { grid-column: auto; }
+.editor .stage--stale .node { background: var(--tone-faint) var(--paper); cursor: default; }
+.editor .stage--stale .node > * { justify-self: start; background: var(--paper); }
+.editor .stage--stale .node__ports { background: none; }
+.editor .stage--stale .port__name { background: var(--paper); }
+.editor .stale-note {
+  margin: 0 0 var(--s2); padding: var(--s2) var(--s3);
+  border: var(--control-border); font-weight: 700;
 }
 
-/* The YAML pane: a transparent textarea over a painted copy. The textarea stays the real editor
-   (undo, selection, screen readers) and the copy can do what a textarea can't: mark whole lines. */
-.yaml {
+.editor .legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s4);
+  margin-top: var(--s2); font-size: var(--fs-ui); line-height: 20px;
+}
+.editor .legend > span { display: inline-flex; align-items: center; gap: var(--s1); }
+.editor .sw { display: inline-block; flex: none; }
+.editor .sw--wired { width: 10px; height: 10px; background: var(--ink); }
+.editor .sw--value { width: 10px; height: 10px; border: var(--control-border); }
+.editor .sw--data { width: var(--s5); height: 2px; background: var(--ink); }
+.editor .sw--needs { width: var(--s5); height: 2px; border-top: 2px dashed var(--ink); }
+
+/* ---------- the step inspector ---------- */
+
+.editor .inspector { margin: 0; }
+.editor .inspector__body { display: grid; gap: var(--s4); }
+.editor .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: var(--s3) var(--s4); }
+.editor .wire-row {
+  display: grid; grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center; gap: var(--s1) var(--s3);
+  padding: var(--s2) 0;
+  border-bottom: var(--rule-dotted);
+}
+.editor .wire-row__name { font-family: var(--font-code); font-variant-ligatures: none; font-weight: 700; overflow-wrap: anywhere; }
+.editor .wire-row__name small { display: block; font-family: var(--font-text); font-weight: 400; }
+.editor .wire-row .wide { grid-column: 2 / -1; }
+.editor .checks { display: flex; flex-wrap: wrap; gap: 0 var(--s4); }
+
+/* ---------- the YAML pane: a transparent textarea over a painted copy ---------- */
+
+.editor .yaml {
   position: relative; flex: 1 1 auto; min-height: 0;
   display: grid; grid-template-columns: auto minmax(0, 1fr);
-  border: 3px solid var(--ink);
+  border: var(--rule);
 }
-.yaml:focus-within { outline: 3px solid var(--ink); outline-offset: 3px; }
-.yaml__gutter {
-  overflow: hidden; padding: 8px 0; user-select: none;
-  font-family: var(--font-code); font-size: 0.875rem; line-height: var(--yaml-line); text-align: right;
+.editor .yaml:focus-within { outline: 3px solid var(--ink); outline-offset: 2px; }
+.editor .yaml__gutter {
+  overflow: hidden; padding: var(--s2) 0; user-select: none;
+  font-family: var(--font-code); font-size: var(--fs-ui); line-height: var(--yaml-line); text-align: right;
 }
-.yaml__num { display: block; padding: 0 8px 0 10px; min-width: 3.4em; }
-.yaml__num.is-hit { background: var(--ink); color: var(--paper); font-weight: 700; }
-.yaml__num.is-bad::before { content: "! "; font-weight: 800; }
-.yaml__code { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-.yaml__paint, .yaml__code textarea {
+.editor .yaml__num { display: block; padding: 0 var(--s2) 0 10px; min-width: 3.4em; }
+.editor .yaml__num.is-hit { background: var(--ink); color: var(--paper); font-weight: 700; }
+.editor .yaml__num.is-bad::before { content: "! "; font-weight: 700; }
+.editor .yaml__code { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.editor .yaml__paint, .editor .yaml__code textarea {
   position: absolute; inset: 0;
-  margin: 0; padding: 8px 12px; border: 0;
-  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.9375rem; font-weight: 420; line-height: var(--yaml-line);
+  margin: 0; padding: var(--s2) var(--s3); border: 0;
+  font-family: var(--font-code); font-variant-ligatures: none;
+  font-size: var(--fs-ui); font-weight: 400; line-height: var(--yaml-line);
   white-space: pre; tab-size: 2;
 }
-.yaml__paint { overflow: hidden; pointer-events: none; }
-.yaml__inner { display: inline-block; min-width: 100%; }
-.yaml__line { display: block; min-height: var(--yaml-line); padding: 0 12px; margin: 0 -12px; }
-.yaml__line.is-hit { background: var(--ink); color: var(--paper); }
+.editor .yaml__paint { overflow: hidden; pointer-events: none; }
+.editor .yaml__inner { display: inline-block; min-width: 100%; }
+.editor .yaml__line { display: block; min-height: var(--yaml-line); padding: 0 var(--s3); margin: 0 calc(-1 * var(--s3)); }
+.editor .yaml__line.is-hit { background: var(--ink); color: var(--paper); }
 /* The caret is ink too, so a marked line steps back while someone is typing in it. */
-.yaml:focus-within .yaml__line.is-hit { background: none; color: var(--ink); }
-.yaml__key { font-weight: 700; }
-.yaml__ref { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.yaml__comment { font-style: italic; }
-.yaml__code textarea {
+.editor .yaml:focus-within .yaml__line.is-hit { background: none; color: var(--ink); }
+.editor .yaml__key { font-weight: 700; }
+.editor .yaml__ref { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.editor .yaml__comment { font-style: italic; }
+.editor .yaml__code textarea {
   width: 100%; height: 100%; min-height: 0; resize: none;
   overflow: auto; background: transparent; color: transparent; caret-color: var(--ink);
 }
-.yaml__code textarea:focus { outline: none; }
-.yaml__code textarea::selection { background: var(--ink); color: var(--paper); }
-@media (max-width: 640px) {
-  /* 16 px keeps phones from zooming the page on focus. */
-  .yaml__paint, .yaml__code textarea { font-size: 1rem; }
+.editor .yaml__code textarea:focus { outline: none; }
+.editor .yaml__code textarea::selection { background: var(--ink); color: var(--paper); }
+
+/* ---------- the problems under the YAML ---------- */
+
+.editor .editor__problems {
+  flex: none; min-height: 0; max-height: 34%; overflow: auto;
+  margin-top: var(--s2); padding-top: var(--s2); border-top: var(--rule);
 }
-@media (forced-colors: active) {
-  .yaml__paint { display: none; }
-  .yaml__code textarea { color: CanvasText; }
+.editor .problems__list { margin: 0; padding: 0; list-style: none; }
+.editor .problem {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px var(--s3);
+  width: 100%; min-height: var(--row-h); padding: var(--s2) var(--s1);
+  border: 0; border-bottom: var(--rule-dotted);
+  background: transparent; color: inherit;
+  font: inherit; font-size: var(--fs-ui); line-height: 20px; text-align: left; cursor: pointer;
+}
+.editor .problem:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.editor .problem__at { font-weight: 700; white-space: nowrap; }
+.editor .problem__code { font-family: var(--font-code); grid-column: 2; overflow-wrap: anywhere; }
+.editor .problem__msg { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; }
+
+/* ---------- below 1100 px everything stacks ---------- */
+
+@media (max-width: 1100px) {
+  .editor { height: auto; }
+  .editor__panes { display: flex; flex-direction: column; }
+  .editor__left, .editor__right { display: contents; }
+  .editor__graph { order: 1; height: auto; }
+  .editor .stage { flex: none; min-height: 320px; }
+  .editor__yaml { order: 2; height: max(420px, 70dvh); }
+  .editor__inspector { order: 3; }
+  .editor__problems { order: 4; max-height: none; }
 }
 
-.problems { flex: none; max-height: 34%; overflow: auto; margin-top: 10px; }
-.problems__list { margin: 0; padding: 0; list-style: none; }
-.problem {
-  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px 10px;
-  width: 100%; min-height: 44px; padding: 8px 2px;
-  border: 0; background: var(--dots); color: inherit; font: inherit; font-size: 0.9375rem; text-align: left; cursor: pointer;
+@media (max-width: 640px) {
+  .editor .wire-row { grid-template-columns: minmax(0, 1fr); }
+  .editor .wire-row .wide { grid-column: auto; }
+  /* 16 px keeps phones from zooming the page on focus. */
+  .editor .yaml__paint, .editor .yaml__code textarea { font-size: 1rem; }
 }
-.problem:hover { text-decoration: underline; text-decoration-thickness: 2px; }
-.problem__at { font-weight: 800; white-space: nowrap; }
-.problem__code { font-family: var(--font-code); font-size: 0.875rem; grid-column: 2; overflow-wrap: anywhere; }
-.problem__msg { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; }
-/* The list of names this device has opened, which is a browsing history and not the library. */
-.names { margin: 0; padding: 0; list-style: none; }
-.names li { display: flex; }
-.names a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px; background: var(--dots); font-weight: 700; overflow-wrap: anywhere; text-decoration: none; }
-.names a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
-.names a[aria-current="true"] { background: var(--ink); color: var(--paper); }
+
+@media (forced-colors: active) {
+  .editor .yaml__paint { display: none; }
+  .editor .yaml__code textarea { color: CanvasText; }
+}
