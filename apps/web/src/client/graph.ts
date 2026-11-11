@@ -7,6 +7,7 @@
 // paint, and a wire has to cope with that.
 
 import { el, flash, sign } from "./dom.js";
+import { state as stateOf } from "./run-shared.js";
 import type { Analysis, Step } from "./model.js";
 
 const NS = "http://www.w3.org/2000/svg";
@@ -17,8 +18,19 @@ const MAX_NODE = 280;
 const NODE_GAP = 24;
 const LANE = 14;
 
+export interface GraphUpdate {
+  analysis: Analysis;
+  selected: string | null;
+  stale: boolean;
+  /**
+   * Optional state per step, for the run page: its sign and word go on the node. The editor never
+   * passes one, so a pipeline's graph is unchanged by this.
+   */
+  statuses?: Record<string, string> | ((id: string) => string | null);
+}
+
 export interface Graph {
-  update(next: { analysis: Analysis; selected: string | null; stale: boolean }): void;
+  update(next: GraphUpdate): void;
   select(id: string | null): void;
   flash(ids: string[]): void;
   focus(id: string): void;
@@ -62,6 +74,12 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
   let selected: string | null = null;
   let stale = false;
   let width = 0;
+  let statuses: GraphUpdate["statuses"];
+
+  function statusOf(id: string): string | null {
+    if (statuses === undefined) return null;
+    return typeof statuses === "function" ? statuses(id) : (statuses[id] ?? null);
+  }
 
   function nodeLabel(step: Step): string {
     if (analysis === null) return `Step ${step.id}`;
@@ -73,6 +91,8 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
     if (feeds.length > 0) parts.push(`feeds ${[...new Set(feeds)].join(", ")}`);
     const problems = analysis.problems.filter((problem) => problem.step === step.id).length;
     if (problems > 0) parts.push(`${problems} ${problems === 1 ? "problem" : "problems"}`);
+    const status = statusOf(step.id);
+    if (status !== null) parts.push(status);
     return parts.join(", ");
   }
 
@@ -102,6 +122,9 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       ),
       step.title !== "" ? el("span", { class: "node__title" }, step.title) : null,
       el("span", { class: "node__uses" }, step.uses ?? "no block"),
+      statusOf(step.id) === null
+        ? null
+        : el("span", { class: "node__status" }, sign(stateOf(statusOf(step.id)!)), statusOf(step.id)!),
       meta.length > 0 ? el("span", { class: "node__meta" }, meta.join(", ")) : null,
       problems > 0
         ? el("span", { class: "node__problem" }, el("span", { class: "stamp" }, sign("failed"), problems === 1 ? "1 problem" : `${problems} problems`))
@@ -363,6 +386,7 @@ export function createGraph(stage: HTMLElement, handlers: { onSelect: (id: strin
       analysis = next.analysis;
       selected = next.selected;
       stale = next.stale;
+      statuses = next.statuses;
       draw();
     },
     select(id) {
