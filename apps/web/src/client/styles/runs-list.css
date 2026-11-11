@@ -1,12 +1,59 @@
-/* A run in the picker: the same dithered row as a step, with its state stamped at the end. */
-/* The stamp carries the shape and the word, so the row does not need a second, larger sign in front
-   of it: at 70 px one run took a tenth of the screen. */
-.runrow { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 10px; width: 100%; min-height: 44px; padding: 8px 10px; border: 0; background: var(--dots); color: inherit; font: inherit; text-align: left; cursor: pointer; text-decoration: none; }
-.runrow:hover .runrow__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.runrow[aria-current="true"] { background: var(--ink); color: var(--paper); }
-.runrow[aria-current="true"]:focus-visible { outline-color: var(--paper); }
-.runrow__id { font-weight: 800; overflow-wrap: anywhere; }
-.runrow__meta { font-size: 0.875rem; }
-/* The one line that says what the reading is doing: loading, or still trying after a lost read. It
-   sits above the rows and is the only thing above them that moves while the list is live. */
-.runlist__note { margin: 0 0 14px; font-weight: 700; font-size: 0.9375rem; }
+/* The Runs list: the filter bar above the shared runs table, and the line that says a page is in the
+   air. Every control's own look comes from base.css; these rules only place them. */
+.runs-list__filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s4);
+  margin-bottom: var(--s4);
+}
+.runs-list__statuses { display: flex; min-width: 0; }
+.runs-list__pipeline { flex: 0 1 14rem; min-width: 10rem; }
+.runs-list__pipeline select { width: 100%; }
+.runs-list__count {
+  margin-left: auto;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.runs-list__note { flex-basis: 100%; }
+.runs-list__status { margin: 0 0 var(--s4); }
+.runs-list__body { display: grid; gap: var(--s4); }
+.runs-list__more { display: flex; }
+
+@media (max-width: 640px) {
+  .runs-list__pipeline { flex-basis: 100%; }
+}
+
+/* BASHR-62: candidate for base.css, where every table stacks this way below 640 px. Until that
+   rule lives there, this screen's table carries it: the first cell on top, then label/value lines
+   read from each cell's data-label. */
+@media (max-width: 640px) {
+  .runs-list__body .table thead { display: none; }
+  .runs-list__body .table,
+  .runs-list__body .table tbody,
+  .runs-list__body .table tr,
+  .runs-list__body .table td { display: block; width: 100%; }
+  .runs-list__body .table tr { padding: var(--s2) 0; border-bottom: var(--rule-dotted); }
+  .runs-list__body .table tbody tr:last-child { border-bottom: 0; }
+  .runs-list__body .table td {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr);
+    gap: var(--s2);
+    height: auto;
+    padding: 0;
+    border: 0;
+  }
+  .runs-list__body .table td::before { content: attr(data-label); font-weight: 700; }
+  .runs-list__body .table td:first-child { display: block; padding-bottom: var(--s1); }
+  .runs-list__body .table td:first-child::before { content: none; }
+  .runs-list__body .table .num { text-align: left; }
+  .runs-list__body .table tbody tr.table__empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+  .runs-list__body .table tbody tr.table__empty td {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--s3);
+    padding: var(--s4) 0;
+  }
+  .runs-list__body .table tbody tr.table__empty td::before { content: none; }
+}
