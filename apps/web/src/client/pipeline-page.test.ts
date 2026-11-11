@@ -1,15 +1,17 @@
 // One pipeline, through the stand-in browser: its header, its four tabs, the runs that read on their
 // own clock, and the Start dialog built from the version's own contract.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import type { PipelineVersion, Run } from "./api.ts";
 import {
   FakeClock,
   FakeServer,
   appStub,
   closeAll,
+  installPipelinesGlobals,
   openPipeline,
   pipelineFixture,
+  restorePipelinesGlobals,
   runFixture,
   setHidden,
   settle,
@@ -19,6 +21,10 @@ import {
   waitFor,
   type FakeElement,
 } from "./pipelines.testkit.ts";
+
+// The testkit put the stand-in browser up when the first file imported it; a file that ran since may
+// have taken it down, so every file that uses the kit puts it back at its own top level.
+installPipelinesGlobals();
 
 const T0 = "2026-11-05T20:12:58Z";
 
@@ -133,6 +139,10 @@ afterEach(() => {
   closeAll();
   setHidden(false);
   appStub.navigations.length = 0;
+});
+
+afterAll(() => {
+  restorePipelinesGlobals();
 });
 
 describe("the pipeline header", () => {

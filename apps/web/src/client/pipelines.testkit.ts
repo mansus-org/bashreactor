@@ -418,15 +418,14 @@ const installed = {
   URL: globals.URL,
 };
 
-globals.document = fakeDocument;
-globals.window = {
+const fakeWindow = {
   setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args),
   clearTimeout,
   addEventListener(): void {},
   removeEventListener(): void {},
 };
-globals.location = fakeLocation;
-globals.history = {
+
+const fakeHistory = {
   replaceState(_state: unknown, _title: string, href: string) {
     historyCalls.push({ kind: "replace", href });
     navigateLocation(href);
@@ -436,15 +435,38 @@ globals.history = {
     navigateLocation(href);
   },
 };
-globals.localStorage = storage();
-globals.sessionStorage = storage();
-globals.CSS = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) };
-globals.ResizeObserver = class {
+
+const fakeCss = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) };
+
+class FakeResizeObserver {
   observe(): void {}
   unobserve(): void {}
   disconnect(): void {}
-};
-globals.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
+}
+
+/**
+ * Puts the stand-in browser back on the globals. Every test file in one `bun test` process shares
+ * them, and this module is evaluated once for all of them, so a file that uses it calls this at its
+ * own top level: another file's teardown may have taken the globals away since the first import put
+ * them up.
+ */
+export function installPipelinesGlobals(): void {
+  globals.document = fakeDocument;
+  globals.window = fakeWindow;
+  globals.location = fakeLocation;
+  globals.history = fakeHistory;
+  globals.localStorage = storage();
+  globals.sessionStorage = storage();
+  globals.CSS = fakeCss;
+  globals.ResizeObserver = FakeResizeObserver;
+  globals.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
+  fakeDocument.hidden = false;
+  activeElement = null;
+  visibilityHandlers.length = 0;
+  historyCalls.length = 0;
+}
+
+installPipelinesGlobals();
 
 function navigateLocation(href: string): void {
   const url = new URL(href, fakeLocation.origin);
@@ -777,13 +799,22 @@ export function closeAll(): void {
   else globals.fetch = installed.fetch;
 }
 
-process.once("exit", () => {
+/**
+ * Gives the globals back as they were before the first install. A file that installed calls this in
+ * its `afterAll`: the files after it in the same process include the browser tests, which talk to a
+ * real server and get a stub's 500 for every call if one is left behind.
+ */
+export function restorePipelinesGlobals(): void {
   closeAll();
-  rmSync(served, { recursive: true, force: true });
   for (const [name, value] of Object.entries(installed)) {
     if (value === undefined) delete globals[name];
     else globals[name] = value;
   }
+}
+
+process.once("exit", () => {
+  restorePipelinesGlobals();
+  rmSync(served, { recursive: true, force: true });
 });
 
 export { FakeElement, setFocus };

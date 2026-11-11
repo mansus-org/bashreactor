@@ -1,16 +1,22 @@
 // The Pipelines list, through the stand-in browser: every row's cells arrive from their own read, a
 // read that fails says so in its own cell, and no row opens more than its share of the four reads.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import {
   FakeServer,
   closeAll,
+  installPipelinesGlobals,
   openPipelines,
   pipelineFixture,
+  restorePipelinesGlobals,
   summary,
   version,
   type FakeElement,
 } from "./pipelines.testkit.ts";
+
+// The testkit put the stand-in browser up when the first file imported it; a file that ran since may
+// have taken it down, so every file that uses the kit puts it back at its own top level.
+installPipelinesGlobals();
 
 const text = (node: FakeElement | null): string => node?.textContent ?? "";
 const rowsOf = (view: FakeElement): FakeElement[] => view.querySelectorAll("tbody tr");
@@ -33,6 +39,10 @@ function wordReport(): ReturnType<typeof pipelineFixture> {
 
 afterEach(() => {
   closeAll();
+});
+
+afterAll(() => {
+  restorePipelinesGlobals();
 });
 
 describe("the pipelines list", () => {
