@@ -599,6 +599,10 @@ function writerOutputs(parsed: Contract): HTMLElement {
   );
 }
 
+function currentName(parsed: Contract): string | null {
+  return parsed.name === null || parsed.name === "" || parsed.name === "new-block" ? null : parsed.name;
+}
+
 function renderWriterShell(
   view: HTMLElement,
   _route: Route,
@@ -703,10 +707,6 @@ function renderWriterShell(
       el("h3", { class: "h3" }, "Outputs"),
       writerOutputs(parsed),
     ]);
-  }
-
-  function currentName(parsed: Contract): string | null {
-    return parsed.name === null || parsed.name === "" || parsed.name === "new-block" ? null : parsed.name;
   }
 
   function update(): void {
