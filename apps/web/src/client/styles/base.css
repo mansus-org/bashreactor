@@ -153,7 +153,7 @@ a.stamp:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 input:not([type="checkbox"]), select, textarea {
   min-height: var(--control-h); width: 100%;
   padding: 0 var(--s2);
-  border: var(--control-border); border-radius: 0;
+  border: var(--control-border);
   background: var(--paper); color: var(--ink);
   font: inherit; font-size: var(--fs-ui); line-height: 20px;
 }
@@ -189,7 +189,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: var(--control-h); min-width: var(--control-h); padding: 0 var(--s3);
-  border: var(--control-border); border-radius: 0;
+  border: var(--control-border);
   background: var(--paper); color: var(--ink);
   font: inherit; font-size: var(--fs-ui); line-height: 20px; font-weight: 700;
   text-decoration: none; cursor: pointer; white-space: nowrap;
@@ -222,7 +222,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .segmented__btn {
   display: inline-flex; align-items: center; gap: var(--s1);
   min-height: var(--control-h); padding: 0 10px; margin-left: -2px;
-  border: var(--control-border); border-radius: 0;
+  border: var(--control-border);
   background: var(--paper); color: var(--ink);
   font: inherit; font-size: var(--fs-ui); font-weight: 700; cursor: pointer;
 }
@@ -236,18 +236,19 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .chip {
   display: inline-flex; align-items: center; gap: var(--s1);
   min-height: 28px; padding: 0 6px;
-  border: 1px solid var(--ink); border-radius: 0;
+  border: 1px solid var(--ink);
   background: var(--paper); color: var(--ink);
   font: inherit; font-size: var(--fs-ui); font-weight: 700; cursor: pointer;
 }
 .chip[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+@media (pointer: coarse) { .chip { min-height: var(--control-h); } }
 
 /* ---------- tabs ---------- */
 
 .tabs__list { display: flex; flex-wrap: wrap; border-bottom: var(--rule); }
 .tab {
   min-height: 36px; padding: 0 var(--s3);
-  border: 0; border-radius: 0; background: transparent; color: var(--ink);
+  border: 0; background: transparent; color: var(--ink);
   font: inherit; font-size: var(--fs-ui); font-weight: 700; cursor: pointer;
 }
 .tab[aria-selected="true"] { box-shadow: inset 0 -3px 0 var(--ink); }
@@ -306,7 +307,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 
 .dialog {
   width: min(560px, calc(100vw - 32px)); padding: 20px;
-  border: var(--control-border); border-radius: 0;
+  border: var(--control-border);
   background: var(--paper); color: var(--ink);
   box-shadow: 6px 6px 0 var(--ink);
 }
