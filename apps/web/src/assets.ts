@@ -3,7 +3,7 @@
 // The deployed image is one bundled `server.js` with nothing beside it — the Dockerfile copies that
 // one file out of the build stage — so every asset has to be inside the bundle. Text comes in
 // through `with { type: "text" }` imports, which bun build inlines; the three woff2 faces come in as
-// base64 from fonts.ts, which apps/web/scripts/embed-fonts.ts generates from mockup/fonts/.
+// base64 from fonts.ts, which apps/web/scripts/embed-fonts.ts generates from apps/web/fonts/.
 //
 // The browser code is TypeScript, because the repo is TypeScript and `bun run check` should read it.
 // The browser is not, so each module is transpiled here, once, at startup, and served as `.js`.

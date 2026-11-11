@@ -1,4 +1,4 @@
-// Regenerates src/fonts.ts from the woff2 files in mockup/fonts/.
+// Regenerates src/fonts.ts from the woff2 files in apps/web/fonts/.
 //
 // The image ships one file: `bun server.js`, and the Dockerfile copies nothing else out of the build
 // stage. So the fonts cannot be sidecar files on disk — they have to be inside the bundle, and the
@@ -6,14 +6,14 @@
 //
 //   bun apps/web/scripts/embed-fonts.ts
 //
-// The licence is not embedded: OFL.txt is read from mockup/fonts/ at build time too and served as
+// The licence is not embedded: OFL.txt is read from apps/web/fonts/ at build time too and served as
 // itself, so the text people can read stays the text the licence asks for.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const FONTS = ["anybody.woff2", "atkinson-mono.woff2", "atkinson-next.woff2"];
-const dir = join(import.meta.dir, "../../../mockup/fonts");
+const dir = join(import.meta.dir, "../fonts");
 
 const entries = FONTS.map((name) => {
   const bytes = readFileSync(join(dir, name));
