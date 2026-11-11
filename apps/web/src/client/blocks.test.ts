@@ -371,20 +371,21 @@ describe("one block", () => {
   test("picking a version puts it in the address and repaints the block", async () => {
     const view = await open("/blocks/versioned");
     const writes: string[] = [];
-    const previous = globalThis.history.replaceState;
-    (globalThis as unknown as Record<string, unknown>).history = {
-      ...globalThis.history,
-      replaceState: (_state: unknown, _title: string, href: string) => writes.push(href),
-    };
+    const history = globalThis.history as unknown as { replaceState: (state: unknown, title: string, href: string) => void };
+    const previous = history.replaceState;
+    history.replaceState = (_state: unknown, _title: string, href: string) => writes.push(href);
 
-    const select = view.querySelector("[id='block-version']")!;
-    select.value = "1";
-    select.fire("change");
-    await settle(() => view.querySelector(".page-header .lead")?.textContent === "The versioned block.");
+    try {
+      const select = view.querySelector("[id='block-version']")!;
+      select.value = "1";
+      select.fire("change");
+      await settle(() => view.querySelector(".page-header .lead")?.textContent === "The versioned block.");
 
-    expect(writes.at(-1)).toBe("/app/blocks/versioned?version=1");
-    expect(view.querySelector("[id='block-version']")?.value).toBe("1");
-    (globalThis as unknown as Record<string, unknown>).history = { ...globalThis.history, replaceState: previous };
+      expect(writes.at(-1)).toBe("/app/blocks/versioned?version=1");
+      expect(view.querySelector("[id='block-version']")?.value).toBe("1");
+    } finally {
+      history.replaceState = previous;
+    }
   });
 
   test("header problems are listed in one alarm above the tabs", async () => {
