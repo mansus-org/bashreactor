@@ -635,13 +635,13 @@ export function runsTable(options: RunsTableOptions = {}): { node: HTMLElement; 
     return { row, status: run.status, cells, stamp, runLink, pipelineLink, version, started, duration, steps, retry };
   }
 
-  function paint(parts: RunRow, run: RunSummary, first: boolean): void {
-    if (parts.status !== run.status) {
+  // A fresh row is stamped whenever it appears, not only on the first update: the runs that matter most
+  // are the ones that start while the reader watches, and they arrive after the table was first drawn.
+  function paint(parts: RunRow, run: RunSummary, fresh: boolean): void {
+    if (fresh || parts.status !== run.status) {
       restamp(parts.stamp, stateOf(run.status));
+      if (!fresh) flash(parts.row);
       parts.status = run.status;
-      if (!first) flash(parts.row);
-    } else if (first) {
-      restamp(parts.stamp, stateOf(run.status));
     }
     parts.runLink.textContent = run.id;
     parts.runLink.setAttribute("href", `/app/runs/${run.id}`);
@@ -686,7 +686,7 @@ export function runsTable(options: RunsTableOptions = {}): { node: HTMLElement; 
         parts = makeRow(run);
         rows.set(run.id, parts);
       }
-      paint(parts, run, fresh && !initialized);
+      paint(parts, run, fresh);
       place(parts.row, index);
       if (fresh && initialized) flash(parts.row);
     });

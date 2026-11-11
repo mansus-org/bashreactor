@@ -122,6 +122,9 @@ describe("runsTable", () => {
     expect(firstRow.textContent).toContain("3 / 4");
     // The newly inserted row flashes too: a run that just appeared is a change under the reader.
     expect(body.children[0]!.classList.contains("is-new")).toBe(true);
+    // And it carries its own status, though it arrived after the table was first drawn.
+    expect(body.children[0]!.querySelector(".stamp")!.textContent).toContain("failed");
+    expect(firstRow.querySelector(".stamp")!.textContent).toContain("running");
   });
 
   test("shows an em dash for a field an older server did not send", () => {
