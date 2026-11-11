@@ -4,11 +4,12 @@
 
 import { join } from "node:path";
 import { BLOCK_NAME_RE, parseBlock, parsePipeline, splitBlockHeaderBytes, validateBlockSource } from "@bashreactor/core";
+import type { RunStatus, StepStatus } from "@bashreactor/core";
 import { Engine, FsRunStore } from "@bashreactor/engine";
 import type { ClaimState, RunRecord } from "@bashreactor/engine";
 import { Store } from "@bashreactor/store";
 import type { BlockVersion, PipelineRecord } from "@bashreactor/store";
-import { optionalInputs, optionalInteger, optionalString, parseIntegerParam, readBody, requireString } from "./body.ts";
+import { optionalInputs, optionalString, parseIntegerParam, readBody, requireString } from "./body.ts";
 import type { Body } from "./body.ts";
 import type { ApiConfig } from "./config.ts";
 import { ApiError, errorToResponse, firstIssueAsError } from "./errors.ts";
@@ -236,56 +237,65 @@ export function createApi(deps: ApiDependencies): Api {
   // --- runs ----------------------------------------------------------------
 
   route("GET", "/v1/runs", "read", async ({ url }) => {
-    // SPEC 4.2: a run id sorts by time, so the ids alone order the list. The page is chosen from them
-    // and only the page is read; reading every run to throw all but a page away is what made this one
-    // request cost the whole history.
+    // SPEC 4.2: a run id sorts by time, so the ids alone order the list. `cursor` and `since` narrow
+    // that list before any record is touched; the other filters need a record, so they narrow it as
+    // the batches below are read.
     const limit = runPageLimit(url.searchParams.get("limit"));
     const cursor = url.searchParams.get("cursor");
+    const pipeline = pipelineFilter(url.searchParams.get("pipeline"));
+    const statuses = statusFilter(url.searchParams.get("status"));
+    const since = sinceFilter(url.searchParams.get("since"));
     const ids = (await engine.listRuns())
       .filter((id) => RUN_ID_RE.test(id))
       .toSorted((a, b) => b.localeCompare(a))
       // Anything that is not a run id is just a cursor: it compares, and the page comes back from the
       // top or empty. A caller cannot break the listing with a bad one.
-      .filter((id) => cursor === null || id.localeCompare(cursor) < 0);
-    const page = ids.slice(0, limit);
-    // A run whose record cannot be read is not listable, and one bad file must not take the whole
-    // listing with it: it is logged and left out, and the cursor being positional means the walk moves
-    // past it instead of stopping there for good.
-    const records = await Promise.all(
-      page.map((id) =>
-        engine.getRun(id).catch((error: unknown) => {
-          log(`run ${id} is not listable: ${error}`);
-          return null;
-        }),
-      ),
-    );
-    const runs = records
-      .filter((record): record is RunRecord => record !== null)
-      .map((record) => ({
-        id: record.id,
-        pipeline: record.pipeline,
-        status: record.status,
-        created_at: record.created_at,
-        finished_at: record.finished_at,
-        cancel_requested_at: record.cancel_requested_at,
-      }));
-    // The next cursor is the last id of the page whether or not every run on it could be read, so a
-    // run the server cannot parse moves the walk along instead of stalling it on itself.
-    const headers = page.length < ids.length ? { "x-next-cursor": page[page.length - 1]! } : undefined;
+      .filter((id) => cursor === null || id.localeCompare(cursor) < 0)
+      .filter((id) => since === null || runIdInstant(id) >= since);
+
+    const runs: RunSummary[] = [];
+    let index = 0;
+    while (index < ids.length && runs.length < limit) {
+      // A run whose record cannot be read is not listable, and one bad file must not take the whole
+      // listing with it: it is logged and left out, and the walk moves past it instead of stopping
+      // there for good. The batch is never larger than the page still needs, so a page that fills
+      // does not read past the run that filled it.
+      const batch = ids.slice(index, index + Math.min(32, limit - runs.length));
+      index += batch.length;
+      const records = await Promise.all(
+        batch.map((id) =>
+          engine.getRun(id).catch((error: unknown) => {
+            log(`run ${id} is not listable: ${error}`);
+            return null;
+          }),
+        ),
+      );
+      for (const record of records) {
+        if (record === null) continue;
+        if (pipeline !== null && record.pipeline !== pipeline) continue;
+        if (statuses !== null && !statuses.has(record.status)) continue;
+        runs.push(runSummary(record));
+        if (runs.length === limit) break;
+      }
+    }
+
+    // The next cursor is the last id the walk examined when the page filled: the next request starts
+    // below it. When the ids ran out first there is nowhere to go, so there is no header.
+    const headers = runs.length === limit && index < ids.length ? { "x-next-cursor": runs[runs.length - 1]!.id } : undefined;
     return json(200, runs, headers);
   });
 
   route("POST", "/v1/runs", "write", async ({ request }) => {
     const body = await readBody(request, ["pipeline", "version", "yaml", "inputs"]);
     const inputs = optionalInputs(body, "inputs");
-    const yaml = pipelineYamlOf(body);
-    const staged = stagePipeline({ baseDir: stageDir, yaml, resolveBlock: libraryBlock });
+    const resolved = runPipelineOf(body);
+    const staged = stagePipeline({ baseDir: stageDir, yaml: resolved.yaml, resolveBlock: libraryBlock });
     try {
       // SPEC 4.3: a pipeline that does not validate creates no run, and the answer is its first
       // issue as a 422, whether the pipeline came from the store or from the request body.
       const issues = engine.validate(staged.path);
       if (issues.length > 0) throw firstIssueAsError(issues);
-      const record = await engine.start(staged.path, inputs);
+      const record = await engine.start(staged.path, inputs, { pipelineVersion: resolved.pipelineVersion });
       driveInBackground(record.id);
       return json(201, await withClaim(record));
     } finally {
@@ -488,16 +498,17 @@ export function createApi(deps: ApiDependencies): Api {
     }
   }
 
-  function pipelineYamlOf(body: Awaited<ReturnType<typeof readBody>>): string {
+  function runPipelineOf(body: Body): { yaml: string; pipelineVersion: number | null } {
     const yaml = optionalString(body, "yaml");
     const name = optionalString(body, "pipeline");
     if (yaml !== undefined && name !== undefined) {
       throw new ApiError("unknown_input", "give either pipeline or yaml, not both");
     }
-    if (yaml !== undefined) return yaml;
+    if (yaml !== undefined) return { yaml, pipelineVersion: null };
     if (name === undefined) throw new ApiError("missing_input", 'give "pipeline" or "yaml"', { path: "pipeline" });
-    const version = optionalInteger(body, "version");
-    return pipelineVersion(store, name, version === undefined ? "latest" : String(version)).yaml;
+    const requested = runVersionOf(body);
+    const stored = pipelineVersion(store, name, requested === undefined || requested === "latest" ? "latest" : String(requested));
+    return { yaml: stored.yaml, pipelineVersion: stored.version };
   }
 
   /** Where a run's own directory is. The engine's store owns that answer (SPEC 4.2). */
@@ -581,6 +592,121 @@ function pipelineRecord(record: PipelineRecord, withBody = true) {
 // SPEC 4.2 fixes what a run id looks like, and the engine joins one straight into a path. Checking
 // the shape here is what keeps a URL from naming a directory outside the run directory.
 const RUN_ID_RE = /^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
+const RUN_ID_INSTANT_RE = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z-/;
+
+const RUN_STATUSES: readonly RunStatus[] = ["running", "succeeded", "failed", "cancelled"];
+
+type StepCounts = { total: number } & Record<StepStatus, number>;
+
+/** What `GET /v1/runs` answers with: the summary, its step counts, and its stored pipeline version. */
+interface RunSummary {
+  id: string;
+  pipeline: string;
+  status: RunStatus;
+  created_at: string;
+  finished_at: string | null;
+  cancel_requested_at: string | null;
+  step_counts: StepCounts;
+  pipeline_version: number | null;
+}
+
+function runSummary(record: RunRecord): RunSummary {
+  return {
+    id: record.id,
+    pipeline: record.pipeline,
+    status: record.status,
+    created_at: record.created_at,
+    finished_at: record.finished_at,
+    cancel_requested_at: record.cancel_requested_at,
+    step_counts: stepCounts(record),
+    pipeline_version: record.pipeline_version ?? null,
+  };
+}
+
+function stepCounts(record: RunRecord): StepCounts {
+  const counts: StepCounts = {
+    total: 0,
+    pending: 0,
+    running: 0,
+    waiting_retry: 0,
+    succeeded: 0,
+    failed: 0,
+    skipped: 0,
+    cancelled: 0,
+  };
+  for (const step of Object.values(record.steps)) {
+    counts.total += 1;
+    counts[step.status] += 1;
+  }
+  return counts;
+}
+
+/** The `version` field of `POST /v1/runs`: omitted, a number, or the word `latest`. */
+function runVersionOf(body: Body): number | "latest" | undefined {
+  const value = body.raw.version;
+  if (value === undefined) return undefined;
+  if (value === "latest") return "latest";
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  throw new ApiError("type_mismatch", '"version" must be an integer or "latest"', { path: "version" });
+}
+
+/**
+ * A malformed filter is the request's shape, not the document's, so it is 400 where a body field
+ * with the same code is 422. The code stays `type_mismatch`, so every surface names it the same.
+ */
+function filterError(name: string, message: string): never {
+  throw new ApiError("type_mismatch", message, { path: name, status: 400 });
+}
+
+function pipelineFilter(raw: string | null): string | null {
+  if (raw === null || raw === "") return null;
+  if (!BLOCK_NAME_RE.test(raw)) filterError("pipeline", `pipeline must match ${BLOCK_NAME_RE}`);
+  return raw;
+}
+
+function statusFilter(raw: string | null): ReadonlySet<RunStatus> | null {
+  if (raw === null || raw === "") return null;
+  const statuses = raw.split(",");
+  for (const status of statuses) {
+    if (!RUN_STATUSES.includes(status as RunStatus)) {
+      filterError("status", `status must be a comma-separated list of ${RUN_STATUSES.join(", ")}`);
+    }
+  }
+  return new Set(statuses as RunStatus[]);
+}
+
+/** A UTC instant to the second or millisecond, as the id itself is written. */
+const SINCE_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z$/;
+
+function sinceFilter(raw: string | null): number | null {
+  if (raw === null || raw === "") return null;
+  const match = SINCE_RE.exec(raw);
+  if (match === null) filterError("since", "since must be an ISO 8601 UTC instant such as 2026-11-11T00:00:00Z");
+  const [, year, month, day, hour, minute, second, fraction = "0"] = match;
+  const millis = `${fraction}000`.slice(0, 3);
+  const instant = Date.parse(
+    `${year}-${month}-${day}T${hour}:${minute}:${second}.${millis}Z`,
+  );
+  // Date.parse normalises 2026-02-30 into March; a canonical re-rendering catches that and every
+  // other date that is not the one the caller wrote.
+  if (Number.isNaN(instant) || new Date(instant).toISOString() !== `${year}-${month}-${day}T${hour}:${minute}:${second}.${millis}Z`) {
+    filterError("since", `"${raw}" is not a real UTC instant`);
+  }
+  return instant;
+}
+
+/** The instant a run id was minted with (SPEC 4.2), read without touching its record. */
+function runIdInstant(id: string): number {
+  const match = RUN_ID_INSTANT_RE.exec(id)!;
+  return Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    Number(match[6]),
+  );
+}
 
 function runId(value: string): string {
   if (!RUN_ID_RE.test(value)) throw new ApiError("run_not_found", `"${value}" is not a run id`);

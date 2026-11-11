@@ -65,6 +65,7 @@ function writeRun(id: string, status: RunRecord["status"] = "succeeded"): string
     schema: 1,
     id,
     pipeline: "word-report",
+    pipeline_version: null,
     status,
     created_at: `2026-11-${day}T${hour}:00:00.000Z`,
     finished_at: status === "running" ? null : `2026-11-${day}T${hour}:00:05.000Z`,
