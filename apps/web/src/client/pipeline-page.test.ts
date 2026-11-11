@@ -113,6 +113,14 @@ function manyRuns(count: number): ReturnType<typeof summary>[] {
   return ids(count).map((id) => summary(id, "succeeded", { pipeline: "word-report", created_at: T0, finished_at: "2026-11-05T20:13:00Z" }));
 }
 
+function runLasting(id: string, ms: number): ReturnType<typeof summary> {
+  return summary(id, "succeeded", {
+    pipeline: "word-report",
+    created_at: T0,
+    finished_at: new Date(Date.parse(T0) + ms).toISOString(),
+  });
+}
+
 const text = (node: FakeElement | null | undefined): string => node?.textContent ?? "";
 const rowsOf = (view: FakeElement, selector = "tbody tr"): FakeElement[] => view.querySelectorAll(selector);
 const runRows = (view: FakeElement): FakeElement[] => rowsOf(view, ".runstable tbody tr").filter((row) => !row.classList.contains("table__empty"));
@@ -299,6 +307,32 @@ describe("the runs tab", () => {
     server.failures.delete("GET /v1/runs");
     await clock.advance(1_000);
     expect(note.hidden).toBe(true);
+    controller.abort();
+  });
+});
+
+describe("the duration chart's ticks", () => {
+  test("a sub-second range has fractions, with zero at the baseline", async () => {
+    const server = withBlocks(new FakeServer());
+    server.runs = [runLasting("20261105T201258Z-f1549287", 500)];
+    const clock = new FakeClock();
+    clock.set(T0);
+    const { view, controller } = await openPipeline(server, "word-report", "", { clock });
+    await waitFor("the three ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
+
+    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "0.25 s", "0.5 s"]);
+    controller.abort();
+  });
+
+  test("a range of minutes keeps whole units and drops the empty seconds", async () => {
+    const server = withBlocks(new FakeServer());
+    server.runs = [runLasting("20261105T201258Z-f1549287", 300_000)];
+    const clock = new FakeClock();
+    clock.set(T0);
+    const { view, controller } = await openPipeline(server, "word-report", "", { clock });
+    await waitFor("the three ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
+
+    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "2 m 30 s", "5 m"]);
     controller.abort();
   });
 });

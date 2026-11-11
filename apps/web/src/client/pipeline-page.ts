@@ -308,6 +308,19 @@ function durationOf(run: RunSummary, now: number): number {
   return Number.isNaN(end) ? 0 : Math.max(0, end - start);
 }
 
+/**
+ * A chart tick is a round number, not a sentence: a 0.5 s tick reads `0.5 s`, never `<1 s`, and a
+ * long tick drops the zero it would not count. Bars keep the house duration formatter in their titles.
+ */
+function tickDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return "0";
+  if (ms < 1000) {
+    const seconds = ms / 1000;
+    return `${Number(seconds.toFixed(seconds < 0.1 ? 3 : 2))} s`;
+  }
+  return formatDuration(ms).replace(/ 00 (s|m|h)$/, "");
+}
+
 function runsChart(runs: RunSummary[], now: number): HTMLElement {
   // listRuns is newest first; a chart reads left to right, so the newest bar is the rightmost one.
   const shown = runs.slice(0, 30).toReversed();
@@ -321,14 +334,7 @@ function runsChart(runs: RunSummary[], now: number): HTMLElement {
       segments: [{ status: run.status, value: Math.max(1, duration) }],
     };
   });
-  // A zero tick says nothing a bar chart does not already say at its baseline; a sub-second middle
-  // tick is the one place `formatDuration` would otherwise print `<1 s` twice beside itself.
-  return barChart({
-    bars,
-    height: 160,
-    yLabel: "Run duration",
-    yFormat: (value) => (value === 0 ? "" : formatDuration(value)),
-  });
+  return barChart({ bars, height: 160, yLabel: "Run duration", yFormat: tickDuration });
 }
 
 /**
