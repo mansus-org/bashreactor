@@ -64,6 +64,12 @@ test("every client module on disk is served as an asset", () => {
   expect(missing).toEqual([]);
 });
 
+test("the design system and the screens' new modules are registered", () => {
+  for (const name of ["ui", "library", "dashboard", "pipelines", "pipeline-page", "settings", "timeline"]) {
+    expect(files.has(`assets/${name}.js`)).toBe(true);
+  }
+});
+
 test("every stylesheet file on disk is in the served order", () => {
   // The folder is the source of truth: a file the order list forgets is a rule the browser never sees.
   const onDisk = readdirSync(STYLES).filter((name) => name.endsWith(".css"));

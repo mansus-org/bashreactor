@@ -29,6 +29,13 @@ import styleSettings from "./client/styles/settings.css" with { type: "text" };
 import appSource from "./client/app.ts" with { type: "text" };
 import apiSource from "./client/api.ts" with { type: "text" };
 import domSource from "./client/dom.ts" with { type: "text" };
+import uiSource from "./client/ui.ts" with { type: "text" };
+import librarySource from "./client/library.ts" with { type: "text" };
+import dashboardSource from "./client/dashboard.ts" with { type: "text" };
+import pipelinesSource from "./client/pipelines.ts" with { type: "text" };
+import pipelinePageSource from "./client/pipeline-page.ts" with { type: "text" };
+import settingsSource from "./client/settings.ts" with { type: "text" };
+import timelineSource from "./client/timeline.ts" with { type: "text" };
 import yamlSource from "./client/yaml.ts" with { type: "text" };
 import yamlEditSource from "./client/yaml-edit.ts" with { type: "text" };
 import modelSource from "./client/model.ts" with { type: "text" };
@@ -58,6 +65,13 @@ export {
   appSource,
   apiSource,
   domSource,
+  uiSource,
+  librarySource,
+  dashboardSource,
+  pipelinesSource,
+  pipelinePageSource,
+  settingsSource,
+  timelineSource,
   yamlSource,
   yamlEditSource,
   modelSource,
