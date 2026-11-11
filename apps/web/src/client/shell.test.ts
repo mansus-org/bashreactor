@@ -103,10 +103,12 @@ describe("the routes", () => {
     expect(text(view())).toContain("New block");
 
     await go("/pipelines");
-    expect(text(view())).toContain("BASHR-57");
+    expect(text(view())).toContain("Pipelines");
+    expect(text(view())).toContain("No pipelines stored yet.");
 
     await go("/pipelines/word-report");
-    expect(text(view())).toContain("BASHR-57");
+    expect(text(view())).toContain("not_found");
+    expect(text(view())).toContain("All pipelines");
 
     await go("/settings");
     expect(text(view())).toContain("Settings");

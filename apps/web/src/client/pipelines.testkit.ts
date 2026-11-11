@@ -772,6 +772,9 @@ export function closeAll(): void {
   for (const controller of controllers) controller.abort();
   controllers.length = 0;
   activeElement = null;
+  // The next test file may talk to a real server, so the stub must not outlive this screen's tests.
+  if (installed.fetch === undefined) delete globals.fetch;
+  else globals.fetch = installed.fetch;
 }
 
 process.once("exit", () => {
