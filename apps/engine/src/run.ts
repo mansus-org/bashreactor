@@ -39,6 +39,8 @@ export interface RunRecord {
   schema: 1;
   id: string;
   pipeline: string;
+  /** The stored pipeline version the run was started from, or null for inline YAML. */
+  pipeline_version: number | null;
   status: RunStatus;
   created_at: string;
   finished_at: string | null;

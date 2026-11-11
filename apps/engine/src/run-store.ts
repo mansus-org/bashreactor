@@ -162,7 +162,10 @@ export class FsRunStore implements RunStore {
   async loadRun(runId: string): Promise<RunRecord | null> {
     const bytes = readIfExists(this.layout(runId).runJson);
     if (bytes === null) return null;
-    return JSON.parse(new TextDecoder().decode(bytes)) as RunRecord;
+    const record = JSON.parse(new TextDecoder().decode(bytes)) as RunRecord;
+    // Runs recorded before section 4.9 gained the field have no `pipeline_version`; they are still
+    // valid records, and the version they came from was simply not recorded.
+    return { ...record, pipeline_version: record.pipeline_version ?? null };
   }
 
   async listRunIds(): Promise<string[]> {
