@@ -528,6 +528,19 @@ describe("the block writer", () => {
     expect(posted).toEqual([]);
   });
 
+  test("a new block whose name is already stored and whose bytes are identical is not published", async () => {
+    const view = await open("/blocks-new");
+    const source = view.querySelector("[id='writer-source']")!;
+    source.value = COUNT_WORDS;
+    source.fire("input");
+    await settle(() => publishReason(view)?.includes("Nothing has changed: v1") === true);
+
+    expect(publishOff(view)).toBe(true);
+    view.querySelector("form")!.fire("submit");
+    await tick();
+    expect(posted).toEqual([]);
+  });
+
   test("a new block whose name the library already has publishes the changed bytes as the next version", async () => {
     const view = await open("/blocks-new");
     const source = view.querySelector("[id='writer-source']")!;
