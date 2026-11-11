@@ -1,23 +1,72 @@
-// One run. It is rendered from its own `run.json` and nothing else — steps in declaration order,
-// their statuses, attempt counts and durations, and a log pane that follows one attempt by byte
-// offset. It polls, because the engine is the only thing that knows what a step is doing.
+// One run. The header says what it is and what can be done with it, the timeline says where every
+// step got to, and the tabs hold the log, the steps, the graph, the values and the files. The run is
+// read once a second while it is running, and only the live parts are patched: the controls keep
+// their focus and the timeline keeps its scroll.
 
 import { api, ApiError, canWrite } from "./api.js";
-import { announce, duration, el, errorBox, fill, flash, isoInstant, sign, stateLine, stateStamp, when } from "./dom.js";
+import type { Attempt, LogChunk, Run, RunFiles, RunStep } from "./api.js";
+import { announce, el, errorBox, fill, flash, sign, stateLine } from "./dom.js";
+import type { Child } from "./dom.js";
+import { createGraph } from "./graph.js";
+import type { Graph } from "./graph.js";
+import { fetchLibrary } from "./library.js";
 import { MAX_DRAWN_LINES, clipLine, emptyLog, feedLog, logLines } from "./logs.js";
 import type { LogLine, LogState } from "./logs.js";
+import { analyze, readUses } from "./model.js";
+import type { Analysis } from "./model.js";
 import { navigate } from "./app.js";
-import type { Attempt, LogChunk, Run, RunFiles, RunStep } from "./api.js";
-import { POLL_MS, bytes, errorBody, errorWords, state, wallClock, whenShown } from "./run-shared.js";
+import { POLL_MS, errorBody, errorWords, state, wallClock, whenShown } from "./run-shared.js";
 import type { Clock } from "./run-shared.js";
+import { drawTimeline } from "./timeline.js";
+import type { Timeline } from "./timeline.js";
+import {
+  alarm,
+  button,
+  confirmDialog,
+  exactTime,
+  formatBytes,
+  formatDuration,
+  pageHeader,
+  readTab,
+  relativeTime,
+  segmented,
+  statusStamp,
+  table,
+  tabs,
+  writeTab,
+} from "./ui.js";
 
-/**
- * A link to one of a run's files. The href is the real API address, so it can be copied, opened in a
- * new tab against a server that takes a token some other way, or read by whatever is checking that a
- * page says what it links to; the click goes through the API client instead, because that is the only
- * thing holding the bearer token (SPEC 4.1) and a navigation the browser makes alone cannot carry it.
- */
-function downloadLink(href: string, label: string, onClick: () => void, size?: number): HTMLElement {
+type Children = Parameters<typeof fill>[1];
+
+function lastAttempt(step: RunStep): Attempt | null {
+  return step.attempts.length === 0 ? null : step.attempts[step.attempts.length - 1]!;
+}
+
+function attemptSeconds(attempt: Attempt, now: number): number {
+  const began = Date.parse(attempt.started_at);
+  const ended = attempt.finished_at === null ? now : Date.parse(attempt.finished_at);
+  return Number.isNaN(began) || Number.isNaN(ended) ? Number.NaN : Math.max(0, (ended - began) / 1000);
+}
+
+function valueText(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function isFileValue(value: unknown): value is string {
+  return typeof value === "string" && /^steps\/[^/]+\/attempts\/[0-9]+\/outputs\//.test(value);
+}
+
+/** A block as the steps table names it: the library form, or the path a pipeline file uses. */
+function blockLabel(uses: string): string {
+  if (!uses.startsWith("./")) return uses;
+  const path = uses.replace(/@[1-9][0-9]*$/, "");
+  return path.endsWith(".sh") ? path : `${path}.sh`;
+}
+
+/** A link that looks like a file and opens through the API, because the browser's own navigation
+ * cannot carry the bearer token (SPEC 4.1). */
+function fileLink(href: string, label: string, onClick: () => void, size?: number): HTMLAnchorElement {
   return el(
     "a",
     {
@@ -30,62 +79,40 @@ function downloadLink(href: string, label: string, onClick: () => void, size?: n
       },
     },
     label,
-    ...(size === undefined ? [] : [el("span", { class: "file__size" }, ` ${bytes(size)}`)]),
+    size === undefined ? null : el("span", { class: "file__size" }, ` ${formatBytes(size)}`),
   );
 }
 
-
-function attemptDuration(attempt: Attempt, now: number): number {
-  const start = Date.parse(attempt.started_at);
-  const end = attempt.finished_at === null ? now : Date.parse(attempt.finished_at);
-  return Math.max(0, (end - start) / 1000);
-}
-
-function lastAttempt(step: RunStep): Attempt | null {
-  return step.attempts.length > 0 ? step.attempts[step.attempts.length - 1]! : null;
-}
-
-function valueText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-/** An action the server said no to, kept on the page until it is dismissed or an action works. */
-interface Refusal {
-  kind: string;
-  error: { code: string; message: string; path?: string; file?: string };
-}
-
-/** What `fill` takes, so a builder can name what it returns without a type dom.ts keeps to itself. */
-type Children = Parameters<typeof fill>[1];
-function lineNode(line: LogLine): HTMLElement {
-  const clipped = clipLine(line.text);
+function downloadButton(label: string, href: string, onClick: () => void): HTMLAnchorElement {
   return el(
-    "li",
-    { class: "log__line" },
-    el("span", { class: "log__offset" }, String(line.offset)),
-    el("span", { class: "log__text" }, clipped === "" ? " " : clipped),
+    "a",
+    {
+      class: "btn",
+      href,
+      "data-download": label,
+      onclick: (event: Event) => {
+        event.preventDefault();
+        onClick();
+      },
+    },
+    label,
   );
 }
 
-function attemptsOf(run_: Run, step: string): number[] {
-  return (run_.steps[step]?.attempts ?? []).map((entry) => entry.n);
+function attemptsOf(run: Run, step: string): number[] {
+  return (run.steps[step]?.attempts ?? []).map((entry) => entry.n);
 }
 
-/**
- * Whether a step has said its last word (SPEC 4.4). `waiting_retry` is not one of these: a step that
- * failed an attempt and is due another one is still going, and moving off it is how a pane ends up
- * reading a parallel step while the one you chose starts its second attempt behind you.
- */
+/** A step that has said its last word (SPEC 4.4); `waiting_retry` is still going. */
 function settled(step: RunStep | undefined): boolean {
   return step !== undefined && ["succeeded", "failed", "skipped", "cancelled"].includes(step.status);
 }
 
-function pickStep(run_: Run): string {
-  const ids = Object.keys(run_.steps);
-  const live = ids.find((step) => run_.steps[step]!.status === "running");
-  const failed = ids.find((step) => run_.steps[step]!.status === "failed");
-  const last = ids.toReversed().find((step) => (run_.steps[step]?.attempts.length ?? 0) > 0);
+function pickStep(run: Run): string {
+  const ids = Object.keys(run.steps);
+  const live = ids.find((id) => run.steps[id]!.status === "running");
+  const failed = ids.find((id) => run.steps[id]!.status === "failed");
+  const last = ids.toReversed().find((id) => (run.steps[id]?.attempts.length ?? 0) > 0);
   return live ?? failed ?? last ?? ids[0] ?? "";
 }
 
@@ -98,9 +125,69 @@ function stateChanged(before: Run, after: Run): string[] {
   return changed;
 }
 
-// ---------- one run ----------
+function metaPair(header: HTMLElement, label: string): { label: HTMLElement; value: HTMLElement } | null {
+  const labelNode = [...header.querySelectorAll<HTMLElement>(".meta-line__label")].find((node) => node.textContent === label);
+  if (labelNode === undefined) return null;
+  const parent = labelNode.parentElement ?? (labelNode as unknown as { parent: HTMLElement | null }).parent;
+  if (parent === null) return null;
+  const index = [...parent.children].indexOf(labelNode);
+  const value = parent.children[index + 1] as HTMLElement | undefined;
+  return value === undefined ? null : { label: labelNode, value };
+}
 
-export async function renderRunPage(view: HTMLElement, id: string, signal: AbortSignal, clock: Clock = wallClock): Promise<void> {
+function lineNode(line: LogLine, number: number): HTMLElement {
+  const clipped = clipLine(line.text);
+  return el(
+    "li",
+    { class: "log__line" },
+    el("span", { class: "log__number", "aria-hidden": "true" }, String(number)),
+    el("span", { class: "log__text" }, clipped === "" ? " " : clipped),
+  );
+}
+
+/** The block versions a run's snapshot names, in the library's own vocabulary. */
+function libraryRefs(text: string): { name: string; version: number }[] {
+  const refs = new Map<string, { name: string; version: number }>();
+  const add = (name: string, blockVersion: number): void => {
+    refs.set(`${name}@${blockVersion}`, { name, version: blockVersion });
+  };
+  const read = (value: string): void => {
+    const ref = readUses(value);
+    if (ref !== null && ref.version !== null) add(ref.name, ref.version);
+    else {
+      // A run's snapshot keeps the file-shaped form of a library reference, because that is what
+      // the server staged. The library is still the thing that answers with its contract.
+      const staged = /^\.\/([a-z][a-z0-9-]{0,63})(?:\.sh)?@([1-9][0-9]*)$/.exec(value);
+      if (staged !== null) add(staged[1]!, Number(staged[2]));
+    }
+  };
+  const parsed = analyze(text, {});
+  if (parsed.ok) {
+    for (const step of parsed.steps) if (step.uses !== null) read(step.uses);
+  } else {
+    for (const match of text.matchAll(/(?:\.\/)?([a-z][a-z0-9-]{0,63})(?:\.sh)?@([1-9][0-9]*)/g)) {
+      add(match[1]!, Number(match[2]));
+    }
+  }
+  return [...refs.values()];
+}
+
+/** The run's snapshot with a staged `./name@1` rewritten to the library's `name@1`. */
+function graphText(text: string): string {
+  return text.replace(/\.\/([a-z][a-z0-9-]{0,63})(?:\.sh)?(@[1-9][0-9]*)/g, "$1$2");
+}
+
+interface Refusal {
+  kind: string;
+  error: { code: string; message: string; path?: string; file?: string };
+}
+
+export async function renderRunPage(
+  view: HTMLElement,
+  id: string,
+  signal: AbortSignal,
+  clock: Clock = wallClock,
+): Promise<void> {
   view.replaceChildren(stateLine(`Loading run ${id}.`));
   let run: Run;
   try {
@@ -114,190 +201,152 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
   }
   if (signal.aborted) return;
 
-  let selected = pickStep(run);
-  let attempt = attemptsOf(run, selected).at(-1) ?? 0;
+  const params = new URL(location.href).searchParams;
+  let selected = params.get("step") ?? pickStep(run);
+  if (run.steps[selected] === undefined) selected = pickStep(run);
+  let attempt = Number(params.get("attempt") ?? "0");
+  if (!attemptsOf(run, selected).includes(attempt)) attempt = attemptsOf(run, selected).at(-1) ?? 0;
+  let selectedTab = readTab("logs");
   let log: LogState = emptyLog;
-  /** Whether a run read is on its way, so a click and a timer cannot land two of them out of order. */
   let polling = false;
   let follow = true;
-  let paused = false;
   let busy = false;
-  // The server's own words after it refused an action, in state of its own because renderHead runs on
-  // every poll and would otherwise hide the box in the same tick the refusal arrived in. Cleared by a
-  // dismiss or by an action that works.
   let refused: Refusal | null = null;
-  // The last read that failed, shown until a read succeeds. A page that has stopped getting polls
-  // keeps drawing the last good one, so it has to say that it has.
   let lastError: string | null = null;
-  // What the last read of the run could not say, kept apart from the log's own failure: the two are
-  // read separately, and a log that got through must not cover up a run that did not.
   let lastPollError: string | null = null;
-  let programmaticScroll = false;
-  // The manifest of downloadable files, read once per run rather than on every poll: what a run can
-  // hand out does not change while you watch it, and a second of polling should not refetch a tree.
   let files: RunFiles | null = null;
-  // Finished lines of `log` that have been handled by renderLog, and how many of those were not drawn.
   let shown = 0;
   let notDrawn = 0;
-  // The node showing the unfinished last line, which has to be replaced when more of that line arrives.
   let partialNode: HTMLElement | null = null;
-  // Bumped when the log is pointed somewhere else, so a read loop still in flight lets go of it.
   let readGeneration = 0;
   let reading: Promise<void> | null = null;
   let readingKey = "";
-  // The next poll, and the way to call it off. Null means there is none: the run has finished, or the
-  // tab is hidden, and `startPolling` is the only thing that puts one back.
   let unmake: (() => void) | null = null;
+  let programmaticScroll = false;
 
-  // The id is 26 characters of code, not a headline: "Run" is the display word and the id goes under
-  // it in the code face, where it reads as one line.
-  const title = el("h1", { class: "title" }, "Run ", el("span", { class: "title__id mono" }, run.id));
-  const bigSign = el("div", { class: "runhead__sign" });
-  // The head is built once and updated in place: it holds the link to the pipeline, and a head
-  // rebuilt every second drops your focus off it.
-  const metaStamp = el("span", {});
-  const metaStarted = el("span", {});
-  const metaElapsed = el("span", {});
-  const metaCancel = el("span", { hidden: true }, "cancel requested");
-  // Where a run that cannot be read says so. The line under the log belongs to the log: a run whose
-  // poll is lost is a stale state at the top of the page, and a log read that happened to get through
-  // must not be allowed to hide it.
-  const metaPoll = el("span", { class: "runhead__stale", hidden: true }, "lost the server, still trying");
-  const meta = el(
-    "div",
-    { class: "runhead__meta" },
-    metaStamp,
-    el("a", { href: `/app/pipeline/${run.pipeline}`, "data-link": "" }, run.pipeline),
-    metaStarted,
-    metaElapsed,
-    metaCancel,
-    metaPoll,
-  );
-  const jump = el("input", {
-    id: "run-jump",
-    type: "text",
-    value: run.id,
-    spellcheck: "false",
-    onkeydown: (event) => {
-      if ((event as KeyboardEvent).key !== "Enter") return;
-      event.preventDefault();
-      const value = (event.target as HTMLInputElement).value.trim();
-      if (value !== "") navigate(`/runs/${value}`);
-    },
+  // ---------- the head ----------
+
+  const startedValue = el("time");
+  const finishedValue = el("time");
+  const durationValue = el("span", { class: "run-page__duration" });
+  const stepsValue = el("span", { class: "run-page__steps" });
+  const version = run.pipeline_version;
+  const versionValue =
+    version === null || version === undefined
+      ? null
+      : el("a", { class: "mono", href: `/app/pipelines/${run.pipeline}?version=${version}`, "data-link": "" }, `v${version}`);
+
+  const cancelButton = button("Cancel", { onClick: () => void askCancel() });
+  cancelButton.dataset.action = "cancel";
+  const retryButton = button("Retry", { primary: true, onClick: () => void act("retry") });
+  retryButton.dataset.action = "retry";
+  const resumeButton = button("Resume", { onClick: () => void act("resume") });
+  resumeButton.dataset.action = "resume";
+  const download = downloadButton("Download", api.runArchiveUrl(run.id), () => void api.saveRunArchive(run.id));
+  download.dataset.action = "download";
+  const deleteButton = button("Delete", { onClick: () => void askDelete() });
+  deleteButton.dataset.action = "delete";
+  const stale = el("span", { class: "run-page__stale", hidden: true }, "lost the server, still trying");
+  const actions = el("div", { class: "row" }, cancelButton, resumeButton, retryButton, download, deleteButton, stale);
+  const idStatus = statusStamp(run.status);
+  const idCancel = el("span", { class: "stamp", hidden: true }, "cancel requested");
+  const header = pageHeader({
+    crumbs: [
+      { label: "Runs", href: "/app/runs" },
+      { label: run.pipeline, href: `/app/pipelines/${run.pipeline}` },
+      { label: run.id, mono: true },
+    ],
+    title: run.pipeline,
+    actions: [actions],
+    idLine: { id: run.id, stamps: [idStatus, idCancel] },
+    meta: [
+      ["Started", startedValue],
+      ["Finished", finishedValue],
+      ["Duration", durationValue],
+      ["Steps", stepsValue],
+      ...(versionValue === null ? [] : ([["Version", versionValue]] as [string, Child][])),
+    ],
   });
-  const cancelButton = el(
-    "button",
-    { class: "btn", type: "button", hidden: true, onclick: () => cancelDialog.showModal() },
-    "Cancel run",
-  );
-  const resumeButton = el(
-    "button",
-    { class: "btn", type: "button", hidden: true, onclick: () => void act("resume") },
-    "Resume",
-  );
-  const retryButton = el(
-    "button",
-    { class: "btn", type: "button", hidden: true, onclick: () => void act("retry") },
-    "Retry",
-  );
-  const readOnly = el("span", { class: "stamp stamp--type", hidden: true }, "read only");
-  // The alarm's own retry, built once for the same reason: it says how many steps it will reset, and
-  // that number is what changes, not the button.
-  const alarmRetry = el("button", { class: "btn btn--ink", type: "button", "data-action": "retry-all", onclick: () => void act("retry") });
-  // Built once, for the reason the step rows give below: what you type in the jump box and the focus
-  // on these buttons do not survive a rebuild, and renderHead runs every second.
-  const tools = el(
-    "div",
-    { class: "runhead__tools" },
-    el("div", { class: "field" }, el("label", { class: "label", for: "run-jump" }, "Run"), jump),
-    el("a", { class: "btn", href: "/app/runs", "data-link": "" }, "All runs"),
-    downloadLink(api.runArchiveUrl(run.id), "Download the run", () => void api.saveRunArchive(run.id)),
-    downloadLink(api.runManifestUrl(run.id), "Download the manifest", () => void api.saveRunManifest(run.id)),
-    cancelButton,
-    resumeButton,
-    retryButton,
-    readOnly,
-  );
-  const params = el("dl", { class: "params", "aria-label": "Inputs of this run" });
-  const alarm = el("section", { class: "alarm", "aria-labelledby": "alarm-title", hidden: true });
-  const stepList = el("ul", { class: "steps", "aria-label": "Steps of this run, in the order the pipeline declares them" });
-  const panelTitle = el("h2", { class: "h2", id: "panel-title" });
-  const panelMeta = el("p", { class: "logpanel__meta" });
-  const panelOutputs = el("dl", { class: "outputs" });
-  const panelFiles = el("div", { class: "files", "aria-label": "Files of this attempt" });
-  const noAttempt = el("span", { class: "help" }, "This step has never started, so there is no log yet.");
-  const attemptPicker = el(
-    "div",
-    { class: "attempts", role: "group", "aria-label": "Attempt whose log this is" },
-    el("span", { class: "label label--inline" }, "Attempt"),
-    noAttempt,
-  );
-  // One button per attempt number, made the first time that number is seen and hidden when the step
-  // on screen has no such attempt, because a rebuilt button loses your focus and a step gains
-  // attempts while you watch it.
-  const attemptButtons = new Map<number, HTMLButtonElement>();
-  const followButton = el("button", { class: "btn", type: "button", "aria-pressed": "true", onclick: toggleFollow }, "Follow");
-  const pauseButton = el("button", { class: "btn", type: "button", onclick: togglePause }, "Pause");
-  const logStatus = el("p", { class: "logpanel__status", id: "log-status" });
-  const logNote = el("p", { class: "logpanel__meta", id: "log-note", hidden: true });
+  const finishedPair = metaPair(header, "Finished");
+
+  const alarmSlot = el("div", { class: "run-alarm", hidden: true });
+  const timeline: Timeline = drawTimeline(run, {
+    now: clock.now(),
+    selected,
+    onSelect: (stepId) => choose(stepId, true),
+  });
+
+  // ---------- the log ----------
+
+  const attemptHost = el("div", { class: "attempts" });
+  const followButton = button("Follow", {
+    onClick: () => toggleFollow(),
+  }) as HTMLButtonElement;
+  followButton.setAttribute("aria-pressed", "true");
+  const logStatus = el("p", { class: "log-status", id: "log-status" });
+  const logBytes = el("span", { class: "log-bytes", "aria-label": "Bytes read so far" });
+  const logDownloadHost = el("span", { class: "log-download" });
+  const logNote = el("p", { class: "log-note help", id: "log-note", hidden: true });
   const logLinesNode = el("ol", { class: "log__lines" });
-  // role=log would read every line aloud; the step's state change is announced on its own instead.
   const logBox = el(
     "div",
-    { class: "log", tabindex: "0", "aria-label": "Log output. Arrow keys scroll it.", "aria-live": "off", "aria-describedby": "log-status log-note" },
+    {
+      class: "log",
+      tabindex: "0",
+      "aria-label": "Log output. Arrow keys scroll it.",
+      "aria-live": "off",
+      "aria-describedby": "log-status log-note",
+    },
     logLinesNode,
   );
-
-  const cancelDialog = el(
-    "dialog",
-    { class: "dialog", "aria-labelledby": "cancel-title" },
+  const logPanel = el(
+    "div",
+    { class: "log-panel" },
     el(
       "div",
-      { class: "dialog__body" },
-      el("h2", { class: "dialog__title", id: "cancel-title" }, "Cancel this run?"),
-      el("p", {}, "The running step gets SIGTERM and every pending step is cancelled. The work directories stay, so a retry carries on from them."),
-      el(
-        "div",
-        { class: "row" },
-        el("button", { class: "btn btn--ink", type: "button", onclick: () => { cancelDialog.close(); void act("cancel"); } }, "Cancel the run"),
-        el("button", { class: "btn", type: "button", onclick: () => cancelDialog.close() }, "Keep it running"),
-      ),
+      { class: "log-toolbar" },
+      el("span", { class: "log-toolbar__step mono", id: "log-step" }),
+      attemptHost,
+      followButton,
+      logBytes,
+      logDownloadHost,
     ),
+    logStatus,
+    logNote,
+    logBox,
   );
 
-  view.replaceChildren(
-    el(
-      "div",
-      { class: "runhead" },
-      bigSign,
-      el("div", { class: "runhead__text" }, title, meta),
-      tools,
-    ),
-    params,
-    alarm,
-    el("div", { class: "run" }, el("section", { "aria-label": "Steps" }, stepList), el(
-      "section",
-      { class: "logpanel", id: "log-panel" },
-      el("div", { class: "bar" }, panelTitle, el("div", { class: "logpanel__tools" }, logStatus, followButton, pauseButton)),
-      panelMeta,
-      attemptPicker,
-      panelOutputs,
-      panelFiles,
-      logNote,
-      logBox,
-    )),
-    cancelDialog,
+  // ---------- the tabs ----------
+
+  const stepsPanel = el("div", { class: "run-tabpanel" });
+  const ioPanel = el("div", { class: "run-tabpanel" });
+  const filesPanel = el("div", { class: "run-tabpanel" });
+  const graphPanel = el("div", { class: "run-graph" });
+  const tabRoot = tabs(
+    [
+      { id: "logs", label: "Logs", panel: logPanel },
+      { id: "steps", label: "Steps", panel: stepsPanel },
+      { id: "graph", label: "Graph", panel: graphPanel },
+      { id: "io", label: "Inputs & outputs", panel: ioPanel },
+      { id: "files", label: "Files", panel: filesPanel },
+    ],
+    selectedTab,
+    (tab) => {
+      selectedTab = tab;
+      writeTab(tab);
+      rememberStepAttempt();
+      if (tab === "graph") void ensureGraph();
+      renderTabs();
+    },
   );
+
+  view.replaceChildren(header, alarmSlot, timeline.node, tabRoot);
 
   signal.addEventListener("abort", () => {
     unmake?.();
+    graph?.destroy();
   });
 
-  /**
-   * Rebuild a node only when what it says has changed. This screen re-renders every second, and a
-   * rebuilt node takes your focus and whatever you had typed in it with it; the step rows below are
-   * the precedent.
-   */
   const said = new WeakMap<HTMLElement, string>();
   function say(node: HTMLElement, key: string, build: () => Children): void {
     if (said.get(node) === key) return;
@@ -305,91 +354,80 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     fill(node, build());
   }
 
-  function stepNote(step: RunStep): string {
-    const runSteps = run.steps;
-    // Whether the log panel is holding this step. Follow keeps a step there while it waits its turn or
-    // its retry, and a row that only says "Waits for a free slot" reads like the panel is stuck on the
-    // wrong step. Said once, in the row, where the state is.
-    const onScreen = step.id === selected ? "On screen. " : "";
-    if (step.status === "waiting_retry") {
-      const due = step.next_attempt_at === null ? Number.NaN : Date.parse(step.next_attempt_at);
-      // A retry time that cannot be read is not a countdown, and one that has gone past is not either:
-      // the engine's clock and the browser's are two clocks, and counting backwards is never the truth.
-      if (Number.isNaN(due)) return `${onScreen}Waiting to retry.`;
-      if (due <= clock.now()) return `${onScreen}Another attempt is due now.`;
-      // Rounded up, because "in 0 s" with a moment still to go reads as a timer that has stopped.
-      return `${onScreen}Another attempt in ${duration(Math.ceil((due - clock.now()) / 1000))}.`;
-    }
-    if (step.status === "pending") {
-      const open = step.needs.filter((need) => runSteps[need]?.status !== "succeeded");
-      return `${onScreen}${open.length > 0 ? `Waits for ${open.join(", ")}.` : "Waits for a free slot."}`;
-    }
-    if (step.status === "running") return `Attempt ${step.attempts_used}, ${step.attempts.length} attempt${step.attempts.length === 1 ? "" : "s"} so far.`;
-    if (step.status === "failed") return step.failure !== null ? `${step.failure.code}: ${step.failure.message}. ${step.attempts_used} attempt${step.attempts_used === 1 ? "" : "s"} used; the work directory is kept.` : "Failed.";
-    if (step.status === "skipped") {
-      const bad = step.needs.find((need) => ["failed", "cancelled", "skipped"].includes(runSteps[need]?.status ?? ""));
-      return bad !== undefined ? `${bad} ${runSteps[bad]!.status}, so this never started.` : "A dependency did not succeed.";
-    }
-    if (step.status === "cancelled") return "Cancelled. The work directory is kept.";
-    return step.attempts_used > 1 ? `Took ${step.attempts_used} attempts.` : "Done.";
+  function rememberStepAttempt(): void {
+    const url = new URL(location.href);
+    if (selected === "") url.searchParams.delete("step");
+    else url.searchParams.set("step", selected);
+    if (attempt > 0) url.searchParams.set("attempt", String(attempt));
+    else url.searchParams.delete("attempt");
+    history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  }
+
+  function showTab(tab: string): void {
+    const buttonNode = [...tabRoot.querySelectorAll<HTMLButtonElement>(".tab")].find((node) =>
+      (node.getAttribute("id") ?? "").endsWith(`-tab-${tab}`),
+    );
+    if (buttonNode !== undefined) buttonNode.click();
+    else if (tab === "graph") void ensureGraph();
   }
 
   function renderHead(): void {
-    document.title = `Run ${run.id} — Bashreactor`;
+    document.title = `${run.pipeline} — Bashreactor`;
     const stamp = state(run.status);
-    say(bigSign, stamp, () => [sign(stamp, "sign sign--large")]);
-    metaStamp.replaceChildren(stateStamp(stamp));
-    const elapsed = ((run.finished_at !== null ? Date.parse(run.finished_at) : clock.now()) - Date.parse(run.created_at)) / 1000;
-    // A time this build cannot read is not shown at all: "started NaN" is worse than the word with
-    // nothing after it, and the exact instant is only worth putting up if it is a real instant.
-    const stored = isoInstant(run.created_at);
-    const printed = when(run.created_at);
-    metaStarted.hidden = printed === "";
-    metaStarted.textContent = printed === "" ? "started" : `started ${printed}`;
-    metaStarted.title = stored;
-    const counted = duration(elapsed);
-    metaElapsed.hidden = counted === "";
-    metaElapsed.textContent =
-      counted === "" ? "" : run.finished_at !== null ? `took ${counted}` : `running for ${counted}`;
-    metaCancel.hidden = run.cancel_requested_at === null;
-    metaPoll.hidden = lastPollError === null;
-    if (lastPollError !== null) metaPoll.setAttribute("title", lastPollError);
+    idStatus.replaceChildren(sign(stamp), stamp);
+    idCancel.hidden = run.cancel_requested_at === null;
+    const started = relativeTime(run.created_at, clock.now());
+    startedValue.textContent = started;
+    startedValue.setAttribute("datetime", run.created_at);
+    const exactStarted = exactTime(run.created_at);
+    if (exactStarted === "") startedValue.removeAttribute("title");
+    else startedValue.title = exactStarted;
+    const ended = run.finished_at === null ? null : relativeTime(run.finished_at, clock.now());
+    if (finishedPair !== null) {
+      finishedPair.label.hidden = ended === null;
+      finishedPair.value.hidden = ended === null;
+      finishedValue.textContent = ended ?? "";
+      if (run.finished_at !== null) {
+        finishedValue.setAttribute("datetime", run.finished_at);
+        const exactFinished = exactTime(run.finished_at);
+        if (exactFinished !== "") finishedValue.title = exactFinished;
+      }
+    }
+    const began = Date.parse(run.created_at);
+    const end = run.finished_at === null ? clock.now() : Date.parse(run.finished_at);
+    durationValue.textContent = Number.isNaN(began) || Number.isNaN(end) ? "—" : formatDuration(Math.max(0, end - began));
+    const counts = Object.values(run.steps);
+    const done = counts.filter((step) => step.status === "succeeded").length;
+    stepsValue.textContent = `${done} / ${counts.length}`;
 
-    // A run's inputs are fixed when it starts (SPEC 4.9), so this is built once and then left alone.
-    say(params, JSON.stringify(run.inputs), () =>
-      Object.entries(run.inputs).map(([key, value]) => el("div", {}, el("dt", {}, key), el("dd", {}, valueText(value)))),
-    );
-
-    // The controls already exist; only what they allow changes. Rebuilding them every second is what
-    // made the jump box forget what you typed and dropped your focus off Cancel.
-    //
-    // Each one is offered only where it can work, because a button whose only answer is a refusal is
-    // a trap. SPEC 4.6 allows a manual retry on a failed or cancelled run and on no other, so a
-    // succeeded run gets no Retry. SPEC 4.7 refuses resume while an engine holds the run, and this
-    // server holds every run it is driving, so a live claim gets no Resume; a stale claim does, since
-    // that run is the one worth taking up. A response without `claim` says nobody, which is read as no
-    // holder rather than a crash.
     const live = run.status === "running";
     const held = run.claim?.live === true;
     const writable = canWrite();
     cancelButton.hidden = !(writable && live);
     resumeButton.hidden = !(writable && live && !held);
     retryButton.hidden = !(writable && (run.status === "failed" || run.status === "cancelled"));
-    readOnly.hidden = writable;
-    cancelButton.disabled = busy;
-    resumeButton.disabled = busy;
-    retryButton.disabled = busy;
-    alarmRetry.disabled = busy;
+    deleteButton.hidden = !(writable && !live);
+    for (const control of [cancelButton, retryButton, resumeButton, deleteButton] as HTMLButtonElement[]) {
+      control.disabled = busy;
+    }
+    stale.hidden = lastPollError === null;
+    if (lastPollError !== null) stale.title = lastPollError;
 
     renderAlarm();
+    renderTimeline();
+    renderAttempts();
+    renderLogStatus();
+    renderTabs();
   }
 
-  /** Every step the run left failed, in the order the pipeline declares them. */
+  function renderTimeline(): void {
+    timeline.update(run, { now: clock.now(), selected, onSelect: (stepId) => choose(stepId, true) });
+  }
+
   function failedSteps(): string[] {
     return Object.keys(run.steps).filter((stepId) => run.steps[stepId]!.status === "failed");
   }
 
-  /** What a manual retry sets back to pending, which is more than the steps that failed (4.6). */
   function retryScope(): string {
     const parts: string[] = [];
     for (const status of ["failed", "skipped", "cancelled"] as const) {
@@ -401,217 +439,150 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
 
   function renderAlarm(): void {
     const failed = failedSteps();
-    // The box says one thing at a time: a refusal outranks the failures it was about. Both are
-    // rebuilt only when the words change, so the focus on a button inside it survives a poll.
     const key =
       refused !== null
         ? `refused ${refused.kind} ${refused.error.code}`
         : failed.map((stepId) => `${stepId} ${run.steps[stepId]!.failure?.code ?? ""}`).join(" · ");
-    alarm.hidden = key === "";
-    say(alarm, key, () => (refused !== null ? refusalBox(refused) : failed.length === 0 ? [] : failureBox(failed)));
+    alarmSlot.hidden = key === "";
+    if (key === "") {
+      alarmSlot.replaceChildren();
+      return;
+    }
+    say(alarmSlot, key, () => [refused !== null ? refusalAlarm(refused) : failureAlarm(failed)]);
   }
 
-  /** The server said no to an action, and its own words stay up until they are dismissed or beaten. */
-  function refusalBox(refusal: Refusal): Children {
+  function refusalAlarm(refusal: Refusal): HTMLElement {
     const kind = refusal.kind.charAt(0).toUpperCase() + refusal.kind.slice(1);
-    return [
-      el("h2", { class: "h2", id: "alarm-title" }, `${kind} refused`),
-      errorBox(refusal.error),
-      el("div", { class: "row" }, el("button", { class: "btn", type: "button", "data-action": "dismiss", onclick: dismissRefusal }, "Dismiss")),
-    ];
+    return alarm({
+      status: "failed",
+      lead: `${kind} refused`,
+      text: [el("code", {}, refusal.error.code), ` ${refusal.error.message}`],
+      actions: [
+        button("Dismiss", {
+          onClick: () => {
+            refused = null;
+            renderAlarm();
+          },
+        }),
+      ],
+    });
   }
 
-  function dismissRefusal(): void {
-    refused = null;
-    renderAlarm();
-  }
-
-  /** Every failed step by name, each one a way to its log, and a retry labelled with what it does. */
-  function failureBox(failed: string[]): Children {
+  function failureAlarm(failed: string[]): HTMLElement {
     const reset = Object.values(run.steps).filter((step) => ["failed", "skipped", "cancelled"].includes(step.status)).length;
-    alarmRetry.textContent = `Retry ${reset} ${reset === 1 ? "step" : "steps"}`;
-    return [
+    const names = failed.map((stepId) =>
       el(
-        "h2",
-        { class: "h2", id: "alarm-title" },
-        failed.length === 1 ? `${failed[0]} failed` : `${failed.length} steps failed`,
+        "button",
+        { class: "btn btn--small", type: "button", "data-log-step": stepId, onclick: () => showLog(stepId) },
+        stepId,
       ),
-      ...failed.map((stepId) => {
-        const step = run.steps[stepId]!;
-        return el(
-          "p",
-          { class: "row" },
-          el("button", { class: "btn", type: "button", "data-log-step": stepId, onclick: () => showLog(stepId) }, stepId),
-          el("span", {}, step.failure !== null ? `${step.failure.code}: ${step.failure.message}` : "The step exited with an error."),
-        );
-      }),
-      canWrite()
-        ? el(
-            "p",
-            { class: "help" },
-            `Retry sets ${retryScope()} back to pending and runs them again. The steps that succeeded keep their results, and the work directories are kept.`,
-          )
-        : null,
-      el("div", { class: "row" }, canWrite() ? alarmRetry : el("span", { class: "stamp stamp--type" }, "read only")),
-    ];
+    );
+    const words = failed.map((stepId) => {
+      const failure = run.steps[stepId]!.failure;
+      return failure === null ? "The step exited with an error." : `${failure.code}: ${failure.message}`;
+    });
+    const canRetry = canWrite();
+    const retry = button(reset > 0 ? `Retry ${reset} ${reset === 1 ? "step" : "steps"}` : "Retry", {
+      onClick: () => void act("retry"),
+      title: `Sets ${retryScope()} back to pending`,
+    });
+    retry.dataset.action = "retry-all";
+    const showLogButton = button("Show log", { onClick: () => showLog(failed[0] ?? selected) });
+    showLogButton.dataset.action = "show-log";
+    return alarm({
+      status: "failed",
+      lead:
+        failed.length === 1
+          ? el(
+              "button",
+              { class: "btn btn--text", type: "button", "data-log-step": failed[0], onclick: () => showLog(failed[0]!) },
+              `${failed[0]} failed`,
+            )
+          : `${failed.length} steps failed`,
+      text:
+        failed.length === 1
+          ? `· ${words[0]}`
+          : [
+              el("span", { class: "run-alarm__steps" }, ...names.flatMap((node, index) => [index === 0 ? "" : " · ", node])),
+              ` · ${words.join(" · ")}`,
+            ],
+      actions: [showLogButton, ...(canRetry ? [retry] : [])],
+    });
   }
 
-  /** Point the pane at one step's log and put the focus on its row, which is where the alarm sends you. */
   function showLog(stepId: string): void {
     choose(stepId, true);
-    stepList.querySelector<HTMLButtonElement>(`[data-step="${CSS.escape(stepId)}"]`)?.focus();
+    showTab("logs");
+    timeline.focus(stepId);
   }
 
-  /** One row per step, built once: the run polls every second and a rebuilt row loses your focus. */
-  interface Row {
-    button: HTMLButtonElement;
-    time: HTMLElement;
-    stamp: HTMLElement;
-    note: HTMLElement;
-  }
-  const rows: Record<string, Row> = {};
-  for (const stepId of Object.keys(run.steps)) {
-    const row: Row = {
-      button: null as unknown as HTMLButtonElement,
-      time: el("span", { class: "steprow__time" }),
-      stamp: el("span", { class: "steprow__stamp" }),
-      note: el("span", { class: "steprow__note" }),
-    };
-    row.button = el(
-      "button",
-      {
-        class: "steprow",
-        type: "button",
-        "data-step": stepId,
-        "aria-selected": "false",
-        onclick: () => choose(stepId, true),
-      },
-      el("span", { class: "steprow__id" }, stepId),
-      row.time,
-      row.stamp,
-      row.note,
-    );
-    rows[stepId] = row;
-    stepList.append(el("li", {}, row.button));
-  }
+  // ---------- the log's controls ----------
 
-  function renderSteps(): void {
-    for (const [stepId, row] of Object.entries(rows)) {
-      const step = run.steps[stepId];
-      if (step === undefined) continue;
-      const last = lastAttempt(step);
-      row.button.setAttribute("aria-selected", String(stepId === selected));
-      row.time.textContent = last !== null ? duration(attemptDuration(last, clock.now())) : "";
-      row.stamp.replaceChildren(stateStamp(state(step.status)));
-      row.note.textContent = stepNote(step);
-    }
-  }
-
-  function renderPanel(): void {
-    const step = run.steps[selected];
-    if (step === undefined) return;
-    panelTitle.textContent = selected;
-    say(panelMeta, `${step.name} ${step.block.name} ${step.block.uses} ${step.block.sha256}`, () => [
-      step.name !== selected ? `${step.name}. ` : "",
-      "Runs ",
-      el("a", { href: `/app/blocks/${step.block.name}`, "data-link": "" }, `${step.block.name} (${step.block.uses})`),
-      ". ",
-      `sha256 ${step.block.sha256.slice(0, 12)}…`,
-    ]);
-
-    // One button per attempt number, made once and updated in place: renderPanel runs on every poll,
-    // and a picker rebuilt under your cursor or your focus loses it.
+  let attemptKey = "";
+  function renderAttempts(): void {
     const attempts = attemptsOf(run, selected);
-    noAttempt.hidden = attempts.length !== 0;
-    for (const n of attempts) {
-      const button = attemptButtons.get(n) ?? newAttemptButton(n);
-      button.hidden = false;
-      button.setAttribute("aria-pressed", String(n === attempt));
+    const step = run.steps[selected];
+    const statuses = attempts.map((n) => step?.attempts.find((entry) => entry.n === n)?.status ?? "pending").join(",");
+    const key = `${selected}:${attempts.join(",")}:${statuses}:${attempt}`;
+    if (key === attemptKey) return;
+    attemptKey = key;
+    logPanel.querySelector(".log-toolbar__step")?.replaceChildren(selected);
+    if (attempts.length === 0) {
+      attemptHost.replaceChildren(el("span", { class: "help" }, "No attempts yet."));
+      return;
     }
-    for (const [n, button] of attemptButtons) if (!attempts.includes(n)) button.hidden = true;
-
-    const outputs = step.status === "succeeded" && step.outputs !== null ? Object.entries(step.outputs) : [];
-    panelOutputs.hidden = outputs.length === 0;
-    say(panelOutputs, outputs.map(([name, value]) => `${name}=${valueText(value)}`).join(","), () =>
-      outputs.map(([name, value]) => el("div", {}, el("dt", {}, name), el("dd", { tabindex: "0" }, valueText(value)))),
-    );
-
-    // The files this attempt left, taken from the manifest rather than guessed at: the run record says
-    // an output is called `report`, and only the tree says whether that is a file, how big it is, and
-    // whether it is still being written.
-    const listed = files?.steps[selected]?.attempts.find((entry) => entry.n === attempt);
-    const downloadable = [...(listed?.outputs ?? []), ...(listed?.work ?? []), ...(listed?.log ? [listed.log] : [])];
-    panelFiles.hidden = downloadable.length === 0;
-    say(panelFiles, downloadable.map((entry) => `${entry.path}:${entry.size ?? "-"}`).join(","), () =>
-      downloadable.length === 0
-        ? []
-        : [
-            el(
-              "span",
-              { class: "label" },
-              listed?.partial === true ? "Files, still being written" : "Files",
-            ),
-            ...downloadable.map((entry) =>
-              downloadLink(
-                api.runFileUrl(run.id, entry.path),
-                entry.path,
-                () => void api.saveRunFile(run.id, entry.path),
-                entry.size,
-              ),
-            ),
-            downloadLink(
-              api.runArchiveUrl(run.id, { step: selected, attempt }),
-              `Everything in ${selected} as one archive`,
-              () => void api.saveRunArchive(run.id, { step: selected, attempt }),
-            ),
-          ],
-    );
-
-    renderLogStatus();
-  }
-
-  function newAttemptButton(n: number): HTMLButtonElement {
-    const button = el(
-      "button",
-      {
-        class: "btn",
-        type: "button",
-        "aria-pressed": "false",
-        onclick: () => {
-          attempt = n;
-          log = emptyLog;
-          shown = 0;
-          renderPanel();
-          void readLog(true);
-        },
+    const control = segmented(
+      "Attempt",
+      attempts.map((n) => ({
+        value: String(n),
+        label: String(n),
+        sign: step?.attempts.find((entry) => entry.n === n)?.status ?? "pending",
+      })),
+      String(attempt === 0 ? attempts[attempts.length - 1] : attempt),
+      (value) => {
+        attempt = Number(value);
+        log = emptyLog;
+        shown = 0;
+        renderAttempts();
+        renderLog(true);
+        rememberStepAttempt();
+        void readLog(true);
       },
-      String(n),
     );
-    attemptButtons.set(n, button);
-    attemptPicker.append(button);
-    return button;
+    attemptHost.replaceChildren(control);
   }
 
-  /** The one line that says where the log cursor is, and whether anything can still arrive. */
   function renderLogStatus(): void {
     const step = run.steps[selected];
     const started = (step?.attempts.length ?? 0) > 0;
-    // Nothing more can be written to a finished run's log, so offering to follow or pause it is a
-    // button that does nothing.
-    const finished = run.status !== "running";
-    followButton.disabled = finished;
-    // A pause made while the run was live still has to be undoable after it ends, or the pane is
-    // stuck on half a log with the only way out of it greyed off.
-    pauseButton.disabled = !started || (finished && !paused);
+    const live = run.status === "running";
+    followButton.disabled = !live;
     followButton.setAttribute("aria-pressed", String(follow));
-    pauseButton.textContent = paused ? "Resume reading" : "Pause";
+    logBytes.textContent = `${formatBytes(log.offset)} read`;
 
     if (lastError !== null) logStatus.textContent = `Lost the server, still trying. ${lastError}`;
     else if (!started) logStatus.textContent = "Not started.";
-    else if (paused) logStatus.textContent = `Paused. Last read at byte ${log.offset}.`;
-    else if (!finished && step?.status === "running") logStatus.textContent = `Reading from byte ${log.offset}.`;
-    else if (log.truncated) logStatus.textContent = `Read to byte ${log.offset}; more of the log is waiting.`;
-    else logStatus.textContent = `Read to byte ${log.offset}.`;
+    else if (log.truncated) logStatus.textContent = "More of the log is waiting.";
+    else if (live && step?.status === "running") logStatus.textContent = "Reading.";
+    else logStatus.textContent = "Read to the end.";
+  }
+
+  function renderLogDownload(): void {
+    const listed = files?.steps[selected]?.attempts.find((entry) => entry.n === attempt);
+    const logPath = listed?.log?.path;
+    const key = logPath === undefined ? "" : `${logPath}:${listed?.log?.size ?? ""}`;
+    say(logDownloadHost, key, () =>
+      logPath === undefined
+        ? []
+        : [
+            fileLink(
+              api.runFileUrl(run.id, logPath),
+              "Download log",
+              () => void api.saveRunFile(run.id, logPath),
+              listed?.log?.size,
+            ),
+          ],
+    );
   }
 
   function renderLog(reset: boolean): void {
@@ -620,13 +591,13 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     if (lines.length === 0) {
       const step = run.steps[selected];
       const message =
-        step === undefined || step.status === "pending"
-          ? `${selected} has not started. ${step === undefined ? "" : stepNote(step)}`
-          : step.status === "skipped"
-            ? `${selected} was skipped. ${stepNote(step)}`
-            : step.status === "cancelled"
-              ? `${selected} was cancelled before it printed anything.`
-              : "Waiting for the first line.";
+        step === undefined || step.attempts.length === 0
+          ? run.status === "running"
+            ? "No output yet."
+            : "This step never started."
+          : run.status === "running"
+            ? "No output yet."
+            : "This attempt wrote nothing.";
       logLinesNode.replaceChildren(el("li", { class: "log__empty" }, message));
       logNote.hidden = true;
       shown = 0;
@@ -639,19 +610,16 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
       notDrawn = 0;
       partialNode = null;
     }
-    // The unfinished line is drawn again each time, because more of it may have arrived.
     partialNode?.remove();
     partialNode = null;
 
-    // A log of many megabytes must not become hundreds of thousands of nodes: only the last
-    // MAX_DRAWN_LINES are kept, and the note above the pane says how many are not.
     const fresh = log.lines.slice(shown);
     const drawn = fresh.slice(-MAX_DRAWN_LINES);
     notDrawn += fresh.length - drawn.length;
-    for (const line of drawn) logLinesNode.append(lineNode(line));
+    drawn.forEach((line, index) => logLinesNode.append(lineNode(line, shown + index + 1)));
     shown = log.lines.length;
     if (log.partial !== "") {
-      partialNode = lineNode({ offset: log.partialOffset, text: log.partial });
+      partialNode = lineNode({ offset: log.partialOffset, text: log.partial }, log.lines.length + 1);
       logLinesNode.append(partialNode);
     }
     while (logLinesNode.childElementCount > MAX_DRAWN_LINES) {
@@ -659,12 +627,9 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
       notDrawn += 1;
     }
 
-    const first = log.lines[notDrawn];
     logNote.hidden = notDrawn === 0;
     if (notDrawn > 0) {
-      logNote.textContent =
-        `Drawing the last ${MAX_DRAWN_LINES} lines. The first ${notDrawn} lines, bytes 0 to ${first?.offset ?? log.partialOffset}, are not drawn; ` +
-        `read them with bashreactor runs logs ${run.id} ${selected}.`;
+      logNote.textContent = `Drawing the last ${MAX_DRAWN_LINES} lines. The first ${notDrawn} lines are not drawn.`;
     }
     if (follow) scrollToEnd();
     else if (reset) logBox.scrollTop = 0;
@@ -678,12 +643,11 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     });
   }
 
-  // Scrolling up to read means you left the live edge; Follow says so rather than yanking you back.
   logBox.addEventListener("scroll", () => {
     if (programmaticScroll || !follow) return;
     if (logBox.scrollTop + logBox.clientHeight < logBox.scrollHeight - 8) {
       follow = false;
-      renderPanel();
+      renderLogStatus();
     }
   });
 
@@ -693,18 +657,20 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     selected = stepId;
     const attempts = attemptsOf(run, stepId);
     const newest = attempts.at(-1) ?? 0;
-    // The pane holds one step's and one attempt's bytes, so pointing it at another step always starts
-    // it again: the old offset belongs to a log that is no longer on screen.
     if (moved || newest !== attempt) {
       attempt = newest;
       log = emptyLog;
       shown = 0;
     }
     if (byHand && run.steps[stepId]!.status !== "running" && follow) follow = false;
-    renderSteps();
-    renderPanel();
+    timeline.select(stepId);
+    renderAttempts();
+    renderLog(true);
+    renderLogStatus();
+    renderAlarm();
+    renderTabs();
+    if (moved) rememberStepAttempt();
     if (attempts.length > 0) void readLog(true);
-    else renderLog(true);
   }
 
   function toggleFollow(): void {
@@ -714,22 +680,12 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
       if (live !== undefined && live !== selected) choose(live, false);
       scrollToEnd();
     }
-    renderPanel();
+    renderLogStatus();
   }
 
-  function togglePause(): void {
-    paused = !paused;
-    if (!paused) void readLog(false);
-    renderPanel();
-  }
-
-  // One read is one capped chunk, so the pane reads on while the server says there is more: a finished
-  // run stops polling, and its tail would otherwise never arrive. Only one loop runs at a time, because
-  // two readers from the same offset would hand feedLog chunks that are not where it left off.
   function readLog(reset: boolean): Promise<void> {
-    if (paused || attempt === 0) return Promise.resolve();
+    if (attempt === 0) return Promise.resolve();
     const key = `${selected}/${attempt}`;
-    // A loop reading another attempt's log has nothing to give this one.
     if (reset || key !== readingKey) {
       readGeneration += 1;
       reading = null;
@@ -752,20 +708,16 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
         const chunk: LogChunk = await api.log(run.id, selected, attempt, first ? 0 : log.offset);
         if (signal.aborted || generation !== readGeneration || key !== `${selected}/${attempt}`) return;
         log = feedLog(first ? emptyLog : log, chunk);
-        // A read that worked is the end of a bad stretch, and the line under the log is the place
-        // that says how far the cursor has got, so both are said here and not only at the end.
         lastError = null;
         renderLogStatus();
         renderLog(first);
         first = false;
-        if (!chunk.truncated || paused) break;
-        // Let the browser paint and take input between megabytes.
+        if (!chunk.truncated) break;
         await new Promise((done) => setTimeout(done, 0));
       }
-      renderPanel();
+      renderLogDownload();
     } catch (error) {
       if (signal.aborted || generation !== readGeneration) return;
-      // A log that is not there is an honest empty pane, not a stack of banners.
       if (error instanceof ApiError && (error.code === "attempt_not_found" || error.code === "step_not_found")) {
         log = emptyLog;
         renderLog(true);
@@ -777,11 +729,38 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     }
   }
 
-  async function act(kind: "cancel" | "retry" | "resume"): Promise<void> {
+  // ---------- actions ----------
+
+  async function askCancel(): Promise<void> {
+    const yes = await confirmDialog({
+      title: "Cancel this run?",
+      text: "The running step gets SIGTERM and every pending step is cancelled. The work directories stay, so a retry carries on from them.",
+      confirmLabel: "Cancel the run",
+    });
+    if (yes) await act("cancel");
+  }
+
+  async function askDelete(): Promise<void> {
+    const yes = await confirmDialog({
+      title: "Delete this run?",
+      text: "Its directory, every log and every file a block made are removed. This cannot be undone.",
+      confirmLabel: "Delete the run",
+    });
+    if (yes) await act("delete");
+  }
+
+  async function act(kind: "cancel" | "retry" | "resume" | "delete"): Promise<void> {
     busy = true;
     renderHead();
     try {
-      const next = kind === "cancel" ? await api.cancelRun(run.id) : kind === "retry" ? await api.retryRun(run.id) : await api.resumeRun(run.id);
+      if (kind === "delete") {
+        await api.deleteRun(run.id);
+        announce(`${run.id} deleted.`);
+        navigate("/runs");
+        return;
+      }
+      const next =
+        kind === "cancel" ? await api.cancelRun(run.id) : kind === "retry" ? await api.retryRun(run.id) : await api.resumeRun(run.id);
       run = next;
       refused = null;
       lastError = null;
@@ -792,15 +771,8 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
         follow = true;
       }
       renderHead();
-      renderSteps();
-      renderPanel();
-      // An action you just took is worth a read now rather than one from a second ago, and it is the
-      // one thing that can make a finished run live again, so this is what starts the loop back up.
       void tick();
     } catch (error) {
-      // run_not_active, run_claimed, run_not_retryable: the server's own words, on the run's own
-      // page, and in state of their own, because the `finally` below renders the head and a head
-      // render that only looks at the run would hide the box in the same tick the refusal arrived.
       refused = { kind, error: errorBody(error) };
     } finally {
       busy = false;
@@ -808,11 +780,241 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     }
   }
 
+  // ---------- steps, inputs and outputs, files ----------
+
+  function renderTabs(): void {
+    const stepKey = Object.values(run.steps)
+      .map((step) => `${step.id}:${step.status}:${step.attempts.length}:${step.attempts_used}:${Object.keys(step.outputs ?? {}).join("|")}`)
+      .join(",");
+    say(stepsPanel, stepKey, () => [stepsTable()]);
+
+    const ioKey = `${run.status}:${JSON.stringify(run.inputs)}:${JSON.stringify(run.outputs)}`;
+    say(ioPanel, ioKey, () => [inputsOutputs()]);
+
+    const fileKey = files === null ? "none" : JSON.stringify(files);
+    say(filesPanel, fileKey, () => [filesView()]);
+  }
+
+  function stepsTable(): HTMLElement {
+    const rows = Object.values(run.steps);
+    const drawn = table(
+      [
+        {
+          header: "Step",
+          cell: (step: RunStep) => {
+            const newest = attemptsOf(run, step.id).at(-1) ?? 0;
+            const href = `/app/runs/${run.id}?tab=logs&step=${encodeURIComponent(step.id)}&attempt=${newest}`;
+            return el(
+              "a",
+              {
+                class: "table__link",
+                href,
+                "data-link": "",
+                onclick: (event: Event) => {
+                  event.preventDefault();
+                  openLogs(step.id);
+                },
+              },
+              el("span", { class: "mono" }, step.id),
+              step.name !== step.id ? el("span", { class: "step-cell__name" }, step.name) : null,
+            );
+          },
+        },
+        { header: "Block", cell: (step: RunStep) => el("span", { class: "mono" }, blockLabel(step.block.uses)) },
+        { header: "Status", cell: (step: RunStep) => statusStamp(state(step.status)) },
+        { header: "Attempts", align: "right", cell: (step: RunStep) => String(step.attempts_used) },
+        {
+          header: "Started",
+          cell: (step: RunStep) => {
+            const last = lastAttempt(step);
+            if (last === null) return "—";
+            const node = el("time", {}, relativeTime(last.started_at, clock.now()));
+            node.setAttribute("datetime", last.started_at);
+            const exact = exactTime(last.started_at);
+            if (exact !== "") node.title = exact;
+            return node;
+          },
+        },
+        {
+          header: "Duration",
+          align: "right",
+          cell: (step: RunStep) => {
+            const last = lastAttempt(step);
+            if (last === null) return "—";
+            const seconds = attemptSeconds(last, clock.now());
+            return Number.isNaN(seconds) ? "—" : formatDuration(seconds * 1000);
+          },
+        },
+        {
+          header: "Outputs",
+          cell: (step: RunStep) => {
+            const names = Object.keys(step.outputs ?? {});
+            return names.length === 0 ? "—" : el("span", { class: "mono" }, names.join(", "));
+          },
+        },
+      ],
+      rows,
+      {
+        empty: "This run has no steps.",
+        rowHref: (step: RunStep) =>
+          `/app/runs/${run.id}?tab=logs&step=${encodeURIComponent(step.id)}&attempt=${attemptsOf(run, step.id).at(-1) ?? 0}`,
+      },
+    );
+    drawn.classList.add("run-steps");
+    drawn.querySelectorAll("tbody tr").forEach((row, index) => {
+      const step = rows[index];
+      if (step !== undefined) row.setAttribute("data-step", step.id);
+    });
+    return drawn;
+  }
+
+  function openLogs(stepId: string): void {
+    choose(stepId, true);
+    showTab("logs");
+  }
+
+  function valueCell(value: unknown): Child {
+    if (isFileValue(value)) {
+      return fileLink(api.runFileUrl(run.id, value), value, () => void api.saveRunFile(run.id, value));
+    }
+    return el("span", { class: "mono run-io__value" }, valueText(value));
+  }
+
+  function inputsOutputs(): Child[] {
+    const inputs = Object.entries(run.inputs).map(([name, value]) => ({ name, value }));
+    const outputs = Object.entries(run.outputs ?? {}).map(([name, value]) => ({ name, value }));
+    const inputTable = table(
+      [
+        { header: "Name", cell: (row: { name: string; value: unknown }) => el("span", { class: "mono" }, row.name) },
+        { header: "Value", cell: (row: { name: string; value: unknown }) => valueCell(row.value) },
+      ],
+      inputs,
+      { empty: "This run has no inputs." },
+    );
+    const outputTable = table(
+      [
+        { header: "Name", cell: (row: { name: string; value: unknown }) => el("span", { class: "mono" }, row.name) },
+        { header: "Value", cell: (row: { name: string; value: unknown }) => valueCell(row.value) },
+      ],
+      outputs,
+      {
+        empty: run.status === "succeeded" ? "This run has no outputs." : "Outputs appear when the run succeeds.",
+      },
+    );
+    return [
+      el("section", { class: "run-io" }, el("h2", { class: "h2" }, "Inputs"), inputTable),
+      el("section", { class: "run-io" }, el("h2", { class: "h2" }, "Outputs"), outputTable),
+    ];
+  }
+
+  function filesView(): Child[] {
+    const rows: { path: string; size?: number }[] = [];
+    const seen = new Set<string>();
+    const add = (path: string, size?: number): void => {
+      if (seen.has(path)) return;
+      seen.add(path);
+      rows.push(size === undefined ? { path } : { path, size });
+    };
+    for (const output of files?.outputs ?? []) add(output.path, output.size);
+    for (const step of Object.values(files?.steps ?? {})) {
+      for (const attemptEntry of step.attempts) {
+        if (attemptEntry.log !== undefined) add(attemptEntry.log.path, attemptEntry.log.size);
+        for (const entry of [...(attemptEntry.outputs ?? []), ...(attemptEntry.work ?? [])]) add(entry.path, entry.size);
+      }
+    }
+
+    const downloadTable = table(
+      [
+        { header: "Path", cell: (row: { path: string; size?: number }) => el("span", { class: "mono" }, row.path) },
+        { header: "Size", align: "right", cell: (row: { path: string; size?: number }) => (row.size === undefined ? "—" : formatBytes(row.size)) },
+        {
+          header: "Download",
+          align: "right",
+          cell: (row: { path: string; size?: number }) =>
+            fileLink(api.runFileUrl(run.id, row.path), "Download", () => void api.saveRunFile(run.id, row.path)),
+        },
+      ],
+      rows,
+      { empty: files === null ? "No files for this run." : "This run wrote no files." },
+    );
+
+    const archives: HTMLElement[] = [];
+    for (const [stepId, step] of Object.entries(files?.steps ?? {})) {
+      for (const attemptEntry of step.attempts) {
+        const label = `Everything in ${stepId} attempt ${attemptEntry.n} as one archive`;
+        archives.push(
+          fileLink(
+            api.runArchiveUrl(run.id, { step: stepId, attempt: attemptEntry.n }),
+            label,
+            () => void api.saveRunArchive(run.id, { step: stepId, attempt: attemptEntry.n }),
+          ),
+        );
+      }
+    }
+
+    return [
+      el(
+        "div",
+        { class: "files-toolbar" },
+        downloadButton("Download the whole run", api.runArchiveUrl(run.id), () => void api.saveRunArchive(run.id)),
+        downloadButton("Download the manifest", api.runManifestUrl(run.id), () => void api.saveRunManifest(run.id)),
+      ),
+      downloadTable,
+      archives.length === 0 ? null : el("div", { class: "files-archives" }, el("span", { class: "label" }, "Attempt archives"), ...archives),
+    ];
+  }
+
+  // ---------- the graph ----------
+
+  let graph: Graph | null = null;
+  let graphAnalysis: Analysis | null = null;
+  let graphLoading = false;
+  let graphStage: HTMLElement | null = null;
+
+  function graphStatuses(): Record<string, string> {
+    return Object.fromEntries(Object.entries(run.steps).map(([stepId, step]) => [stepId, step.status]));
+  }
+
+  function paintGraph(): void {
+    if (graph === null || graphAnalysis === null) return;
+    graph.update({ analysis: graphAnalysis, selected, stale: false, statuses: graphStatuses() });
+  }
+
+  async function ensureGraph(): Promise<void> {
+    if (graph !== null || graphLoading) return;
+    graphLoading = true;
+    graphPanel.replaceChildren(stateLine("Loading graph."));
+    try {
+      const text = await api.runFileText(run.id, "pipeline.yaml");
+      const library = await fetchLibrary(libraryRefs(text));
+      const analysis = analyze(graphText(text), library);
+      if (signal.aborted) return;
+      if (!analysis.ok) {
+        graphPanel.replaceChildren(errorBox({ code: analysis.error.code, message: analysis.error.message }));
+        return;
+      }
+      graphAnalysis = analysis;
+      graphStage = el("div", { class: "stage run-graph__stage" });
+      graph = createGraph(graphStage, {
+        onSelect: (stepId) => {
+          choose(stepId, true);
+          showTab("logs");
+        },
+      });
+      graphPanel.replaceChildren(graphStage);
+      paintGraph();
+    } catch (error) {
+      if (!signal.aborted) graphPanel.replaceChildren(errorBox(errorBody(error)));
+    } finally {
+      graphLoading = false;
+    }
+  }
+
+  // ---------- polling ----------
+
   async function tick(): Promise<void> {
     unmake?.();
     unmake = null;
-    // A hidden tab is not watching anybody, and browsers throttle its timers to about a minute
-    // anyway, so it reads nothing while it is hidden. `whenShown` picks the loop back up.
     if (signal.aborted || document.hidden || polling) return;
     polling = true;
     let changed: string[] = [];
@@ -824,16 +1026,12 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
       lastPollError = null;
     } catch (error) {
       if (signal.aborted) return;
-      // The page goes on showing the last good poll, so it has to say that it stopped getting one.
       lastPollError = errorWords(error);
     } finally {
       polling = false;
     }
 
     if (follow && settled(run.steps[selected])) {
-      // Follow means the live edge, so the pane moves when the step it is on finishes and another one
-      // starts. It used to move only when a new attempt appeared, which left it sitting on a finished
-      // log for the whole of a step that succeeded on its first try while the run went on elsewhere.
       const live = Object.keys(run.steps).find((step) => run.steps[step]!.status === "running");
       if (live !== undefined && live !== selected) {
         choose(live, false);
@@ -853,57 +1051,43 @@ export async function renderRunPage(view: HTMLElement, id: string, signal: Abort
     if (signal.aborted) return;
 
     renderHead();
-    renderSteps();
-    renderPanel();
+    paintGraph();
     for (const stepId of changed) {
-      flash(stepList.querySelector(`[data-step="${CSS.escape(stepId)}"]`));
+      timeline.flash([stepId]);
       if (stepId !== "run") announce(`${stepId} ${run.steps[stepId]?.status ?? ""}.`);
     }
     if (changed.includes("run")) {
-      flash(bigSign);
+      flash(idStatus);
       announce(`Run ${run.id} ${run.status}.`);
     }
 
-    if (run.status === "running") {
-      startPolling();
-    } else {
-      // One last read so the tail of the log is on screen, then the polling stops for good.
-      await readLog(false);
-    }
+    if (run.status === "running") startPolling();
+    else await readLog(false);
   }
 
-  /**
-   * The list of what this run can hand out, read once. If it will not come, the screen still shows the
-   * run: a run whose files cannot be listed is a run you can still read the log of, and there is
-   * nothing honest to say about files that would be better than the links simply not being there.
-   */
   async function readFiles(): Promise<void> {
     try {
       files = await api.runFiles(run.id);
     } catch {
       files = null;
     }
-    if (!signal.aborted) renderPanel();
+    if (signal.aborted) return;
+    renderTabs();
+    renderLogDownload();
   }
 
-  /**
-   * Arm the next poll, if one is owed. A finished run has nothing left to say and a hidden tab cannot
-   * show what it reads, so neither gets a timer, and there is never one left behind: the loop is
-   * either waiting or it is not, and this is the only place it waits.
-   */
   function startPolling(): void {
     if (signal.aborted || document.hidden || unmake !== null || run.status !== "running") return;
     unmake = clock.after(POLL_MS, () => void tick());
   }
 
-  // Coming back to the tab is the moment a run that moved while you were away turns up, so that is
-  // when the reading starts again — now, not a second later.
   whenShown(signal, () => void tick());
 
   renderHead();
-  renderSteps();
-  renderPanel();
+  rememberStepAttempt();
   renderLog(true);
+  renderLogDownload();
+  if (selectedTab === "graph") void ensureGraph();
   void readFiles();
   await readLog(true);
   if (signal.aborted) return;

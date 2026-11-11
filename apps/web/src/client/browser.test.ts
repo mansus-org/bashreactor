@@ -286,17 +286,19 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
-      "a run that has finished is offered nothing to press",
+      "a run that has finished is offered no action that would be refused",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, `/app/runs/${run.id}`);
-        await waitFor(page, ".steprow");
-        // This run succeeded, so all three actions are refusals waiting to happen: `retry` has nothing
-        // to reset (SPEC 4.6) and `resume` is refused outright (SPEC 4.7). They used to be offered, and
-        // pressing one drew a box explaining why it could not work. Now there is nothing to press:
-        // hidden, so the keyboard cannot reach them either, and the page asks for nothing.
+        await waitFor(page, ".timeline__step");
+        // This run succeeded, so three actions are refusals waiting to happen: `retry` has nothing to
+        // reset (SPEC 4.6), `resume` is refused outright (SPEC 4.7) and `cancel` is for a live run.
+        // They are hidden, so the keyboard cannot reach them either. Download always works, and a
+        // finished run can be deleted (after its dialog).
         for (const action of ["retry", "resume", "cancel"]) {
           expect((await visible(page, `[data-action="${action}"]`)).shown).toBe(false);
         }
+        expect((await visible(page, '[data-action="download"]')).shown).toBe(true);
+        expect((await visible(page, '[data-action="delete"]')).shown).toBe(true);
         // Nothing failed on the way, which is the same fact from the network's side: no click, no call,
         // no 409. What a refusal looks like when one does happen is covered in runs.test.ts, where the
         // race that causes it can be made to order.
@@ -365,18 +367,13 @@ suite("what a stylesheet is for", () => {
 });
 
 suite("the pages that set an inline style", () => {
-  test.skip(
+  test(
     "the run page loads without the app refusing its own style",
     async () => {
-      // SKIPPED, AND IT FAILS IF YOU UN-SKIP IT. Finding #30, still present. Opening any run page
-      // logs one console error — `Applying inline style violates the following Content Security
-      // Policy directive 'style-src 'self''. ... The action has been blocked.` — from
-      // `el("span", { class: "label", style: "margin:0" }, "Attempt")` at
-      // apps/web/src/client/run-page.ts, against the app's own CSP (apps/web/src/index.ts:29) of
-      // `style-src 'self'`. The declaration is dropped, so the Attempt label sits out of line with
-      // its buttons. The fix is a class in the stylesheet.
+      // Finding #30 was one inline `style` attribute on the attempt label. The run page now sets no
+      // style attribute at all, so its own CSP has nothing left to refuse.
       const { page, watch: pageWatch } = await screen(DESKTOP, `/app/runs/${run.id}`);
-      await waitFor(page, ".steprow");
+      await waitFor(page, ".timeline__step");
       expect(pageWatch.problems()).toEqual([]);
       await page.close();
     },

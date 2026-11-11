@@ -1,81 +1,201 @@
-/* ---------- live run ---------- */
+/* ---------- one run: the timeline, its tabs, the log and the files ---------- */
 
-.runhead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 12px 20px; margin-bottom: 20px; }
-.runhead__sign .sign--large { width: clamp(56px, 7vw, 77px); height: clamp(56px, 7vw, 77px); }
-.runhead__text { display: grid; gap: 6px; min-width: 0; }
-.runhead__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; font-size: 1rem; }
-.runhead__tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
-.runhead__tools .field { width: 15rem; max-width: 100%; }
-@media (max-width: 760px) {
-  .runhead { grid-template-columns: auto minmax(0, 1fr); }
-  .runhead__tools { grid-column: 1 / -1; }
-  .runhead__tools .field { flex: 1 1 11rem; width: auto; }
-}
-.runhead__meta a, .logpanel__meta a { position: relative; }
-/* A run whose poll is lost is not a run that has gone quiet: what is up here is the last state that
-   got through. Bold is the whole of the emphasis; the words carry the rest. */
-.runhead__stale { font-weight: 700; }
-/* A 44 px hit area drawn over the link, so the row's rhythm does not change. */
-.runhead__meta a::after, .logpanel__meta a::after {
-  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%);
+.run-alarm { margin: 0 var(--s1) var(--s5) 0; }
+.run-alarm .alarm { margin: 0; }
+.run-alarm__steps { display: inline-flex; flex-wrap: wrap; gap: var(--s1); }
+
+/* ---------- timeline ---------- */
+
+.timeline {
+  max-height: calc(10 * 28px + 28px);
+  margin-bottom: var(--s4);
+  overflow: auto;
+  border: var(--rule);
 }
 
-.params { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 0 0 20px; font-size: 0.9375rem; }
-.params div { display: flex; gap: 6px; min-width: 0; }
-.params dt { font-weight: 700; }
-.params dd { margin: 0; font-family: var(--font-code); overflow-wrap: anywhere; }
-
-.alarm {
-  display: grid; gap: 10px; margin: 0 6px 26px 0; padding: 16px 18px;
-  border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--ink);
+.timeline__grid {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 100%;
 }
-.alarm p { max-width: 72ch; overflow-wrap: anywhere; }
 
-.run { display: grid; grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.6fr); gap: clamp(20px, 2.4vw, 36px); align-items: start; }
-@media (max-width: 980px) { .run { grid-template-columns: minmax(0, 1fr); } }
-
-.steps { margin: 0; padding: 0; list-style: none; }
-.steprow {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 12px;
-  width: 100%; min-height: 64px; padding: 10px;
-  border: 0; background: var(--dots); color: inherit; font: inherit; text-align: left; cursor: pointer;
+.timeline__corner,
+.timeline__axis {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 28px;
+  background: var(--paper);
+  border-bottom: var(--rule);
 }
-.steprow:hover .steprow__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.steprow:focus-visible { outline-offset: -3px; }
-.steprow[aria-selected="true"] { background: var(--ink); color: var(--paper); }
-.steprow[aria-selected="true"]:focus-visible { outline-color: var(--paper); }
-.steprow[aria-selected="true"] .stamp { background: var(--paper); color: var(--ink); }
-.steprow__id { font-weight: 800; font-size: 1.125rem; overflow-wrap: anywhere; }
-.steprow__time { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; justify-self: end; }
-.steprow__note { grid-column: 1 / -1; font-size: 0.9375rem; overflow-wrap: anywhere; }
-.steprow__stamp { grid-column: 1 / -1; }
 
-.logpanel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.logpanel__meta { font-size: 0.9375rem; }
-.logpanel__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.logpanel__status { font-weight: 700; font-size: 0.9375rem; }
-.outputs { margin: 0; display: grid; gap: 2px; font-size: 0.9375rem; }
-.outputs div { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: 2px 12px; padding: 4px 0; background: var(--dots); }
-.outputs dt { font-family: var(--font-code); font-weight: 700; overflow-wrap: anywhere; }
-.outputs dd { margin: 0; font-family: var(--font-code); overflow-x: auto; white-space: pre; }
+.timeline__corner {
+  padding: 0 var(--s2);
+  border-right: var(--rule-dotted);
+  font-size: var(--fs-ui);
+  font-weight: 700;
+  line-height: 28px;
+}
 
-/* The files of the attempt on screen. A list of links, not a table: the path is the whole of what a
-   person is choosing between, and it is long, so it gets the line to itself. */
-.files { display: grid; gap: 4px; }
-.files .label { margin-bottom: 2px; }
-.file { font-family: var(--font-code); font-size: 0.9375rem; overflow-wrap: anywhere; }
-.file__size { font-variant-numeric: tabular-nums; }
+.timeline__axis { position: sticky; }
+
+.timeline__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding-left: var(--s1);
+  border-left: 1px solid var(--ink);
+  font-size: var(--fs-ui);
+  line-height: 28px;
+  white-space: nowrap;
+}
+
+.timeline__tick--end {
+  padding-right: var(--s1);
+  padding-left: 0;
+  border-right: 1px solid var(--ink);
+  border-left: 0;
+  transform: translateX(-100%);
+}
+
+.timeline__row { display: contents; }
+
+.timeline__step {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  width: 100%;
+  min-height: 28px;
+  padding: 0 var(--s2);
+  border: 0;
+  border-right: var(--rule-dotted);
+  border-bottom: var(--rule-dotted);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.timeline__row:last-child .timeline__step,
+.timeline__row:last-child .timeline__track { border-bottom: 0; }
+.timeline__step:hover .timeline__id { text-decoration: underline; text-decoration-thickness: 2px; }
+.timeline__step[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+.timeline__step:focus-visible { outline-offset: -3px; }
+.timeline__step[aria-selected="true"]:focus-visible { outline-color: var(--paper); }
+.timeline__id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.timeline__attempts { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.timeline__track {
+  position: relative;
+  min-height: 28px;
+  border-bottom: var(--rule-dotted);
+  overflow: hidden;
+}
+
+.timeline__bar {
+  position: absolute;
+  top: 8px;
+  height: 12px;
+  min-width: 2px;
+  background: var(--ink);
+}
+
+.timeline__bar--running { background: var(--tone-checker); outline: 1px solid var(--ink); }
+.timeline__bar--failed { background: var(--tone-crosshatch); outline: 1px solid var(--ink); }
+.timeline__bar--cancelled { background: var(--tone-hatch); outline: 1px solid var(--ink); }
+.timeline__bar--interrupted { background: var(--tone-sparse); outline: 1px solid var(--ink); }
+.timeline__bar--waiting_retry { background: transparent; outline: 1px dashed var(--ink); }
+
+.timeline__wait {
+  position: absolute;
+  top: 8px;
+  height: 12px;
+  border: 1px dashed var(--ink);
+}
+
+.timeline__now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--ink);
+}
+
+/* ---------- tabs, log and tables ---------- */
+
+.run-tabpanel { display: grid; gap: var(--s4); }
+.run-tabpanel .h2 { margin-bottom: var(--s2); }
+.run-io { display: grid; gap: var(--s2); }
+
+.log-panel { display: grid; gap: var(--s2); min-width: 0; }
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  padding-bottom: var(--s2);
+  border-bottom: var(--rule);
+}
+.log-toolbar__step { font-weight: 700; }
+.log-bytes { margin-left: auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.log-download { display: inline-flex; }
+.log-download .file { padding: 0; font-family: var(--font-text); font-size: var(--fs-ui); font-weight: 700; }
+.log-status { font-size: var(--fs-ui); font-weight: 700; }
+.log-note { margin: 0; }
 
 .log {
-  height: max(380px, calc(100dvh - 300px));
-  border: 3px solid var(--ink); overflow: auto;
-  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.6;
+  height: max(320px, calc(100dvh - 340px));
+  overflow: auto;
+  border: var(--rule);
+  font-family: var(--font-code);
+  font-size: var(--fs-ui);
+  line-height: 1.5;
 }
-.log__lines { display: inline-block; min-width: 100%; margin: 0; padding: 8px 12px 8px 0; list-style: none; }
-.log__line { display: flex; white-space: pre; }
-/* The cursor stays put while a long line scrolls under it. The log is the bytes a block wrote
-   (SPEC 4.8), so what is real to show is the byte offset we read it at. */
-.log__offset { position: sticky; left: 0; flex: none; min-width: 8ch; padding: 0 10px 0 12px; background: var(--paper); font-variant-numeric: tabular-nums; text-align: right; }
-.log__empty { padding: 14px 16px; font-family: var(--font-text); font-size: 1rem; line-height: 1.45; max-width: 62ch; white-space: normal; }
 
-.attempts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.log__lines {
+  display: block;
+  min-width: 100%;
+  margin: 0;
+  padding: var(--s2) 0;
+  list-style: none;
+}
+
+.log__line { display: flex; white-space: pre; }
+.log__number {
+  position: sticky;
+  left: 0;
+  flex: none;
+  min-width: 5ch;
+  padding: 0 var(--s2) 0 var(--s3);
+  border-right: var(--rule-dotted);
+  background: var(--paper);
+  color: var(--ink);
+  text-align: right;
+  user-select: none;
+}
+.log__text { padding: 0 var(--s3); }
+.log__empty { padding: var(--s3) var(--s4); font-family: var(--font-text); font-size: var(--fs-body); line-height: 1.5; max-width: 72ch; white-space: normal; }
+
+.step-cell__name { display: block; font-size: var(--fs-ui); font-weight: 700; }
+.run-io__value { overflow-wrap: anywhere; white-space: pre-wrap; }
+
+.files-toolbar { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.files-archives { display: grid; justify-items: start; gap: var(--s1); margin-top: var(--s3); }
+.files .file__size { font-variant-numeric: tabular-nums; }
+
+/* ---------- graph ---------- */
+
+.run-graph { min-width: 0; }
+.run-graph__stage { position: relative; min-height: 420px; border: var(--rule); overflow: auto; }
+.run-graph .node__status { display: inline-flex; align-items: center; gap: var(--s1); font-size: var(--fs-ui); font-weight: 700; }
+
+@media (max-width: 640px) {
+  .timeline__grid { grid-template-columns: 112px minmax(0, 1fr); }
+  .timeline__corner { padding: 0 var(--s1); }
+  .timeline__step { padding: 0 var(--s1); }
+  .log-bytes { margin-left: 0; }
+}
