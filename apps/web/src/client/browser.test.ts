@@ -182,12 +182,13 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
-      "the entry page shows the three screens and what the server says about itself",
+      "the dashboard says it is still being redesigned, rather than drawing a fake one",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport);
-        expect((await visible(page, ".screens")).shown).toBe(true);
-        expect(await page.evaluate(() => document.querySelectorAll(".screen").length)).toBe(3);
-        expect(await textOf(page, ".head .stamp")).toContain("ok");
+        expect(await textOf(page, ".state--error")).toContain("not_implemented");
+        expect(await textOf(page, ".state--error")).toContain("BASHR-56");
+        expect((await visible(page, ".sidebar")).shown).toBe(viewport.width > 940);
+        expect((await visible(page, ".topbar")).shown).toBe(viewport.width <= 940);
         expect(designProblems(await styleFacts(page), viewport)).toEqual([]);
         expect(pageWatch.problems()).toEqual([]);
         await page.close();

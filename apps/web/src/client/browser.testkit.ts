@@ -296,8 +296,15 @@ export async function signIn(page: Page, app: TestApp, pageWatch?: Watch): Promi
   }
   await page.type("#gate-token", app.token);
   await page.click(".gate__form button[type=submit]");
-  const nav = await page.waitForSelector(".nav:not([hidden])", { visible: true, timeout: 10_000 }).catch(() => null);
-  if (nav === null) throw new Error(`signing in as ${app.token.slice(0, 6)}... left the nav hidden on ${app.base}/app/`);
+  // The sidebar is hidden below 940 px and the top bar takes its place, so waiting for `.nav` to be
+  // visible failed on a phone. The identity column is filled on both layouts once the token works.
+  const signedIn = await page
+    .waitForFunction(
+      () => (document.querySelector("#who")?.textContent ?? "").trim() !== "" && document.querySelector("#gate-token") === null,
+      { timeout: 10_000 },
+    )
+    .catch(() => null);
+  if (signedIn === null) throw new Error(`signing in as ${app.token.slice(0, 6)}... left the gate up on ${app.base}/app/`);
 }
 
 /** Go somewhere in the app and wait until the screen has stopped drawing. */
@@ -385,6 +392,8 @@ export interface StyleFacts {
   statusRegionWidthPx: number;
   scrollWidth: number;
   clientWidth: number;
+  /** Whether the browser says this pointer is a finger, which decides 44 px or 32 px controls. */
+  coarsePointer: boolean;
   /** The widest things past the right edge, for the message when the page does overflow. */
   widest: string[];
   faces: { text: boolean; mono: boolean; display: boolean };
@@ -415,12 +424,15 @@ export function styleFacts(page: Page): Promise<StyleFacts> {
       bodyFont: style("body")?.fontFamily ?? "",
       titleFont: style(".title")?.fontFamily ?? "",
       titleSizePx: Number.parseFloat(style(".title")?.fontSize ?? "0"),
-      codeFont: style("code")?.fontFamily ?? "",
-      buttonHeightPx: size(".btn"),
-      buttonBorderPx: Number.parseFloat(style(".btn")?.borderTopWidth ?? "0"),
+      codeFont: style("code")?.fontFamily ?? style(".mono")?.fontFamily ?? "",
+      // The sidebar's Sign out is deliberately a text button, so it is not the control the scale is
+      // measured on. A real button is the first one with a border.
+      buttonHeightPx: size(".btn:not(.btn--text)"),
+      buttonBorderPx: Number.parseFloat(style(".btn:not(.btn--text)")?.borderTopWidth ?? "0"),
       statusRegionWidthPx: Math.round(document.querySelector("#announce")?.getBoundingClientRect().width ?? -1),
       scrollWidth: document.documentElement.scrollWidth,
       clientWidth: edge,
+      coarsePointer: window.matchMedia("(pointer: coarse)").matches,
       widest,
       faces: {
         text: document.fonts.check('16px "Atkinson Hyperlegible Next"'),
@@ -443,12 +455,17 @@ export function designProblems(facts: StyleFacts, viewport: Viewport): string[] 
   if (facts.bodyColor !== "rgb(20, 20, 20)") problems.push(`ink: body colour is ${facts.bodyColor}, expected rgb(20, 20, 20)`);
   if (!facts.bodyFont.startsWith('"Atkinson Hyperlegible Next"')) problems.push(`text face: body is ${facts.bodyFont}`);
   if (!facts.faces.text) problems.push("the text face never loaded");
-  if (!facts.faces.mono) problems.push("the mono face never loaded");
   if (!facts.faces.display) problems.push("the display face never loaded");
-  if (!facts.codeFont.startsWith('"Atkinson Hyperlegible Mono"')) problems.push(`code face: code is ${facts.codeFont}`);
+  // A screen with no code on it does not ask the browser to load the mono face. Where there is code,
+  // the face has to be loaded and has to be the mono face.
+  if (facts.codeFont !== "" && !facts.faces.mono) problems.push("the mono face never loaded");
+  if (facts.codeFont !== "" && !facts.codeFont.startsWith('"Atkinson Hyperlegible Mono"')) problems.push(`code face: code is ${facts.codeFont}`);
   if (facts.statusRegionWidthPx !== 1) problems.push(`the screen-reader region is ${facts.statusRegionWidthPx}px wide, so it is not hidden by CSS`);
   if (facts.buttonBorderPx < 2) problems.push(`a button has a ${facts.buttonBorderPx}px border, so the stylesheet is not being applied`);
-  if (facts.buttonHeightPx > 0 && facts.buttonHeightPx < 44) problems.push(`a button is ${facts.buttonHeightPx}px tall, under the 44px a thumb needs`);
+  const minimumControl = facts.coarsePointer ? 44 : 32;
+  if (facts.buttonHeightPx > 0 && facts.buttonHeightPx < minimumControl) {
+    problems.push(`a button is ${facts.buttonHeightPx}px tall, under the ${minimumControl}px the design gives it`);
+  }
   if (facts.titleSizePx > 0 && (facts.titleSizePx < 28 || !facts.titleFont.startsWith("Anybody"))) {
     problems.push(`the display title is ${facts.titleFont} at ${facts.titleSizePx}px; display text is Anybody at 28px or more`);
   }
