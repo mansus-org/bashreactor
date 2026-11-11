@@ -169,7 +169,7 @@ for (const viewport of VIEWPORTS) {
         expect((await visible(page, ".nav")).shown).toBe(false);
 
         await page.type("#gate-token", "not-a-token");
-        await press(page, "Check the token");
+        await press(page, "Sign in");
         await page.waitForFunction(() => document.querySelector(".state--error") !== null);
 
         expect(await textOf(page, ".state--error")).toContain("unauthenticated");

@@ -269,7 +269,7 @@ function renderGate(message: string, error?: GateError): void {
   const busy = el("p", { class: "state", role: "status", hidden: true });
   // A 401 comes back to this screen, and the server's own words about the token go at the top of it.
   const box = el("div", {}, error !== undefined ? errorBox(error) : null);
-  const submit = el("button", { class: "btn btn--ink", type: "submit" }, "Check the token");
+  const submit = el("button", { class: "btn btn--ink", type: "submit" }, "Sign in");
 
   async function check(): Promise<void> {
     busy.hidden = false;
@@ -307,7 +307,7 @@ function renderGate(message: string, error?: GateError): void {
     el(
       "div",
       { class: "field" },
-      el("label", { class: "label", for: "gate-base" }, "Server"),
+      el("label", { class: "label", for: "gate-base" }, "Server URL"),
       base,
       el(
         "p",
