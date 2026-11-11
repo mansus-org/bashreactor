@@ -1209,19 +1209,24 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
 
   textarea.value = text;
   void loadNames();
-  const name = route.parts[1];
-  const version = routeVersion(route.parts[2]);
+  // Two addresses reach this screen now: `/pipelines-new` and `/pipelines/:name/edit?version=n`. The
+  // old `/pipeline` shapes still work when a test calls this function directly, but the router
+  // rewrites them before they get here.
+  const editing = route.parts[0] === "pipelines" && route.parts[2] === "edit";
+  const name = route.parts[0] === "pipelines-new" ? undefined : editing ? route.parts[1] : route.parts[1];
+  const versionText = editing ? (route.query.get("version") ?? undefined) : route.parts[2];
+  const version = routeVersion(versionText);
   if (name === undefined) {
     setText(BLANK, { source: "init" });
     restoreDraft();
   } else if (version === null) {
-    // `/pipeline/word-report/abc` is not version NaN (#35): there is no such version, and that is
-    // said here instead of asking the API for a number the route never gave.
+    // `/pipelines/word-report/edit?version=abc` is not version NaN (#35): there is no such version,
+    // and that is said here instead of asking the API for a number the route never gave.
     setText(BLANK, { source: "init" });
     openNameInput.value = name;
     showOpenError({
       code: "type_mismatch",
-      message: `${name} has no version "${route.parts[2] ?? ""}". Versions are whole numbers, starting at 1.`,
+      message: `${name} has no version "${versionText ?? ""}". Versions are whole numbers, starting at 1.`,
     });
     status.textContent = `Nothing opened for ${name}.`;
   } else {

@@ -12,25 +12,30 @@
 </head>
 <body>
 <a class="skip" href="#view">Skip to content</a>
-<header class="chrome">
-  <a class="mark" href="/app/" data-link>bashreactor</a>
-  <nav class="nav" aria-label="Screens" hidden>
-    <ul class="nav__list">
-      <li><a class="nav__link" href="/app/pipeline" data-link>Pipeline</a></li>
-      <li><a class="nav__link" href="/app/runs" data-link>Runs</a></li>
-      <li><a class="nav__link" href="/app/blocks" data-link>Blocks</a></li>
-    </ul>
-  </nav>
-  <span class="chrome__note" id="who"></span>
-</header>
-<main id="view" tabindex="-1">
-  <p class="state">Loading.</p>
-  <noscript><p class="state">Bashreactor's screens are drawn by JavaScript. The REST API at <code>/v1</code> works without it.</p></noscript>
-</main>
-<footer class="foot">
-  <p id="foot-note">One API at <code>/v1</code>. The screens read it and store nothing else.</p>
-  <a href="/app/OFL.txt">Fonts and their licence</a>
-</footer>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="mark" href="/app/" data-link>bashreactor</a>
+    <nav class="nav nav--main" data-nav="main" aria-label="Screens" hidden></nav>
+    <div class="sidebar__bottom">
+      <nav class="nav nav--settings" data-nav="settings" aria-label="Settings" hidden></nav>
+      <div class="sidebar__who" id="who"></div>
+    </div>
+  </aside>
+  <div class="shell__main">
+    <header class="topbar">
+      <a class="mark mark--top" href="/app/" data-link>bashreactor</a>
+      <button class="btn menu-button" id="menu-button" type="button" aria-expanded="false" aria-controls="menu" hidden>Menu</button>
+    </header>
+    <div class="menu" id="menu" hidden>
+      <nav class="menu__nav" data-nav="menu" aria-label="Menu" hidden></nav>
+      <div class="menu__who" data-who></div>
+    </div>
+    <main id="view" tabindex="-1">
+      <p class="state">Loading.</p>
+      <noscript><p class="state">Bashreactor's screens are drawn by JavaScript. The REST API at <code>/v1</code> works without it.</p></noscript>
+    </main>
+  </div>
+</div>
 <p class="sr" id="announce" role="status"></p>
 </body>
 </html>
