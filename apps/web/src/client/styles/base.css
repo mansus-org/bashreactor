@@ -1,0 +1,233 @@
+/* Bashreactor, the app. The font paths point at the routes the app serves, and the rules below cover
+   the things only the app has: the token gate, the byte-offset log column and the library's "opened by
+   name" list. The 1-bit language, the dither greys and every control rule are the design's, unchanged;
+   docs/design/README.md says why. */
+
+@font-face {
+  font-family: "Anybody";
+  src: url("/app/assets/fonts/anybody.woff2") format("woff2");
+  font-weight: 300 900;
+  font-stretch: 50% 150%;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Next";
+  src: url("/app/assets/fonts/atkinson-next.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible Mono";
+  src: url("/app/assets/fonts/atkinson-mono.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+}
+
+:root {
+  --paper: #e4e2db;
+  --ink: #141414;
+  --pad: clamp(16px, 3vw, 48px);
+  --font-display: "Anybody", system-ui, sans-serif;
+  --font-text: "Atkinson Hyperlegible Next", system-ui, sans-serif;
+  --font-code: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  /* Tiles of real squares, so the grey stays 1-bit at any zoom. */
+  --dots: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='2' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E") left bottom repeat-x;
+  --dots-top: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='2' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E") left top repeat-x;
+  --sparse: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E");
+  /* One step fainter than --sparse, for a field that is switched off: 2 px squares on an 8 px step,
+     so a value can still be read on it. */
+  --sparse-off: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8' shape-rendering='crispEdges'%3E%3Crect width='2' height='2' fill='%23141414'/%3E%3C/svg%3E");
+  --arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='8' shape-rendering='crispEdges'%3E%3Cpath fill='%23141414' d='M0 0h14v2H0zM2 2h10v2H2zM4 4h6v2H4zM6 6h2v2H6z'/%3E%3C/svg%3E");
+  --yaml-line: 24px;
+  color-scheme: light;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { background: var(--paper); }
+body {
+  margin: 0;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-text);
+  font-weight: 420;
+  font-size: 1.0625rem;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+a { color: inherit; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+a:hover { text-decoration-thickness: 4px; }
+code, pre, kbd { font-family: var(--font-code); font-variant-ligatures: none; }
+code { font-size: 0.94em; }
+[hidden] { display: none !important; }
+p { margin: 0; }
+/* ---------- type ---------- */
+
+main {
+  display: block; flex: 1 0 auto; width: 100%;
+  padding: clamp(16px, 2.6vw, 32px) var(--pad) 48px;
+}
+main:focus { outline: none; }
+
+.title {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
+  font-size: clamp(3rem, 7vw, 5.5rem); line-height: 0.88; letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+/* A run id is a string to read, not a headline: the display word is "Run" and the id sits under it
+   in the code face, where it is one line instead of two 88 px ones and breaks at its own hyphen
+   rather than in the middle of a group of digits. The code face has no condensed cut, so it takes
+   the width back from the display face it sits under. */
+.title__id {
+  display: block; font-size: 1.25rem; font-weight: 700; font-stretch: normal; line-height: 1.3;
+  letter-spacing: 0; overflow-wrap: break-word;
+}
+.h2 {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
+  font-size: clamp(1.75rem, 3.2vw, 2.5rem); line-height: 0.95; letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+.h3 { margin: 0 0 6px; font-size: 1.0625rem; font-weight: 800; }
+/* A description is whatever the file says it is. One unbroken 300-character word in a pipeline's
+   `description:` used to set the page sideways, because the box would not shrink below the word. */
+.lead { max-width: 62ch; font-size: 1.125rem; overflow-wrap: anywhere; }
+.help { max-width: 62ch; font-size: 0.9375rem; }
+.label { display: block; margin-bottom: 6px; font-weight: 700; font-size: 0.9375rem; }
+/* A label that sits beside the buttons it names has nothing under it to stand off. This is a class
+   and not a `style` attribute because the app's own CSP drops inline style. */
+.label--inline { margin: 0; }
+.mono { font-family: var(--font-code); font-variant-ligatures: none; }
+
+.state { max-width: 62ch; margin: 20px 0; }
+.state--error { padding: 14px 16px; border: 3px solid var(--ink); display: grid; gap: 10px; max-width: 72ch; }
+.state--error p { overflow-wrap: anywhere; }
+.state__head { font-weight: 700; }
+
+.head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 32px; margin-bottom: 20px; }
+.head__text { display: grid; gap: 10px; min-width: 0; flex: 1 1 340px; }
+.bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-bottom: 10px; min-height: 44px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ---------- stamps ---------- */
+
+.stamp {
+  display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px;
+  background: var(--ink); color: var(--paper);
+  font-weight: 700; font-size: 0.875rem; line-height: 1.5; text-decoration: none; white-space: nowrap;
+}
+.stamp--type { background: transparent; color: inherit; outline: 2px solid currentColor; outline-offset: -2px; padding: 1px 8px; }
+a.stamp { min-height: 44px; }
+a.stamp:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.sign { display: block; flex: none; width: 14px; height: 14px; }
+.sign--large { width: 70px; height: 70px; }
+
+/* ---------- controls ---------- */
+
+input:not([type="checkbox"]), select, textarea {
+  min-height: 44px; width: 100%;
+  padding: 8px 10px;
+  border: 2px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink);
+  font: inherit; font-size: 1rem;
+}
+input::placeholder, textarea::placeholder { color: var(--ink); opacity: 1; font-style: italic; }
+select {
+  appearance: none; padding-right: 36px; cursor: pointer;
+  background: var(--paper) var(--arrow) right 12px center no-repeat;
+  text-overflow: ellipsis;
+}
+input[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  width: 44px; height: 44px; margin: 0; flex: none;
+  display: grid; place-items: center;
+  background: transparent; border: 0; cursor: pointer;
+}
+input[type="checkbox"]::before {
+  content: ""; width: 22px; height: 22px;
+  border: 2px solid var(--ink); background: var(--paper);
+}
+input[type="checkbox"]:checked::before { background: var(--ink); }
+input[type="checkbox"]:checked::after {
+  content: ""; position: absolute; left: 50%; top: 50%;
+  width: 13px; height: 7px;
+  border-left: 3px solid var(--paper); border-bottom: 3px solid var(--paper);
+  transform: translate(-50%, -62%) rotate(-45deg);
+}
+/* Off, not grey. Chrome paints a disabled control's value with its own darkgray, which would put a
+   third ink on the page, so the value keeps ink and "off" is carried by the dashed rule and a
+   dither behind it. */
+input:disabled, select:disabled, textarea:disabled {
+  color: var(--ink);
+  -webkit-text-fill-color: var(--ink);
+  opacity: 1;
+}
+input:not([type="checkbox"]):disabled, select:disabled, textarea:disabled {
+  border-style: dashed;
+  background: var(--paper) var(--sparse-off);
+}
+select:disabled { background: var(--arrow) right 12px center no-repeat, var(--sparse-off) var(--paper); }
+input[type="checkbox"]:disabled { cursor: not-allowed; }
+input[type="checkbox"]:disabled::before { border-style: dashed; }
+/* The box holds no text to read, so it takes the same dense step the ghost of a broken graph uses. */
+input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper) var(--sparse); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; min-width: 44px; padding: 0 16px;
+  border: 2px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink);
+  font: inherit; font-weight: 700; font-size: 0.9375rem; text-decoration: none;
+  cursor: pointer; white-space: nowrap;
+}
+.btn:hover { background: var(--ink); color: var(--paper); text-decoration: none; }
+.btn--ink { background: var(--ink); color: var(--paper); }
+.btn--ink:hover { background: var(--paper); color: var(--ink); }
+.btn:disabled { border-style: dashed; cursor: not-allowed; background: var(--paper); color: var(--ink); }
+.btn[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+
+.check { display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 1rem; cursor: pointer; }
+/* A tick that cannot be moved says why, in the help text used everywhere else. */
+.check .help { display: block; }
+.field { display: grid; align-content: start; min-width: 0; }
+.fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.fieldset legend { padding: 0; }
+
+/* ---------- dialogs: the only thing that floats, because it needs an answer now ---------- */
+
+.dialog {
+  width: min(520px, calc(100vw - 32px)); padding: 20px;
+  border: 3px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink);
+  box-shadow: 6px 6px 0 var(--ink);
+}
+.dialog::backdrop { background: var(--sparse); }
+.dialog__body { display: grid; gap: 14px; }
+.dialog__title {
+  margin: 0;
+  font-family: var(--font-display); font-stretch: 50%; font-weight: 900; font-size: 2rem; line-height: 1;
+  overflow-wrap: anywhere;
+}
+.form-error { padding: 8px 12px; border: 3px solid var(--ink); font-weight: 700; font-size: 0.9375rem; }
+
+.stage__empty { display: grid; justify-items: start; gap: 14px; padding: 28px; max-width: 46ch; }
+.blocklist { margin: 0; padding: 0; list-style: none; }
+.gate { display: grid; gap: clamp(28px, 4vw, 48px); max-width: 60rem; }
+/* ---------- motion: one e-ink repaint when something changed, nothing that loops ---------- */
+
+.is-new { animation: refresh 0.5s steps(1, end) 1; }
+@keyframes refresh {
+  0% { background: var(--ink); color: var(--paper); }
+  50% { background: var(--sparse) var(--paper); color: var(--ink); }
+}
+@media (prefers-reduced-motion: reduce) { .is-new { animation: none; } }
+
+/* A JSON field in the Start dialog is code, so it is set in the code face. */
+.field textarea.code { font-family: var(--font-code); }

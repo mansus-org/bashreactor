@@ -1,0 +1,81 @@
+/* ---------- live run ---------- */
+
+.runhead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: end; gap: 12px 20px; margin-bottom: 20px; }
+.runhead__sign .sign--large { width: clamp(56px, 7vw, 77px); height: clamp(56px, 7vw, 77px); }
+.runhead__text { display: grid; gap: 6px; min-width: 0; }
+.runhead__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; font-size: 1rem; }
+.runhead__tools { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.runhead__tools .field { width: 15rem; max-width: 100%; }
+@media (max-width: 760px) {
+  .runhead { grid-template-columns: auto minmax(0, 1fr); }
+  .runhead__tools { grid-column: 1 / -1; }
+  .runhead__tools .field { flex: 1 1 11rem; width: auto; }
+}
+.runhead__meta a, .logpanel__meta a { position: relative; }
+/* A run whose poll is lost is not a run that has gone quiet: what is up here is the last state that
+   got through. Bold is the whole of the emphasis; the words carry the rest. */
+.runhead__stale { font-weight: 700; }
+/* A 44 px hit area drawn over the link, so the row's rhythm does not change. */
+.runhead__meta a::after, .logpanel__meta a::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%);
+}
+
+.params { display: flex; flex-wrap: wrap; gap: 2px 18px; margin: 0 0 20px; font-size: 0.9375rem; }
+.params div { display: flex; gap: 6px; min-width: 0; }
+.params dt { font-weight: 700; }
+.params dd { margin: 0; font-family: var(--font-code); overflow-wrap: anywhere; }
+
+.alarm {
+  display: grid; gap: 10px; margin: 0 6px 26px 0; padding: 16px 18px;
+  border: 3px solid var(--ink); box-shadow: 6px 6px 0 var(--ink);
+}
+.alarm p { max-width: 72ch; overflow-wrap: anywhere; }
+
+.run { display: grid; grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.6fr); gap: clamp(20px, 2.4vw, 36px); align-items: start; }
+@media (max-width: 980px) { .run { grid-template-columns: minmax(0, 1fr); } }
+
+.steps { margin: 0; padding: 0; list-style: none; }
+.steprow {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 4px 12px;
+  width: 100%; min-height: 64px; padding: 10px;
+  border: 0; background: var(--dots); color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.steprow:hover .steprow__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.steprow:focus-visible { outline-offset: -3px; }
+.steprow[aria-selected="true"] { background: var(--ink); color: var(--paper); }
+.steprow[aria-selected="true"]:focus-visible { outline-color: var(--paper); }
+.steprow[aria-selected="true"] .stamp { background: var(--paper); color: var(--ink); }
+.steprow__id { font-weight: 800; font-size: 1.125rem; overflow-wrap: anywhere; }
+.steprow__time { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; justify-self: end; }
+.steprow__note { grid-column: 1 / -1; font-size: 0.9375rem; overflow-wrap: anywhere; }
+.steprow__stamp { grid-column: 1 / -1; }
+
+.logpanel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.logpanel__meta { font-size: 0.9375rem; }
+.logpanel__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.logpanel__status { font-weight: 700; font-size: 0.9375rem; }
+.outputs { margin: 0; display: grid; gap: 2px; font-size: 0.9375rem; }
+.outputs div { display: grid; grid-template-columns: minmax(0, 9rem) minmax(0, 1fr); gap: 2px 12px; padding: 4px 0; background: var(--dots); }
+.outputs dt { font-family: var(--font-code); font-weight: 700; overflow-wrap: anywhere; }
+.outputs dd { margin: 0; font-family: var(--font-code); overflow-x: auto; white-space: pre; }
+
+/* The files of the attempt on screen. A list of links, not a table: the path is the whole of what a
+   person is choosing between, and it is long, so it gets the line to itself. */
+.files { display: grid; gap: 4px; }
+.files .label { margin-bottom: 2px; }
+.file { font-family: var(--font-code); font-size: 0.9375rem; overflow-wrap: anywhere; }
+.file__size { font-variant-numeric: tabular-nums; }
+
+.log {
+  height: max(380px, calc(100dvh - 300px));
+  border: 3px solid var(--ink); overflow: auto;
+  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.6;
+}
+.log__lines { display: inline-block; min-width: 100%; margin: 0; padding: 8px 12px 8px 0; list-style: none; }
+.log__line { display: flex; white-space: pre; }
+/* The cursor stays put while a long line scrolls under it. The log is the bytes a block wrote
+   (SPEC 4.8), so what is real to show is the byte offset we read it at. */
+.log__offset { position: sticky; left: 0; flex: none; min-width: 8ch; padding: 0 10px 0 12px; background: var(--paper); font-variant-numeric: tabular-nums; text-align: right; }
+.log__empty { padding: 14px 16px; font-family: var(--font-text); font-size: 1rem; line-height: 1.45; max-width: 62ch; white-space: normal; }
+
+.attempts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

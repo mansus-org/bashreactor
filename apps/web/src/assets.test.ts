@@ -12,9 +12,10 @@
 import { expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildAssets } from "./assets.ts";
+import { buildAssets, STYLE_FILES } from "./assets.ts";
 
 const CLIENT = join(import.meta.dir, "client");
+const STYLES = join(CLIENT, "styles");
 const transpiler = new Bun.Transpiler({ loader: "ts" });
 
 /** Test files are Bun's, not the browser's: they import `.ts` directly and are never shipped. */
@@ -61,6 +62,20 @@ function unresolved(name: string, source: string): string[] {
 test("every client module on disk is served as an asset", () => {
   const missing = clientModules().filter((name) => !files.has(`assets/${name.replace(/\.ts$/, ".js")}`));
   expect(missing).toEqual([]);
+});
+
+test("every stylesheet file on disk is in the served order", () => {
+  // The folder is the source of truth: a file the order list forgets is a rule the browser never sees.
+  const onDisk = readdirSync(STYLES).filter((name) => name.endsWith(".css"));
+  const listed: readonly string[] = STYLE_FILES;
+  expect(onDisk.filter((name) => !listed.includes(name))).toEqual([]);
+  expect(listed.filter((name) => !onDisk.includes(name))).toEqual([]);
+});
+
+test("the served stylesheet is the stylesheet files joined in order", () => {
+  const expected = STYLE_FILES.map((name) => readFileSync(join(STYLES, name), "utf8")).join("\n");
+  const served = new TextDecoder().decode(files.get("assets/style.css")!.data);
+  expect(served).toBe(expected);
 });
 
 test("every import in a served module resolves to a served asset", () => {
