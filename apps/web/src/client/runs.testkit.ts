@@ -87,6 +87,18 @@ class FakeElement {
     };
   }
 
+  /** The same map seen through `dataset`, which is how the segmented control records its value. */
+  get dataset(): Record<string, string> {
+    return new Proxy({} as Record<string, string>, {
+      get: (_target, key) => this.attrs.get(`data-${String(key).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`) ?? "",
+      set: (_target, key, value: string) => {
+        this.attrs.set(`data-${String(key).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`, String(value));
+        return true;
+      },
+      has: (_target, key) => this.attrs.has(`data-${String(key).replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`),
+    });
+  }
+
   get className(): string {
     return [...this.classes].join(" ");
   }
@@ -371,7 +383,7 @@ fakeDocument.createElement = (tag: string) => {
 // ---------- the modules the browser runs, and the server it talks to ----------
 
 const served = mkdtempSync(join(tmpdir(), "bashreactor-runs-"));
-for (const name of ["dom", "api", "logs", "run-shared", "runs-list", "run-page"]) {
+for (const name of ["dom", "api", "logs", "run-shared", "ui", "runs-list", "run-page"]) {
   writeFileSync(join(served, `${name}.js`), buildAssets().files.get(`assets/${name}.js`)!.data);
 }
 writeFileSync(join(served, "app.js"), "export function navigate() {}\n");

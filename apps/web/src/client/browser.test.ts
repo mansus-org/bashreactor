@@ -274,8 +274,8 @@ for (const viewport of VIEWPORTS) {
       "the runs list shows the run with its own state",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, "/app/runs");
-        await waitFor(page, ".runrow");
-        const rows = await textsOf(page, ".runrow");
+        await waitFor(page, ".runstable tbody tr");
+        const rows = await textsOf(page, ".runstable tbody tr");
         expect(rows.filter((row) => row.includes(run.id)).length).toBe(1);
         expect(rows.join(" | ")).toContain("succeeded");
         expect(designProblems(await styleFacts(page), viewport)).toEqual([]);
