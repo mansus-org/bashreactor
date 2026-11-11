@@ -986,6 +986,7 @@ directory, and turned absolute when rendered. Times are ECMAScript `Date.prototy
   "schema": 1,
   "id": "20261104T101500Z-3fa9c2d1",
   "pipeline": "word-report",
+  "pipeline_version": 3,
   "status": "running",
   "created_at": "2026-11-04T10:15:00.000Z",
   "finished_at": null,
@@ -1035,6 +1036,7 @@ directory, and turned absolute when rendered. Times are ECMAScript `Date.prototy
 | Field | Values |
 | --- | --- |
 | `schema` | `1` |
+| `pipeline_version` | the stored pipeline version the run was started from, or `null` when it was started from YAML that is not a stored version. A record written before this field existed reads as `null`. |
 | run `status` | `running`, `succeeded`, `failed`, `cancelled` |
 | run `inputs` | every pipeline input, with defaults applied |
 | run `outputs` | mapping, or `null` unless the run succeeded |
