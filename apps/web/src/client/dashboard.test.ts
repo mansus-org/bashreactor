@@ -12,32 +12,18 @@ import {
   buildAssets,
   controllers,
   fakeDocument,
+  installRunsGlobals,
   one,
   reply,
+  restoreRunsGlobals,
   showTab,
   waitFor,
 } from "./runs.testkit.ts";
 import type { DiskSpace, RunSummary } from "./api.ts";
 
-// The run screens' stand-in DOM predates the segmented control: it carries attributes but has no
-// dataset view of them. This adds the one view ui.segmented writes through, so the dashboard tests
-// exercise the real component rather than a copy of it.
-const dataAttribute = (key: string): string => `data-${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
-Object.defineProperty(FakeElement.prototype, "dataset", {
-  configurable: true,
-  get(this: FakeElement) {
-    const attrs = this.attrs;
-    return new Proxy({} as Record<string, string>, {
-      get: (_target, key: string) => attrs.get(dataAttribute(key)) ?? "",
-      set: (_target, key: string, value: string) => {
-        attrs.set(dataAttribute(key), String(value));
-        return true;
-      },
-      has: (_target, key: string) => attrs.has(dataAttribute(key)),
-    });
-  },
-});
-
+// The testkit put the stand-in browser up when the first file imported it; a file that ran since may
+// have taken it down, and the modules below read `localStorage` the moment they are imported.
+installRunsGlobals();
 const served = serveModules(["dashboard"]);
 writeFileSync(join(served, "app.js"), "export function navigate(path) { globalThis.bashrNavigated = path; }\n");
 const { renderDashboard, dashboardModel, windowStart, LIVE_POLL_MS, IDLE_POLL_MS } = (await import(
@@ -171,6 +157,9 @@ const buttonNamed = (view: FakeElement, label: string): FakeElement =>
 
 afterAll(() => {
   for (const controller of controllers) controller.abort();
+  // The fake API went onto the global `fetch`, and the files after this one in the same process
+  // include the browser tests, which need the real one.
+  restoreRunsGlobals();
   delete (globalThis as unknown as Record<string, unknown>).history;
   rmSync(served, { recursive: true, force: true });
 });

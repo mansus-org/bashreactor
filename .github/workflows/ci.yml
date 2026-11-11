@@ -9,12 +9,8 @@ permissions:
 
 jobs:
   check:
-    strategy:
-      # One OS failing says nothing about the other, so let both report.
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+    # One runner image. A matrix of two ran the whole suite twice on every push and every PR.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -35,8 +31,8 @@ jobs:
       # An engine checks this exact list at startup and refuses to start without it (SPEC 2.6), so a
       # runner image that drops one makes every engine test fail for a reason the log should name.
       # `cat`, `mv` and `wc` stand in for coreutils, the same way the engine's check does. Nothing here
-      # installs anything: uv and bun come from the steps above, the rest ship with the runner image
-      # (jq 1.6 on 22.04, 1.7 on 24.04), so this is a guard against an image dropping one, not setup.
+      # installs anything: uv and bun come from the steps above, the rest ship with the runner image,
+      # so this is a guard against an image dropping one, not setup.
       - name: The runtimes a block may use are on PATH
         run: |
           missing=()
@@ -50,8 +46,8 @@ jobs:
           bash --version | head -1
           uv --version
           bun --version
-      # The UI smoke tests (BASHR-40) drive the browser the runner image ships — Google Chrome on both
-      # images this matrix runs on. They skip themselves when there is none, because a laptop without
+      # The UI smoke tests (BASHR-40) drive the browser the runner image ships, Google Chrome. They
+      # skip themselves when there is none, because a laptop without
       # Chromium should still be able to run the suite, which would make a missing browser on CI a
       # green run that tested nothing. So the job checks, with the same names
       # apps/web/src/client/browser.testkit.ts looks for, and says the reason.

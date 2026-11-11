@@ -355,22 +355,47 @@ const installed = {
   fetch: globals.fetch,
 };
 
-globals.document = fakeDocument;
-globals.window = { setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args), clearTimeout };
-globals.location = { origin: "http://runs.test", href: "http://runs.test/app/runs" };
-globals.localStorage = storage();
-globals.sessionStorage = storage();
-globals.CSS = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) };
-globals.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
-
 // Bun has no browser, so it has no object URLs. `save()` needs two: it turns the bytes it fetched into
 // one and clicks an anchor at it. Recording what came back is how the download tests know a click
 // really went to the API and came back as a file, rather than just navigating somewhere.
 const savedFiles: { name: string; url: string }[] = [];
 const realCreateObjectURL = URL.createObjectURL;
 const realRevokeObjectURL = URL.revokeObjectURL;
-URL.createObjectURL = ((blob: Blob) => `blob:${blob.size}`) as typeof URL.createObjectURL;
-URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL;
+
+/**
+ * Puts the stand-in browser on the globals. Every test file in one `bun test` process shares them, and
+ * this module is evaluated once for all of them, so a file that uses it calls this at its own top
+ * level: another file's teardown may have taken the globals away since the first import put them up.
+ */
+function installRunsGlobals(): void {
+  globals.document = fakeDocument;
+  globals.window = { setTimeout: (...args: Parameters<typeof setTimeout>) => setTimeout(...args), clearTimeout };
+  globals.location = { origin: "http://runs.test", href: "http://runs.test/app/runs" };
+  globals.localStorage = storage();
+  globals.sessionStorage = storage();
+  globals.CSS = { escape: (value: string) => value.replace(/[^\w-]/g, (c) => `\\${c}`) };
+  globals.requestAnimationFrame = (fn: () => void) => setTimeout(fn, 0);
+  URL.createObjectURL = ((blob: Blob) => `blob:${blob.size}`) as typeof URL.createObjectURL;
+  URL.revokeObjectURL = (() => {}) as typeof URL.revokeObjectURL;
+}
+
+/**
+ * Gives the globals back as they were before the first install, the real `fetch` among them. A file
+ * that installed calls this in its `afterAll`: the files after it in the same process include the
+ * browser tests, which talk to a real server and get a stub's 500 for every call if one is left behind.
+ */
+function restoreRunsGlobals(): void {
+  for (const controller of controllers) controller.abort();
+  for (const stop of cleanups.splice(0)) stop();
+  URL.createObjectURL = realCreateObjectURL;
+  URL.revokeObjectURL = realRevokeObjectURL;
+  for (const [name, value] of Object.entries(installed)) {
+    if (value === undefined) delete globals[name];
+    else globals[name] = value;
+  }
+}
+
+installRunsGlobals();
 fakeDocument.createElement = (tag: string) => {
   const node = new FakeElement(tag);
   if (tag === "a") {
@@ -458,14 +483,7 @@ async function render(run: Run, serving: () => void = () => serve(run), keepOpen
 }
 
 process.once("exit", () => {
-  for (const controller of controllers) controller.abort();
-  for (const stop of cleanups) stop();
-  URL.createObjectURL = realCreateObjectURL;
-  URL.revokeObjectURL = realRevokeObjectURL;
-  for (const [name, value] of Object.entries(installed)) {
-    if (value === undefined) delete globals[name];
-    else globals[name] = value;
-  }
+  restoreRunsGlobals();
   rmSync(served, { recursive: true, force: true });
 });
 // ---------- the runs on screen ----------
@@ -1040,6 +1058,8 @@ const panelLinks = (view: FakeElement): string[] =>
   view.querySelectorAll(".files .file").map((link) => link.getAttribute("data-download") ?? "");
 
 export {
+  installRunsGlobals,
+  restoreRunsGlobals,
   FakeElement,
   FakeClock,
   FakeServer,

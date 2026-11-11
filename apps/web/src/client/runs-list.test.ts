@@ -15,8 +15,10 @@ import {
   T0,
   controllers,
   fakeDocument,
+  installRunsGlobals,
   one,
   reply,
+  restoreRunsGlobals,
   showTab,
   styled,
   summary,
@@ -25,10 +27,17 @@ import {
 } from "./runs.testkit.ts";
 import type { RunSummary } from "./api.ts";
 
+// The testkit put the stand-in browser up when the first file imported it; a file that ran since may
+// have taken it down, and the modules below read `localStorage` the moment they are imported.
+installRunsGlobals();
 const served = serveModules(["runs-list", "ui"]);
 const { renderRunsList } = (await import(join(served, "runs-list.js"))) as typeof import("./runs-list.ts");
 
-afterAll(() => rmSync(served, { recursive: true, force: true }));
+afterAll(() => {
+  restoreRunsGlobals();
+  delete (globalThis as unknown as Record<string, unknown>).history;
+  rmSync(served, { recursive: true, force: true });
+});
 
 // ---------- the address, which the screen rewrites in place ----------
 

@@ -33,6 +33,9 @@ docEvents.removeEventListener = (type, handler) => {
   if (at >= 0) visibilityHandlers.splice(at, 1);
 };
 
+// Every fake server below goes onto the global `fetch`; the real one is put back in afterAll, because
+// the browser tests share this process and talk to a real server through it.
+const realFetch = globalThis.fetch;
 const realFocus = FakeElement.prototype.focus;
 const realReplace = FakeElement.prototype.replaceChildren;
 const realRemoveAttribute = (FakeElement.prototype as unknown as { removeAttribute?: (name: string) => void }).removeAttribute;
@@ -136,6 +139,7 @@ afterAll(() => {
   delete proto.click;
   URL.createObjectURL = realCreateObjectURL;
   URL.revokeObjectURL = realRevokeObjectURL;
+  globalThis.fetch = realFetch;
   uninstallDom(dom);
   rmSync(served, { recursive: true, force: true });
 });
