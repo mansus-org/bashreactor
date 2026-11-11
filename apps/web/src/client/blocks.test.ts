@@ -481,6 +481,25 @@ describe("the block writer", () => {
     expect(body).toMatch(/line-height:\s*1\.5/);
   });
 
+  test("the writer says where it is, above the toolbar", async () => {
+    const view = await open("/blocks/versioned/edit");
+    const form = view.querySelector("form")!;
+    const crumbs = view.querySelector(".block-writer .crumbs")!;
+
+    expect(crumbs.querySelectorAll("a").map((link) => link.textContent)).toEqual(["Blocks", "versioned"]);
+    expect(crumbs.querySelectorAll("a")[0]?.getAttribute("href")).toBe("/app/blocks");
+    expect(crumbs.querySelectorAll("a")[1]?.getAttribute("href")).toBe("/app/blocks/versioned");
+    expect(crumbs.querySelector(".crumbs__current")?.textContent).toBe("New version");
+    expect(form.children.indexOf(crumbs)).toBeLessThan(
+      form.children.indexOf(view.querySelector(".block-writer__toolbar")!),
+    );
+
+    const fresh = await open("/blocks-new");
+    const freshCrumbs = fresh.querySelector(".block-writer .crumbs")!;
+    expect(freshCrumbs.querySelectorAll("a").map((link) => link.textContent)).toEqual(["Blocks"]);
+    expect(freshCrumbs.querySelector(".crumbs__current")?.textContent).toBe("New");
+  });
+
   test("a new block opens with its toolbar and live declaration", async () => {
     const view = await open("/blocks-new");
 

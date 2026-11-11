@@ -603,6 +603,34 @@ function currentName(parsed: Contract): string | null {
   return parsed.name === null || parsed.name === "" || parsed.name === "new-block" ? null : parsed.name;
 }
 
+/**
+ * The writer's breadcrumb. `pageHeader` always draws a title with its crumbs, and the writer's title
+ * is its toolbar, so this is the smallest crumb line the writer needs on its own.
+ */
+// BASHR-62: candidate for ui.ts
+function writerCrumbs(name: string | null): HTMLElement {
+  const entries =
+    name === null
+      ? [{ label: "Blocks", href: "/app/blocks" }, { label: "New" }]
+      : [
+          { label: "Blocks", href: "/app/blocks" },
+          { label: name, href: `/app/blocks/${encodeURIComponent(name)}` },
+          { label: "New version" },
+        ];
+  return el(
+    "nav",
+    { class: "crumbs", "aria-label": "Breadcrumb" },
+    ...entries.flatMap((entry, index) => {
+      const current = index === entries.length - 1;
+      const node =
+        current || entry.href === undefined
+          ? el("span", { class: "crumbs__current" }, entry.label)
+          : el("a", { href: entry.href, "data-link": "" }, entry.label);
+      return index === 0 ? [node] : [" / ", node];
+    }),
+  );
+}
+
 function renderWriterShell(
   view: HTMLElement,
   _route: Route,
@@ -807,6 +835,7 @@ function renderWriterShell(
         void publish();
       },
     },
+    writerCrumbs(base !== null ? base.name : null),
     el(
       "div",
       { class: "block-writer__toolbar" },
