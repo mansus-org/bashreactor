@@ -12,13 +12,24 @@ import { join } from "node:path";
 import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Route } from "./app.ts";
 
+const globals = globalThis as unknown as Record<string, unknown>;
+// Every global this file replaces is written down here, so the next test file gets the real one back.
+// Bun runs all test files in one process: a fake `document`, `window` or `sessionStorage` that
+// outlives this file is the next file's mystery.
+const before = {
+  document: globals.document,
+  window: globals.window,
+  sessionStorage: globals.sessionStorage,
+  history: globals.history,
+  fetch: globals.fetch,
+};
 const dom = installDom({ href: "http://x/app/pipelines/word-report/edit" });
 
 // The editor keeps work in progress in `sessionStorage`, which the stand-in browser gives every test
 // in this file at once. This is the same store with a `clear`, so one test's draft cannot be the next
 // one's surprise.
 const tab = new Map<string, string>();
-(globalThis as unknown as Record<string, unknown>).sessionStorage = {
+globals.sessionStorage = {
   getItem: (key: string) => tab.get(key) ?? null,
   setItem: (key: string, value: string) => void tab.set(key, value),
   removeItem: (key: string) => void tab.delete(key),
@@ -32,7 +43,10 @@ const windowEvents: { type: string; handler: (event: unknown) => void }[] = [];
 const asked: string[] = [];
 let answers: boolean[] = [];
 
-const fakeWindow = (globalThis as unknown as Record<string, unknown>).window as Record<string, unknown>;
+const fakeWindow = globals.window as Record<string, unknown>;
+const realDocumentListener = (dom.document as unknown as Record<string, unknown>).addEventListener;
+const realWindowListener = fakeWindow.addEventListener;
+const realConfirm = fakeWindow.confirm;
 (dom.document as unknown as Record<string, unknown>).addEventListener = (type: string, handler: (event: unknown) => void) =>
   void pageEvents.push({ type, handler });
 fakeWindow.addEventListener = (type: string, handler: (event: unknown) => void) => void windowEvents.push({ type, handler });
@@ -45,9 +59,15 @@ const { session } = (await import(join(served, "api.js"))) as typeof import("./a
 const { renderPipeline } = (await import(join(served, "editor.js"))) as typeof import("./editor.ts");
 
 afterAll(() => {
+  (dom.document as unknown as Record<string, unknown>).addEventListener = realDocumentListener;
+  fakeWindow.addEventListener = realWindowListener;
+  fakeWindow.confirm = realConfirm;
   uninstallDom(dom);
+  for (const [name, value] of Object.entries(before)) {
+    if (value === undefined) delete globals[name];
+    else globals[name] = value;
+  }
   rmSync(served, { recursive: true, force: true });
-  (globalThis as unknown as Record<string, unknown>).fetch = realFetch;
 });
 
 // ---------- what the API has ----------
@@ -209,7 +229,6 @@ async function answer(href: string, init?: RequestInit): Promise<Response> {
   return json({ code: "not_found", message: `no route ${path}` }, 404);
 }
 
-const realFetch = globalThis.fetch;
 (globalThis as unknown as Record<string, unknown>).fetch = (href: string | URL, init?: RequestInit) => answer(href.toString(), init);
 
 // ---------- opening it ----------
