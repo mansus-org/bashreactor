@@ -11,10 +11,11 @@ runs if it skips them.
 
 The browser is a client of `/v1` like the CLI and the MCP server: bearer token, same scopes, same
 error objects. There is no websocket and no second API — the screens poll. A run reads
-`GET /v1/runs/:id` once a second (`POLL_MS` in `src/client/runs.ts`) and stops asking once it is
-finished; the Runs list reads `GET /v1/runs` once a second while anything on it is running and every
-fifteen seconds (`IDLE_POLL_MS`) while nothing is, because a run started from the CLI has to turn up
-by itself. Neither reads while the tab is hidden, and both read the moment it is looked at again.
+`GET /v1/runs/:id` once a second (`POLL_MS` in `src/client/run-shared.ts`) and stops asking once it is
+finished; the Runs list (`src/client/runs-list.ts`) reads `GET /v1/runs` once a second while anything
+on it is running and every fifteen seconds (`IDLE_POLL_MS`) while nothing is, because a run started
+from the CLI has to turn up by itself. Neither reads while the tab is hidden, and both read the moment
+it is looked at again.
 
 ## What it serves
 
@@ -26,7 +27,7 @@ The asset table is built once, at startup, in memory (`buildAssets()` in `src/as
 | `/app/`, and any `/app` path that is not a file | `src/client/index.html`, so a deep link survives a reload |
 | `/app/assets/<name>.js` | each `src/client/*.ts`, transpiled at startup |
 | `/app/assets/yaml-lib.js` | the YAML parser the editor edits with, bundled (see *Build*) |
-| `/app/assets/style.css` | `src/client/style.css` |
+| `/app/assets/style.css` | `src/client/styles/*.css`, joined in the fixed order below |
 | `/app/assets/fonts/*.woff2` | the three faces, from `src/fonts.ts` |
 | `/app/OFL.txt` | the font licence, served as itself so a person can read it |
 | anything else, and any method that is not `GET` or `HEAD` | the API, which answers `not_found` 404 for a path it does not have |
@@ -35,6 +36,25 @@ Fonts are `immutable` and cached for a year; everything else is `no-cache` with 
 `if-none-match` gets a 304. The CSP allows nothing but this origin: no inline script, no CDN, no form
 that posts elsewhere. A missing `assets/` path is a real 404 — the client's own routes are the `/app`
 paths that are not files.
+
+### The stylesheet
+
+The browser asks for one file and the server joins `src/client/styles/` into it in this order:
+
+1. `base.css` — font faces, tokens, reset, type and shared controls;
+2. `shell.css` — chrome, nav, the token gate and the footer;
+3. `dashboard.css`;
+4. `runs-list.css`;
+5. `run-page.css`;
+6. `pipelines.css`;
+7. `editor.css`;
+8. `blocks.css`;
+9. `settings.css`.
+
+`STYLE_FILES` in `src/assets.ts` is that list, and `src/raw.js` imports each file. A screen file that
+has no rules yet holds one comment naming the screen. A rule used by two screens lives in `base.css`,
+not in either screen's file. `src/assets.test.ts` fails when a CSS file on disk is missing from the
+list, and checks that the served `style.css` is exactly the files joined in that order.
 
 ## Build
 
@@ -69,6 +89,24 @@ copies only `dist/server.js` into `oven/bun:1-alpine`, with `CMD ["bun", "server
 `BASHREACTOR_HOME=/data`, `PORT=8080` and `USER 10001`. It installs `bash`, `curl`, `jq` and `uv`
 because SPEC 2.6 says the engine refuses to start without them.
 
+## Modules
+
+The shell is `app.ts`; each screen is a module of its own so its rules and its code can change
+without another screen's file moving:
+
+| Module | What it owns |
+| --- | --- |
+| `client/app.ts` | the router, the token gate, the entry page and the chrome |
+| `client/editor.ts` | the pipeline editor and its inspector |
+| `client/start-run.ts` | the Start dialog: typed input fields and the POST that starts a run |
+| `client/runs-list.ts` | `/runs`, the list on its own clock |
+| `client/run-page.ts` | `/runs/:id`, steps, actions and the log pane |
+| `client/run-shared.ts` | the clock, polling intervals and run-status helpers both run screens use |
+| `client/blocks.ts` | the block library and its writer |
+| `client/logs.ts`, `client/model.ts`, `client/graph.ts`, `client/yaml*.ts` | the pieces the screens share |
+
+A new module still has to be registered in `src/raw.js` and `CLIENT_MODULES` in `src/assets.ts`.
+
 ## Before you edit `src/client/`
 
 - **A new module has to be registered twice**: imported in `src/raw.js` and named in `CLIENT_MODULES`
@@ -84,7 +122,9 @@ because SPEC 2.6 says the engine refuses to start without them.
 - **Tests are colocated and run with `bun test` in this package.** A client module is tested through
   the text the server serves — a `data:` import, see `client/logs.test.ts` — rather than by importing
   `./logs.ts`: bun caches modules by path and `src/raw.js` has already loaded that path as a string.
-  Files ending `.testkit.ts` are scaffolding and are never shipped.
+  Files ending `.testkit.ts` are scaffolding and are never shipped. The run screens share
+  `client/runs.testkit.ts`, while `client/run-page.test.ts` and `client/runs-list.test.ts` hold one
+  screen's describes each.
 - **Typecheck runs twice on purpose**: `tsc -p .` for the server side, `tsc -p tsconfig.client.json`
   for `src/client` against the DOM lib. `bun run typecheck` in this package does both.
 - `src/server.ts` stays a near-copy of `apps/api/src/main.ts`. When that file changes, this one has to
@@ -98,6 +138,7 @@ because SPEC 2.6 says the engine refuses to start without them.
 `bun test` in this package. `src/index.test.ts` mounts the UI in front of a real API in one process,
 which is how it is deployed, and re-probes the API's own routes so the mount cannot quietly change
 what `/` and `/healthz` answer; it also publishes, validates, stores, starts and follows the worked
-example through the one handler. `src/server.test.ts` runs this entry as a real process over a real
-socket, and `src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the source and the bundle
-`bun run build` makes, since the image ships only the bundle.
+example through the one handler. The run screens' tests share `src/client/runs.testkit.ts`, and are
+split into `run-page.test.ts` and `runs-list.test.ts`. `src/server.test.ts` runs this entry as a real
+process over a real socket, and `src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the
+source and the bundle `bun run build` makes, since the image ships only the bundle.
