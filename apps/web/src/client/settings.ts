@@ -38,8 +38,6 @@ function problem(caught: unknown): { code: string; message: string; path?: strin
   return { code: "internal_error", message: caught instanceof Error ? caught.message : String(caught) };
 }
 
-const H2 = "h2";
-
 function section(title: string, body: Child[], action?: Child): HTMLElement {
   return el(
     "section",
@@ -47,7 +45,7 @@ function section(title: string, body: Child[], action?: Child): HTMLElement {
     el(
       "div",
       { class: "settings__section-head" },
-      el(H2, { class: "h2" }, title),
+      el("h2", { class: "h2" }, title),
       action ?? null,
     ),
     el("div", { class: "settings__section-body" }, body),
@@ -84,9 +82,7 @@ function identitySection(identity: Identity): HTMLElement {
 }
 
 function serverSection(health: Read<Health>): HTMLElement {
-  const version = health.ok
-    ? el("code", {}, health.value.version)
-    : el("span", {}, "—");
+  const version = health.ok ? el("code", {}, health.value.version) : el("span", {}, "—");
   const body: Child[] = [
     el(
       "dl",
@@ -354,8 +350,8 @@ export async function renderSettings(view: HTMLElement, _route: Route, signal: A
   const tokenTable = el("div", { class: "settings__tokens" });
 
   function paintTokens(): void {
-    tokenTable.replaceChildren(
-      table(tokenColumns((token) => void revokeToken(
+    const columns = tokenColumns((token) =>
+      void revokeToken(
         token,
         () => {
           tokens = tokens.filter((entry) => entry.id !== token.id);
@@ -363,10 +359,9 @@ export async function renderSettings(view: HTMLElement, _route: Route, signal: A
           paintTokens();
         },
         (caught) => tokenError.replaceChildren(errorBox(problem(caught))),
-      )), tokens, {
-        empty: "No agent tokens yet.",
-      }),
+      ),
     );
+    tokenTable.replaceChildren(table(columns, tokens, { empty: "No agent tokens yet." }));
   }
 
   const tokenAction = button("New token", {
