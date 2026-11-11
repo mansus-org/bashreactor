@@ -41,8 +41,8 @@ paths that are not files.
 
 The browser asks for one file and the server joins `src/client/styles/` into it in this order:
 
-1. `base.css` — font faces, tokens, reset, type and shared controls;
-2. `shell.css` — chrome, nav, the token gate and the footer;
+1. `base.css` — font faces, tokens, reset, type, the components and the shared controls;
+2. `shell.css` — the sidebar, the top bar and its menu, and the token gate;
 3. `dashboard.css`;
 4. `runs-list.css`;
 5. `run-page.css`;
@@ -55,6 +55,26 @@ The browser asks for one file and the server joins `src/client/styles/` into it 
 has no rules yet holds one comment naming the screen. A rule used by two screens lives in `base.css`,
 not in either screen's file. `src/assets.test.ts` fails when a CSS file on disk is missing from the
 list, and checks that the served `style.css` is exactly the files joined in that order.
+
+### The shell and the routes
+
+`src/client/index.html` is the shell: the sidebar (wordmark, the four screens and Settings, who is
+signed in and Sign out), and, below 940 px, a top bar with a Menu button and the same items in a
+panel. `src/client/app.ts` draws the nav from the 7×7 bitmaps, marks the current section with
+`aria-current="page"`, and routes under `/app`:
+
+| Path | Screen |
+| --- | --- |
+| `/` | Dashboard (BASHR-56) |
+| `/runs`, `/runs/:id` | the Runs list and one run |
+| `/pipelines`, `/pipelines/:name` | Pipelines and one pipeline (BASHR-57) |
+| `/pipelines/:name/edit`, `/pipelines-new` | the editor |
+| `/blocks`, `/blocks/:name`, `/blocks/:name/edit`, `/blocks-new` | the library and its writer |
+| `/settings` | Settings (BASHR-60) |
+
+A screen whose ticket has not landed answers `not_implemented` with its ticket number, rather than
+drawing a fake one. `/pipeline` rewrites to `/pipelines-new`, and `/pipeline/:name/:version` to
+`/pipelines/:name/edit?version=:version`, with `history.replaceState` so Back does not loop.
 
 ## Build
 
@@ -96,16 +116,23 @@ without another screen's file moving:
 
 | Module | What it owns |
 | --- | --- |
-| `client/app.ts` | the router, the token gate, the entry page and the chrome |
+| `client/app.ts` | the router, the token gate and the chrome |
+| `client/ui.ts` | every component a screen is built from, and the formatters |
+| `client/dom.ts` | `el`, the 7×7 signs and nav glyphs, the error box and the status region |
+| `client/api.ts` | the client half of `/v1`, including run filters, disk and tokens |
+| `client/library.ts` | reads the block versions a stored or snapshotted pipeline names |
 | `client/editor.ts` | the pipeline editor and its inspector |
 | `client/start-run.ts` | the Start dialog: typed input fields and the POST that starts a run |
 | `client/runs-list.ts` | `/runs`, the list on its own clock |
 | `client/run-page.ts` | `/runs/:id`, steps, actions and the log pane |
 | `client/run-shared.ts` | the clock, polling intervals and run-status helpers both run screens use |
 | `client/blocks.ts` | the block library and its writer |
+| `client/dashboard.ts`, `client/pipelines.ts`, `client/pipeline-page.ts`, `client/settings.ts` | the redesigned screens, each answering `not_implemented` until its ticket |
+| `client/timeline.ts` | where BASHR-55 draws the run timeline |
 | `client/logs.ts`, `client/model.ts`, `client/graph.ts`, `client/yaml*.ts` | the pieces the screens share |
 
 A new module still has to be registered in `src/raw.js` and `CLIENT_MODULES` in `src/assets.ts`.
+The screen tickets replace the body of a module that already exists; they do not add a new one.
 
 ## Before you edit `src/client/`
 
@@ -120,11 +147,13 @@ A new module still has to be registered in `src/raw.js` and `CLIENT_MODULES` in 
 - **No dependencies.** The CSP is `'self'` only and there is no bundler to add one with. The one piece
   of third-party code is the YAML parser, and it is bundled on purpose.
 - **Tests are colocated and run with `bun test` in this package.** A client module is tested through
-  the text the server serves — a `data:` import, see `client/logs.test.ts` — rather than by importing
-  `./logs.ts`: bun caches modules by path and `src/raw.js` has already loaded that path as a string.
-  Files ending `.testkit.ts` are scaffolding and are never shipped. The run screens share
-  `client/runs.testkit.ts`, while `client/run-page.test.ts` and `client/runs-list.test.ts` hold one
-  screen's describes each.
+  the text the server serves rather than by importing it statically: bun caches modules by path and
+  `src/raw.js` has already loaded that path as a string. A pure module (like `logs.ts`) can be a
+  `data:` import, see `client/logs.test.ts`; a module with siblings is written out under its own name
+  by `serveModules` in `client.testkit.ts`, which is what `ui.test.ts`, `shell.test.ts`, `api.test.ts`
+  and `library.test.ts` do. Files ending `.testkit.ts` are scaffolding and are never shipped. The run
+  screens share `client/runs.testkit.ts`, while `client/run-page.test.ts` and
+  `client/runs-list.test.ts` hold one screen's describes each.
 - **Typecheck runs twice on purpose**: `tsc -p .` for the server side, `tsc -p tsconfig.client.json`
   for `src/client` against the DOM lib. `bun run typecheck` in this package does both.
 - `src/server.ts` stays a near-copy of `apps/api/src/main.ts`. When that file changes, this one has to
@@ -138,7 +167,10 @@ A new module still has to be registered in `src/raw.js` and `CLIENT_MODULES` in 
 `bun test` in this package. `src/index.test.ts` mounts the UI in front of a real API in one process,
 which is how it is deployed, and re-probes the API's own routes so the mount cannot quietly change
 what `/` and `/healthz` answer; it also publishes, validates, stores, starts and follows the worked
-example through the one handler. The run screens' tests share `src/client/runs.testkit.ts`, and are
-split into `run-page.test.ts` and `runs-list.test.ts`. `src/server.test.ts` runs this entry as a real
-process over a real socket, and `src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the
-source and the bundle `bun run build` makes, since the image ships only the bundle.
+example through the one handler. The design system is held down by `src/client/ui.test.ts` (markup,
+formatters, keyed table updates), `src/client/shell.test.ts` (routes, redirects, `aria-current`, the
+phone menu and the gate) and `src/client/api.test.ts` (the newer `/v1` shapes). The run screens'
+tests share `src/client/runs.testkit.ts`, and are split into `run-page.test.ts` and
+`runs-list.test.ts`. `src/server.test.ts` runs this entry as a real process over a real socket, and
+`src/shutdown.test.ts` checks SPEC 4.7's shutdown against both the source and the bundle
+`bun run build` makes, since the image ships only the bundle.
