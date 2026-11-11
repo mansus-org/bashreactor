@@ -128,7 +128,7 @@ describe("the mount", () => {
   test("serves the client as JavaScript the browser can run, and the stylesheet that styles it", async () => {
     const app = mount();
     try {
-      const modules = ["app", "api", "dom", "yaml", "model", "graph", "editor", "runs", "blocks", "logs"];
+      const modules = ["app", "api", "dom", "yaml", "model", "graph", "editor", "start-run", "run-shared", "runs-list", "run-page", "blocks", "logs"];
       for (const name of modules) {
         const response = await app.call("GET", `/app/assets/${name}.js`);
         expect(response.status).toBe(200);
@@ -149,7 +149,7 @@ describe("the mount", () => {
       const sheet = await css.text();
       expect(sheet).toContain("--paper: #e4e2db");
       expect(sheet).toContain("--ink: #141414");
-      // The fonts are routes of this app, not files beside the mockup.
+      // The fonts are routes of this app, served from the bytes embedded beside it.
       expect(sheet).toContain('url("/app/assets/fonts/anybody.woff2")');
     } finally {
       app.close();
@@ -170,7 +170,7 @@ describe("the mount", () => {
         expect(response.headers.get("cache-control")).toContain("immutable");
         const bytes = new Uint8Array(await response.arrayBuffer());
         expect(new TextDecoder().decode(bytes.slice(0, 4))).toBe("wOF2");
-        const source = await Bun.file(join(import.meta.dir, "../../../mockup/fonts", file)).bytes();
+        const source = await Bun.file(join(import.meta.dir, "../fonts", file)).bytes();
         expect(bytes.length).toBe(source.length);
       }
     } finally {

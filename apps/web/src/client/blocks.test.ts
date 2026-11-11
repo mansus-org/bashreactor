@@ -18,7 +18,7 @@ import { blockSource, decls, installDom, serveModules, uninstallDom, type FakeEl
 import type { Route } from "./app.ts";
 
 const dom = installDom({ href: "http://x/app/blocks" });
-const served = serveModules(["app", "api", "dom", "model", "blocks", "editor", "graph", "yaml", "runs", "logs"]);
+const served = serveModules(["app", "api", "dom", "model", "blocks", "editor", "graph", "yaml", "runs-list", "run-page", "logs"]);
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { renderBlocks } = (await import(join(served, "blocks.js"))) as typeof import("./blocks.ts");
 

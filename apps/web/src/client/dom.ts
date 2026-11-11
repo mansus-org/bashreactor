@@ -1,6 +1,6 @@
 // The DOM helpers every screen shares: one element factory, the 7x7 state signs, the two formatters,
-// the status region and the error box. Ported from mockup/shell.js; the only thing that changed is
-// that an error here is always the SPEC 5 object, because that is all the API ever answers with.
+// the status region and the error box. An error here is always the SPEC 5 object, because that is
+// all the API ever answers with.
 
 /** Each state has a shape as well as a word, so a row reads at a glance in two inks. */
 const SIGNS: Record<string, readonly string[]> = {
@@ -199,7 +199,7 @@ export function errorBox(
   );
 }
 
-/** A one-line status the screen is in, for the state region the mockup uses everywhere. */
+/** A one-line status the screen is in, for the state region every screen uses. */
 export function stateLine(message: string): HTMLElement {
   return el("p", { class: "state", role: "status" }, message);
 }

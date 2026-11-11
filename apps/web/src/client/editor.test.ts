@@ -40,7 +40,7 @@ fakeWindow.confirm = (message: string) => {
   asked.push(message);
   return answers.shift() ?? true;
 };
-const served = serveModules(["app", "api", "dom", "yaml", "model", "graph", "editor", "runs", "blocks", "logs"]);
+const served = serveModules(["app", "api", "dom", "yaml", "model", "graph", "editor", "runs-list", "run-page", "blocks", "logs"]);
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { renderPipeline } = (await import(join(served, "editor.js"))) as typeof import("./editor.ts");
 

@@ -17,7 +17,15 @@
 // browser when this file is transpiled (see yaml-lib.macro.ts), so it is inside server.js like the rest.
 import { yamlLibrary } from "./yaml-lib.macro.ts" with { type: "macro" };
 import indexHtml from "./client/index.html" with { type: "text" };
-import styleCss from "./client/style.css" with { type: "text" };
+import styleBase from "./client/styles/base.css" with { type: "text" };
+import styleShell from "./client/styles/shell.css" with { type: "text" };
+import styleDashboard from "./client/styles/dashboard.css" with { type: "text" };
+import styleRunsList from "./client/styles/runs-list.css" with { type: "text" };
+import styleRunPage from "./client/styles/run-page.css" with { type: "text" };
+import stylePipelines from "./client/styles/pipelines.css" with { type: "text" };
+import styleEditor from "./client/styles/editor.css" with { type: "text" };
+import styleBlocks from "./client/styles/blocks.css" with { type: "text" };
+import styleSettings from "./client/styles/settings.css" with { type: "text" };
 import appSource from "./client/app.ts" with { type: "text" };
 import apiSource from "./client/api.ts" with { type: "text" };
 import domSource from "./client/dom.ts" with { type: "text" };
@@ -26,7 +34,10 @@ import yamlEditSource from "./client/yaml-edit.ts" with { type: "text" };
 import modelSource from "./client/model.ts" with { type: "text" };
 import graphSource from "./client/graph.ts" with { type: "text" };
 import editorSource from "./client/editor.ts" with { type: "text" };
-import runsSource from "./client/runs.ts" with { type: "text" };
+import startRunSource from "./client/start-run.ts" with { type: "text" };
+import runSharedSource from "./client/run-shared.ts" with { type: "text" };
+import runsListSource from "./client/runs-list.ts" with { type: "text" };
+import runPageSource from "./client/run-page.ts" with { type: "text" };
 import blocksSource from "./client/blocks.ts" with { type: "text" };
 import logsSource from "./client/logs.ts" with { type: "text" };
 
@@ -35,7 +46,15 @@ const yamlLibSource = yamlLibrary();
 export {
   yamlLibSource,
   indexHtml,
-  styleCss,
+  styleBase,
+  styleShell,
+  styleDashboard,
+  styleRunsList,
+  styleRunPage,
+  stylePipelines,
+  styleEditor,
+  styleBlocks,
+  styleSettings,
   appSource,
   apiSource,
   domSource,
@@ -44,7 +63,10 @@ export {
   modelSource,
   graphSource,
   editorSource,
-  runsSource,
+  startRunSource,
+  runSharedSource,
+  runsListSource,
+  runPageSource,
   blocksSource,
   logsSource,
 };

@@ -1,0 +1,155 @@
+/* ---------- pipeline editor ---------- */
+
+.ed { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: clamp(20px, 2.4vw, 36px); align-items: start; }
+.ed__yaml {
+  position: sticky; top: 12px;
+  display: flex; flex-direction: column;
+  height: calc(100dvh - 24px); min-height: 560px;
+}
+@media (max-width: 1140px) {
+  .ed { grid-template-columns: minmax(0, 1fr); }
+  .ed__yaml { position: static; height: auto; min-height: 0; }
+  .ed__yaml .yaml { flex: none; height: max(420px, 70dvh); }
+}
+
+.stage {
+  position: relative; min-height: 260px;
+  border: 3px solid var(--ink); overflow: auto;
+}
+.canvas { position: relative; }
+.wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
+.wire { fill: none; stroke: currentColor; stroke-width: 2; }
+.wire--needs { stroke-dasharray: 2 2; }
+.wire.is-on { stroke-width: 4; }
+.wire--needs.is-on { stroke-dasharray: 4 4; }
+.stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
+
+.node {
+  position: absolute; display: grid; gap: 2px; min-height: 44px;
+  padding: 8px 12px 10px;
+  border: 3px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
+.node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; }
+.node__id { font-weight: 800; font-size: 1.0625rem; overflow-wrap: anywhere; }
+.node__title { font-size: 0.875rem; line-height: 1.3; }
+.node__uses { font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; overflow-wrap: anywhere; }
+.node__meta { font-size: 0.875rem; }
+.node__problem { margin-top: 2px; }
+.node__ports { display: grid; gap: 2px; margin-top: 6px; }
+/* One column of ports, not one per side. The graph sets a step's width from the room its columns
+   leave behind, and two columns of names inside that width is how `total_words` came out as
+   `total_wor/ds` at desktop width. The mark on each side still says which way the name runs. */
+.stage--flow .ports + .ports { margin-top: 6px; }
+.port {
+  position: relative; display: block;
+  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
+.port__mark {
+  position: absolute; top: 5px; left: -18px; width: 10px; height: 10px;
+  background: var(--ink); outline: 2px solid var(--paper);
+}
+.port__mark--value { background: var(--paper); outline: 2px solid var(--ink); outline-offset: -2px; }
+.stage--flow .port--out { text-align: right; }
+.stage--flow .port--out .port__mark { left: auto; right: -18px; }
+
+.stage--stale .node { background: var(--sparse) var(--paper); cursor: default; }
+.stage--stale .node > * { justify-self: start; background: var(--paper); }
+.stage--stale .node__ports { background: none; }
+.stage--stale .port__name { background: var(--paper); }
+.stale-note { margin-bottom: 10px; padding: 8px 12px; border: 3px solid var(--ink); font-weight: 700; }
+
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; margin-top: 8px; font-size: 0.9375rem; }
+.legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.sw { display: inline-block; flex: none; }
+.sw--wired { width: 10px; height: 10px; background: var(--ink); }
+.sw--value { width: 10px; height: 10px; border: 2px solid var(--ink); }
+.sw--data { width: 24px; height: 2px; background: var(--ink); }
+.sw--needs { width: 24px; height: 2px; background: var(--dots); }
+.keys { margin-top: 4px; }
+
+.inspector { margin-top: 28px; }
+.inspector__body { display: grid; gap: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr)); gap: 12px 16px; }
+.wire-row {
+  display: grid; grid-template-columns: minmax(7rem, 11rem) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 6px 12px;
+  padding: 8px 0; background: var(--dots);
+}
+.wire-row__name { font-family: var(--font-code); font-variant-ligatures: none; font-weight: 700; font-size: 0.9375rem; overflow-wrap: anywhere; }
+.wire-row__name small { display: block; font-family: var(--font-text); font-weight: 420; font-size: 0.875rem; }
+.wire-row .wide { grid-column: 2 / -1; }
+.checks { display: flex; flex-wrap: wrap; gap: 0 18px; }
+@media (max-width: 640px) {
+  .wire-row { grid-template-columns: minmax(0, 1fr); }
+  .wire-row .wide { grid-column: auto; }
+}
+
+/* The YAML pane: a transparent textarea over a painted copy. The textarea stays the real editor
+   (undo, selection, screen readers) and the copy can do what a textarea can't: mark whole lines. */
+.yaml {
+  position: relative; flex: 1 1 auto; min-height: 0;
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  border: 3px solid var(--ink);
+}
+.yaml:focus-within { outline: 3px solid var(--ink); outline-offset: 3px; }
+.yaml__gutter {
+  overflow: hidden; padding: 8px 0; user-select: none;
+  font-family: var(--font-code); font-size: 0.875rem; line-height: var(--yaml-line); text-align: right;
+}
+.yaml__num { display: block; padding: 0 8px 0 10px; min-width: 3.4em; }
+.yaml__num.is-hit { background: var(--ink); color: var(--paper); font-weight: 700; }
+.yaml__num.is-bad::before { content: "! "; font-weight: 800; }
+.yaml__code { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
+.yaml__paint, .yaml__code textarea {
+  position: absolute; inset: 0;
+  margin: 0; padding: 8px 12px; border: 0;
+  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.9375rem; font-weight: 420; line-height: var(--yaml-line);
+  white-space: pre; tab-size: 2;
+}
+.yaml__paint { overflow: hidden; pointer-events: none; }
+.yaml__inner { display: inline-block; min-width: 100%; }
+.yaml__line { display: block; min-height: var(--yaml-line); padding: 0 12px; margin: 0 -12px; }
+.yaml__line.is-hit { background: var(--ink); color: var(--paper); }
+/* The caret is ink too, so a marked line steps back while someone is typing in it. */
+.yaml:focus-within .yaml__line.is-hit { background: none; color: var(--ink); }
+.yaml__key { font-weight: 700; }
+.yaml__ref { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.yaml__comment { font-style: italic; }
+.yaml__code textarea {
+  width: 100%; height: 100%; min-height: 0; resize: none;
+  overflow: auto; background: transparent; color: transparent; caret-color: var(--ink);
+}
+.yaml__code textarea:focus { outline: none; }
+.yaml__code textarea::selection { background: var(--ink); color: var(--paper); }
+@media (max-width: 640px) {
+  /* 16 px keeps phones from zooming the page on focus. */
+  .yaml__paint, .yaml__code textarea { font-size: 1rem; }
+}
+@media (forced-colors: active) {
+  .yaml__paint { display: none; }
+  .yaml__code textarea { color: CanvasText; }
+}
+
+.problems { flex: none; max-height: 34%; overflow: auto; margin-top: 10px; }
+.problems__list { margin: 0; padding: 0; list-style: none; }
+.problem {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: 2px 10px;
+  width: 100%; min-height: 44px; padding: 8px 2px;
+  border: 0; background: var(--dots); color: inherit; font: inherit; font-size: 0.9375rem; text-align: left; cursor: pointer;
+}
+.problem:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.problem__at { font-weight: 800; white-space: nowrap; }
+.problem__code { font-family: var(--font-code); font-size: 0.875rem; grid-column: 2; overflow-wrap: anywhere; }
+.problem__msg { grid-column: 2; grid-row: 1; overflow-wrap: anywhere; }
+/* The list of names this device has opened, which is a browsing history and not the library. */
+.names { margin: 0; padding: 0; list-style: none; }
+.names li { display: flex; }
+.names a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px; background: var(--dots); font-weight: 700; overflow-wrap: anywhere; text-decoration: none; }
+.names a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.names a[aria-current="true"] { background: var(--ink); color: var(--paper); }

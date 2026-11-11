@@ -1,67 +1,15 @@
-// The run screen. The list is `GET /v1/runs`; one run is rendered from its own `run.json` and
-// nothing else — steps in declaration order, their statuses, attempt counts and durations, and a log
-// pane that follows one attempt by byte offset. Ported from mockup/run.js with the simulator
-// replaced by polling, because the engine is the only thing that knows what a step is doing.
+// One run. It is rendered from its own `run.json` and nothing else — steps in declaration order,
+// their statuses, attempt counts and durations, and a log pane that follows one attempt by byte
+// offset. It polls, because the engine is the only thing that knows what a step is doing.
 
 import { api, ApiError, canWrite } from "./api.js";
-import { announce, duration, el, errorBox, fill, flash, isoInstant, restamp, sign, stateLine, stateStamp, when } from "./dom.js";
-import type { State } from "./dom.js";
+import { announce, duration, el, errorBox, fill, flash, isoInstant, sign, stateLine, stateStamp, when } from "./dom.js";
 import { MAX_DRAWN_LINES, clipLine, emptyLog, feedLog, logLines } from "./logs.js";
 import type { LogLine, LogState } from "./logs.js";
-import type { Route } from "./app.js";
 import { navigate } from "./app.js";
-import type { Attempt, LogChunk, Run, RunFiles, RunStep, RunSummary } from "./api.js";
-
-/** How often a live run is re-read. The log is a byte offset, so this is a cursor, not a stream. */
-export const POLL_MS = 1000;
-
-/**
- * How often the Runs list is re-read when nothing on it is running.
- *
- * Nothing running is not the end of the story: the run that starts next may be started from the CLI
- * or in another tab, and the page is the only place most people look. A second would be rude, so the
- * list goes quiet rather than stopping, and a run that turns up takes the fast loop back.
- */
-export const IDLE_POLL_MS = 15_000;
-
-/**
- * The time a live view runs on: what now is, and how to be woken later.
- *
- * Both live views are built on this instead of calling `setTimeout` and `Date.now()` themselves so
- * that a test can advance time and count requests instead of sleeping. That is what makes finding 45
- * testable at all: "the list polled twice and then stopped" is a count of reads against a clock the
- * test chose, not a wait, and "the elapsed time on screen is 4 m 07 s" is checked against a now the
- * test set rather than whatever the machine running the test thinks it is.
- */
-export interface Clock {
-  now(): number;
-  /** Do `run` in `ms`, unless it is called off first. Hands back the calling-off. */
-  after(ms: number, run: () => void): () => void;
-}
-
-/** The real one. */
-export const wallClock: Clock = {
-  now: () => Date.now(),
-  after: (ms, run) => {
-    const id = window.setTimeout(run, ms);
-    return () => window.clearTimeout(id);
-  },
-};
-
-/**
- * Start `again` whenever the tab is shown, so a view that stopped reading starts again.
- *
- * A tab in the background is not watching anybody, and browsers throttle its timers to about a minute
- * anyway, so neither live view reads while it is hidden. Coming back is the moment a run that started
- * somewhere else turns up, which is when the reading picks itself back up.
- */
-function whenShown(signal: AbortSignal, again: () => void): void {
-  const onVisibility = (): void => {
-    if (!document.hidden && !signal.aborted) again();
-  };
-  document.addEventListener("visibilitychange", onVisibility);
-  signal.addEventListener("abort", () => document.removeEventListener("visibilitychange", onVisibility));
-}
+import type { Attempt, LogChunk, Run, RunFiles, RunStep } from "./api.js";
+import { POLL_MS, bytes, errorBody, errorWords, state, wallClock, whenShown } from "./run-shared.js";
+import type { Clock } from "./run-shared.js";
 
 /**
  * A link to one of a run's files. The href is the real API address, so it can be copied, opened in a
@@ -86,46 +34,6 @@ function downloadLink(href: string, label: string, onClick: () => void, size?: n
   );
 }
 
-/** Bytes the way a person reads them, because a run that ingested URLs has gigabytes in it. */
-function bytes(count: number): string {
-  if (count < 1024) return `${count} B`;
-  const units = ["kB", "MB", "GB", "TB"];
-  let value = count / 1024;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(value < 10 ? 1 : 0)} ${units[unit]}`;
-}
-
-/**
- * The statuses this screen can stamp: the seven step statuses of SPEC 4.4, the run statuses that
- * section's table ends with, and `interrupted` — SPEC 5 keeps that to an attempt, never a step or a
- * run, but `status` is an unvalidated string on the wire and dom.ts already draws the shape, so a
- * server that answers with it gets its own word rather than a guess.
- *
- * Everything else falls back to `pending`, which is a choice rather than a reflex. `stateStamp`
- * prints the word it is handed and `sign` substitutes the not-started shape for a name it does not
- * know, so handing an unknown status through would pair one state's word with another's shape. And
- * `pending` is the least wrong thing to say about a status from an older server: it claims nothing
- * about the outcome and is not final, so it cannot tell a reader a run is over when the UI has simply
- * never seen that state — and it always draws, so the stamp is never blank and nothing throws.
- */
-const STAMPABLE = new Set<string>([
-  "pending",
-  "running",
-  "waiting_retry",
-  "succeeded",
-  "failed",
-  "skipped",
-  "cancelled",
-  "interrupted",
-] satisfies State[]);
-
-function state(value: string): State {
-  return (STAMPABLE.has(value) ? value : "pending") as State;
-}
 
 function attemptDuration(attempt: Attempt, now: number): number {
   const start = Date.parse(attempt.started_at);
@@ -142,16 +50,6 @@ function valueText(value: unknown): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
-/** The SPEC 5 words for whatever went wrong, so one line reads the same wherever it came from. */
-function errorWords(error: unknown): string {
-  return error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
-}
-
-/** The body `errorBox` draws, whether the server answered in an error or something else threw. */
-function errorBody(error: unknown): { code: string; message: string; path?: string; file?: string } {
-  return error instanceof ApiError ? error : { code: "internal_error", message: String(error) };
-}
-
 /** An action the server said no to, kept on the page until it is dismissed or an action works. */
 interface Refusal {
   kind: string;
@@ -160,184 +58,6 @@ interface Refusal {
 
 /** What `fill` takes, so a builder can name what it returns without a type dom.ts keeps to itself. */
 type Children = Parameters<typeof fill>[1];
-
-export function renderRuns(view: HTMLElement, route: Route, signal: AbortSignal, clock: Clock = wallClock): void {
-  const id = route.parts[1];
-  if (id === undefined) {
-    void renderList(view, signal, clock);
-    return;
-  }
-  void renderOne(view, id, signal, clock);
-}
-
-// ---------- the list ----------
-
-/** The empty list, made once and hidden until a read says there is nothing in it. */
-function emptyRuns(): HTMLElement {
-  return el(
-    "div",
-    { class: "stage__empty" },
-    sign("queued", "sign sign--large"),
-    el("p", {}, "Nothing has run here yet. Start a pipeline from the editor and it shows up while it works."),
-    el("a", { class: "btn btn--ink", href: "/app/pipeline", "data-link": "" }, "Open the editor"),
-  );
-}
-
-/**
- * The list of runs, which is a live view in its own right: while any run on it is going it reads again
- * every `POLL_MS`, and stops the moment none is. A run that starts, finishes or is retried while you
- * are looking has to say so here, and not only after a reload.
- *
- * Rows are made once and patched where they changed, for the reason the run screen gives for its step
- * rows: this screen redraws itself under you, and a rebuilt row takes your focus, your hover and your
- * place in the scroll with it. Only the state stamp changes on the way, because that is the only thing
- * about a run on this list that can move.
- */
-async function renderList(view: HTMLElement, signal: AbortSignal, clock: Clock): Promise<void> {
-  const lead = el("p", { class: "lead" });
-  // The one line that says what the reading is doing: loading, still trying after a failure, or gone.
-  const note = el("p", { class: "runlist__note", role: "status" }, "Loading the runs.");
-  const empty = emptyRuns();
-  empty.hidden = true;
-  const list = el("ul", { class: "blocklist", "aria-label": "Runs, newest first" });
-  view.replaceChildren(
-    el(
-      "div",
-      { class: "head" },
-      el("div", { class: "head__text" }, el("h1", { class: "title" }, "Runs"), lead),
-    ),
-    note,
-    empty,
-    list,
-  );
-
-  /** The rows on the page, keyed by run id, in the order they were made. */
-  const rows = new Map<string, HTMLElement>();
-  let failure: HTMLElement | null = null;
-  let seen = false;
-  let unmake: (() => void) | null = null;
-  /** Whether a read is on its way, so two wakes cannot start two and land them out of order. */
-  let reading = false;
-
-  /** Put `node` at `index` among the list's children, moving it if it is not already sitting there. */
-  function place(node: HTMLElement, index: number): void {
-    if (list.children[index] === node) return;
-    list.insertBefore(node, list.children[index] ?? null);
-  }
-
-  function paint(runs: RunSummary[]): void {
-    seen = true;
-    note.hidden = true;
-    lead.textContent = `${runs.length} ${runs.length === 1 ? "run" : "runs"}, newest first. A run is a directory; this is its run.json.`;
-    empty.hidden = runs.length !== 0;
-    runs.forEach((run, at) => {
-      let row = rows.get(run.id);
-      if (row === undefined) {
-        row = el("li", {}, runRow(run));
-        rows.set(run.id, row);
-      } else {
-        const stamp = row.querySelector<HTMLElement>(".stamp");
-        if (stamp !== null) restamp(stamp, state(run.status));
-      }
-      place(row, at);
-    });
-    // A Map being walked while entries drop out of it is fine: the iterator notices.
-    const stillHere = new Set(runs.map((run) => run.id));
-    for (const [id, row] of rows) {
-      if (stillHere.has(id)) continue;
-      row.remove();
-      rows.delete(id);
-    }
-  }
-
-  /** The last thing said about a read, so a stretch of failures does not rebuild the same box. */
-  let said = "";
-
-  /** Say what the last read did. Rows already up stay, under a line saying they may be out of date. */
-  function tell(error: unknown): void {
-    const message = error === null ? "" : errorWords(error);
-    if (message === said) return;
-    said = message;
-    failure?.remove();
-    failure = null;
-    if (message === "") {
-      note.hidden = true;
-      return;
-    }
-    if (seen) {
-      note.textContent = `Lost the server, still trying. ${message}`;
-      note.hidden = false;
-      return;
-    }
-    // Nothing on the page yet, so there is nothing to call out of date: this is the whole of the screen,
-    // and the line that said it was loading has to get out of the way of the box saying it failed.
-    note.hidden = true;
-    failure = errorBox(errorBody(error), el("a", { class: "btn btn--ink", href: "/app/pipeline", "data-link": "" }, "Open the editor"));
-    view.append(failure);
-  }
-
-  async function tick(): Promise<void> {
-    unmake?.();
-    unmake = null;
-    // A hidden tab is not watching, and its timers are throttled to about a minute anyway. The reading
-    // stops here and `whenShown` starts it again when the tab is next looked at.
-    if (signal.aborted || document.hidden || reading) return;
-    reading = true;
-    let runs: RunSummary[] | null = null;
-    let error: unknown = null;
-    try {
-      runs = await api.runs();
-    } catch (cause) {
-      error = cause;
-    }
-    reading = false;
-    if (signal.aborted) return;
-    if (runs !== null) {
-      paint(runs);
-      tell(null);
-    } else {
-      tell(error);
-    }
-    // A run is either `running` or one of the final states (SPEC 4.4), so once nothing on the page is
-    // running there is nothing of its own left to watch and the list drops to the slow one.
-    // A read that landed while the tab went hidden arms nothing: `whenShown` owns the restart.
-    if (document.hidden) return;
-    // A read that failed says nothing about what is running, so it does not change the pace: the run
-    // this page last saw going may well still be going, and a lost server is not a reason to slow down.
-    const busy = runs === null || runs.some((run) => run.status === "running");
-    unmake = clock.after(busy ? POLL_MS : IDLE_POLL_MS, () => void tick());
-  }
-
-  whenShown(signal, () => void tick());
-  signal.addEventListener("abort", () => unmake?.());
-  await tick();
-}
-
-function runRow(run: RunSummary): HTMLElement {
-  // The words are the reader's own clock; `datetime` and the title carry that same instant in UTC, so
-  // two screens and a server log line up without anybody doing sums.
-  const stored = isoInstant(run.created_at);
-  const printed = when(run.created_at);
-  const exact = stored === "" ? {} : { datetime: stored, title: stored };
-  return el(
-    "a",
-    { class: "runrow", href: `/app/runs/${run.id}`, "data-link": "" },
-    el(
-      "span",
-      {},
-      el("span", { class: "runrow__id" }, run.id),
-      // A time this build cannot read is left out rather than echoed back at the reader: the pipeline is
-      // still worth the row, and a wrong time on a list is worse than a missing one.
-      printed === ""
-        ? el("span", { class: "runrow__meta" }, ` · ${run.pipeline}`)
-        : el("time", { class: "runrow__meta", ...exact }, ` · ${run.pipeline}, started ${printed}`),
-    ),
-    // The stamp is the state: it carries the sign and the word, so the row does not repeat the shape
-    // at 70 px next to it.
-    stateStamp(state(run.status)),
-  );
-}
-
 function lineNode(line: LogLine): HTMLElement {
   const clipped = clipLine(line.text);
   return el(
@@ -380,7 +100,7 @@ function stateChanged(before: Run, after: Run): string[] {
 
 // ---------- one run ----------
 
-async function renderOne(view: HTMLElement, id: string, signal: AbortSignal, clock: Clock): Promise<void> {
+export async function renderRunPage(view: HTMLElement, id: string, signal: AbortSignal, clock: Clock = wallClock): Promise<void> {
   view.replaceChildren(stateLine(`Loading run ${id}.`));
   let run: Run;
   try {

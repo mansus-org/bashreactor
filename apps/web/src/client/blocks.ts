@@ -1,6 +1,6 @@
 // The block library. A block's contract is read out of its own header — `GET /v1/blocks/:name` for
 // the versions and `.../content` for the bytes — so what this screen says a block declares is what
-// the file declares. Ported from mockup/blocks.js.
+// the file declares. The screen itself is only a reader of that library.
 //
 // The list on the left is the library's own, out of `GET /v1/blocks`: names and version counts, no
 // source. That is one small request, and it is made beside the block the address asked for rather

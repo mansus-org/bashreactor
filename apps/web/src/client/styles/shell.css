@@ -1,0 +1,52 @@
+.skip {
+  position: absolute; left: 8px; top: -100px; z-index: 20;
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px;
+  background: var(--ink); color: var(--paper); font-weight: 700;
+}
+.skip:focus { top: 8px; }
+
+/* ---------- chrome ---------- */
+
+.chrome {
+  display: flex; align-items: center; gap: 8px 20px; flex-wrap: wrap;
+  padding: 10px var(--pad) 12px;
+  background: var(--dots);
+}
+.mark {
+  display: inline-flex; align-items: center; min-height: 44px;
+  text-decoration: none;
+  font-family: var(--font-display); font-stretch: 150%; font-weight: 860;
+  font-size: 1.75rem; line-height: 1; letter-spacing: -0.02em;
+}
+.nav__list { display: flex; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.nav__link {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 12px;
+  font-weight: 700; font-size: 1rem; text-decoration: none;
+}
+.nav__link:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.nav__link[aria-current="page"] { background: var(--ink); color: var(--paper); }
+.chrome__note { margin-left: auto; }
+@media (max-width: 640px) {
+  .mark { flex-basis: 100%; }
+  .nav__link { padding: 0 10px; }
+}
+
+.foot {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 24px;
+  margin-top: auto; padding: 12px var(--pad);
+  background: var(--dots-top);
+  font-size: 0.9375rem;
+}
+.foot__states { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 4px; margin: 0; padding: 0; list-style: none; }
+.foot__states a {
+  display: inline-flex; align-items: center; min-height: 44px; padding: 0 10px;
+  font-weight: 700; text-decoration: none;
+}
+.foot__states a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
+.foot__states a[aria-current] { background: var(--ink); color: var(--paper); }
+.foot .btn { margin-left: auto; }
+/* ---------- the app's own chrome: who you are, and the gate that asks ---------- */
+
+.chrome__note { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.gate__form { display: grid; gap: 16px; max-width: 34rem; }
+.gate__form .row { align-items: end; }

@@ -2,13 +2,13 @@
 // directly; every control on the graph side computes a new text through model.ts. Everything on
 // screen is drawn from analysing that text, so there is no second copy to keep in step.
 //
-// On top of the mockup's editor this adds the API: the block contracts come from the library, the
-// document is opened and stored as versions, `Validate` is the server's own report, and `Start a run`
-// is a POST. Ported from mockup/editor.js.
+// The API is what this edits against: the block contracts come from the library, the document is
+// opened and stored as versions, `Validate` is the server's own report, and `Start a run` is a POST.
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { LibraryName, ValidationIssue } from "./api.js";
 import { announce, el, errorBox, isoInstant, sign, when } from "./dom.js";
+import { INTEGER, blankOf, openStartRun, parseTyped, writable } from "./start-run.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
 import {
@@ -111,115 +111,6 @@ function textField(options: {
   );
 }
 
-type PipelineInput = Analysis["inputs"][number];
-type Reading = { ok: true; value: Json | undefined } | { ok: false; message: string };
-
-// SPEC 1.2, text form. A value is sent in the type its input declares, and the text only has to be
-// something that type can be read from: how it looks decides nothing.
-const INTEGER = /^-?(0|[1-9][0-9]*)$/;
-const NUMBER = /^-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$/;
-
-/** What a number or json field's text means, or the sentence that says why it means nothing. */
-function parseTyped(type: string, name: string, text: string): Reading {
-  const raw = text.trim();
-  if (type === "integer") {
-    return INTEGER.test(raw) && Number.isSafeInteger(Number(raw))
-      ? { ok: true, value: Number(raw) }
-      : { ok: false, message: `${name} is an integer: type a whole number such as 42.` };
-  }
-  if (type === "number") {
-    return NUMBER.test(raw) && Number.isFinite(Number(raw))
-      ? { ok: true, value: Number(raw) }
-      : { ok: false, message: `${name} is a number: type a figure such as 3.5.` };
-  }
-  if (type === "json") {
-    try {
-      return { ok: true, value: JSON.parse(raw) as Json };
-    } catch (error) {
-      return { ok: false, message: `${name} is JSON, and this is not: ${error instanceof Error ? error.message : String(error)}` };
-    }
-  }
-  return { ok: true, value: text };
-}
-
-/** The empty value of a type, for a typed field that has no default to start from. */
-function blankOf(type: string): Json {
-  return type === "integer" || type === "number" ? 0 : type === "boolean" ? false : type === "json" ? null : "";
-}
-
-/**
- * Whether `editStep` writes this value into the YAML faithfully. It prints an object as
- * `[object Object]` and does not quote a comma inside a list item, so only a scalar, or a list of
- * plain ones, goes through it.
- */
-function writable(value: Json): boolean {
-  if (Array.isArray(value)) {
-    return value.every((item) => item === null || typeof item === "number" || typeof item === "boolean" || (typeof item === "string" && /^[\w .-]*$/.test(item)));
-  }
-  return value === null || typeof value !== "object";
-}
-
-const HINTS: Record<string, string> = {
-  integer: "A whole number.",
-  number: "A number.",
-  json: "JSON. It is sent as JSON, so text that is not JSON is not sent.",
-  file: "An absolute path to a file on the server this runs on. The engine copies it into the run.",
-};
-
-/**
- * One field of the Start dialog. It remembers what it was drawn with, and `read` answers `undefined`
- * for a field that still holds that, so a default nobody touched is not sent and runs as declared.
- */
-function startField(input: PipelineInput): { node: HTMLElement; control: HTMLElement; read: () => Reading } {
-  // Not `start-<name>`: an input called `title` would take the id of the dialog's own heading.
-  const id = `start-in-${input.name}`;
-  const helpText = [input.description, HINTS[input.type] ?? ""].filter((part) => part !== "").join(" ");
-  const help = helpText !== "" ? el("p", { class: "help", id: `${id}-help` }, helpText) : null;
-  const describedBy = help !== null ? `${id}-help` : null;
-  const needsValue: Reading = { ok: false, message: `${input.name} has no default, so this run needs a value for it.` };
-  const untouched: Reading = { ok: true, value: undefined };
-
-  if (input.type === "boolean") {
-    const declared = input.default === true;
-    const box = el("input", { id, type: "checkbox", "aria-describedby": describedBy });
-    box.checked = declared;
-    return {
-      node: el("div", { class: "field" }, el("label", { class: "check" }, box, el("span", {}, input.name)), help),
-      control: box,
-      // A checkbox always has an answer, so one with no default has to send it.
-      read: () => (!input.required && box.checked === declared ? untouched : { ok: true, value: box.checked }),
-    };
-  }
-
-  const initial = input.type === "json" ? (input.required ? "" : JSON.stringify(input.default, null, 2)) : input.default === null ? "" : String(input.default);
-  const control: HTMLInputElement | HTMLTextAreaElement =
-    input.type === "json"
-      ? el("textarea", { id, class: "code", rows: 6, spellcheck: "false", autocomplete: "off", "aria-describedby": describedBy })
-      : el("input", {
-          id,
-          type: "text",
-          inputmode: input.type === "integer" ? "numeric" : input.type === "number" ? "decimal" : null,
-          placeholder: input.type === "file" ? "/absolute/path/on/the/server" : null,
-          spellcheck: "false",
-          autocomplete: "off",
-          "aria-describedby": describedBy,
-        });
-  control.value = initial;
-  return {
-    node: el("div", { class: "field" }, el("label", { class: "label", for: id }, input.name), control, help),
-    control,
-    read: () => {
-      const raw = control.value;
-      const text = input.type === "string" || input.type === "file" ? raw : raw.trim();
-      if (text === "" && input.required) return needsValue;
-      if (raw === initial) return untouched;
-      if (input.type === "file") {
-        return raw.startsWith("/") ? { ok: true, value: raw } : { ok: false, message: `${input.name} is a file: give the absolute path to it on the server, starting with /.` };
-      }
-      return parseTyped(input.type, input.name, raw);
-    },
-  };
-}
 
 export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSignal): void {
   let text = BLANK;
@@ -327,7 +218,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   }, "New pipeline");
   const validateButton = el("button", { class: "btn", type: "button", onclick: () => void validate() }, "Validate");
   const saveButton = el("button", { class: "btn", type: "button", onclick: () => void save() }, "Save version");
-  const runButton = el("button", { class: "btn btn--ink", type: "button", onclick: openStartDialog }, "Start a run");
+  const runButton = el("button", { class: "btn btn--ink", type: "button", onclick: startPipeline }, "Start a run");
   const runHint = el("p", { class: "help" });
   const stageNote = el("p", { class: "stale-note", role: "status", hidden: true });
   const stage = el("div", {
@@ -1290,73 +1181,28 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     addDialog.showModal();
   }
 
-  function openStartDialog(): void {
+  function startPipeline(): void {
     if (!analysis.ok) return;
-    const error = el("p", { class: "form-error", role: "alert", hidden: true });
-    const fields = analysis.inputs.map((input) => ({ input, ...startField(input) }));
-    startDialog.replaceChildren(
-      el(
-        "form",
-        {
-          class: "dialog__body",
-          onsubmit: (event) => {
-            event.preventDefault();
-            if (!analysis.ok) return;
-            error.hidden = true;
-            const inputs: Record<string, unknown> = {};
-            for (const field of fields) {
-              const reading = field.read();
-              if (!reading.ok) {
-                error.hidden = false;
-                error.textContent = reading.message;
-                field.control.focus();
-                return;
-              }
-              if (reading.value !== undefined) inputs[field.input.name] = reading.value;
-            }
-            void startRun(inputs);
-          },
-        },
-        el("h2", { class: "dialog__title", id: "start-title" }, `Start ${analysis.name}`),
-        fields.length > 0 ? fields.map((field) => field.node) : el("p", {}, "This pipeline takes no inputs."),
-        el(
-          "p",
-          { class: "help" },
-          runsStored()
-            ? "This starts the stored version you have open, so what runs is what is on the record."
-            : "These are unsaved changes: the run takes the YAML as it stands here, and nothing is stored.",
-        ),
-        error,
-        el(
-          "div",
-          { class: "row" },
-          el("button", { class: "btn btn--ink", type: "submit" }, "Start the run"),
-          el("button", { class: "btn", type: "button", onclick: () => startDialog.close() }, "Cancel"),
-        ),
-      ),
-    );
-    startDialog.showModal();
-  }
-
-  async function startRun(inputs: Record<string, unknown>): Promise<void> {
-    startDialog.close();
-    busy = true;
-    status.textContent = "Starting the run.";
-    try {
-      const body = openName !== null && unchanged() ? { pipeline: openName, version: openVersion === "latest" ? undefined : openVersion, inputs } : { yaml: text, inputs };
-      const run = await api.startRun(body);
-      if (gone()) return;
-      announce(`Run ${run.id} started.`);
-      navigate(`/runs/${run.id}`);
-    } catch (error) {
-      if (gone()) return;
-      busy = false;
-      status.textContent = "";
-      startDialog.replaceChildren(
-        errorBox(error instanceof ApiError ? error : { code: "internal_error", message: String(error) }, el("button", { class: "btn", type: "button", onclick: () => startDialog.close() }, "Close")),
-      );
-      startDialog.showModal();
-    }
+    openStartRun(startDialog, {
+      name: analysis.name,
+      inputs: analysis.inputs,
+      help: runsStored()
+        ? "This starts the stored version you have open, so what runs is what is on the record."
+        : "These are unsaved changes: the run takes the YAML as it stands here, and nothing is stored.",
+      body: (inputs) =>
+        openName !== null && unchanged()
+          ? { pipeline: openName, version: openVersion === "latest" ? undefined : openVersion, inputs }
+          : { yaml: text, inputs },
+      started: (run) => {
+        if (gone()) return;
+        announce(`Run ${run.id} started.`);
+        navigate(`/runs/${run.id}`);
+      },
+      sending: (sending) => {
+        busy = sending;
+        status.textContent = sending ? "Starting the run." : "";
+      },
+    });
   }
 
   // ---------- start ----------

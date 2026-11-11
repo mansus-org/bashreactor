@@ -1,0 +1,26 @@
+/* ---------- entry page ---------- */
+.screens { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 16px; }
+.screen {
+  display: grid; gap: 8px; align-content: start; min-height: 44px;
+  padding: 16px; border: 3px solid var(--ink); border-radius: 0;
+  background: var(--paper); color: var(--ink); text-decoration: none;
+}
+.screen:hover { background: var(--ink); color: var(--paper); }
+.screen:hover .screen__num { background: var(--paper); color: var(--ink); }
+.screen:focus-visible { outline-offset: 3px; }
+.screen__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.screen__num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; flex: none;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--font-code); font-weight: 800;
+}
+.screen__name {
+  font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
+  font-size: 1.75rem; line-height: 1; overflow-wrap: anywhere;
+}
+.screen__text { font-size: 0.9375rem; }
+.status { display: grid; gap: 12px; padding: 16px 18px; border: 3px solid var(--ink); background: var(--dots); }
+.status > p { max-width: 72ch; }
+.truth { margin: 0; padding: 0; list-style: none; }
+.truth li { padding: 6px 0; background: var(--dots); }

@@ -5,5 +5,5 @@
     "correctness": "error",
     "suspicious": "error"
   },
-  "ignorePatterns": ["dist", "mockup"]
+  "ignorePatterns": ["dist"]
 }
