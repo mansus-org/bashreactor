@@ -81,7 +81,7 @@ async function render(): Promise<FakeElement> {
   announce().textContent = "";
   view().replaceChildren();
   await renderSettings(
-    view(),
+    view() as unknown as HTMLElement,
     { path: "/settings", parts: ["settings"], query: new URLSearchParams() },
     new AbortController().signal,
   );
@@ -330,6 +330,40 @@ describe("the admin's tokens", () => {
     await eventually("the dialog to close", () => document.body.querySelector("dialog") === null);
     expect(document.body.textContent).not.toContain("br_secret_once");
     expect(secret.value).toBe("");
+  });
+
+  test("Cancel cannot take the dialog away while the server is still creating the token", async () => {
+    let release!: () => void;
+    const pending = new Promise<Reply>((resolve) => {
+      release = () =>
+        resolve({
+          status: 201,
+          body: {
+            id: "t4",
+            name: "slow",
+            scope: "read",
+            created_at: new Date().toISOString(),
+            last_used: null,
+            token: "br_slow_secret",
+          },
+        });
+    });
+    answer("POST", "/v1/tokens", () => pending);
+    const screen = await render();
+
+    byText(screen, "New token").fire("click");
+    await eventually("the new-token dialog", () => document.body.querySelector("dialog") !== null);
+    const form = dialog();
+    form.querySelector('[id="settings-token-name"]')!.value = "slow";
+    byText(form, "Create token").fire("click");
+    await eventually("the request", () => calls.some((call) => call.method === "POST"));
+
+    byText(form, "Cancel").fire("click");
+    expect(document.body.querySelector("dialog")).toBe(form);
+
+    release();
+    await eventually("the secret", () => form.querySelector('[id="settings-token-secret"]')?.value === "br_slow_secret");
+    byText(form, "Close").fire("click");
   });
 
   test("a refusal from the server stays in the dialog with its code and message", async () => {

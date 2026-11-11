@@ -130,6 +130,17 @@ function diskSection(disk: Read<DiskSpace>): HTMLElement {
   ]);
 }
 
+function withoutSecret(token: CreatedToken): TokenInfo {
+  return {
+    id: token.id,
+    name: token.name,
+    scope: token.scope,
+    created_at: token.created_at,
+    last_used: token.last_used,
+  };
+}
+
+// BASHR-62: candidate for ui.ts — ui.ts has the confirmation dialog but no general Dialog component.
 /**
  * The new-token dialog. It has two faces — the form, then the one answer that carries the secret — and
  * closing either of them forgets the secret: it is never in a screen variable after the dialog is
@@ -139,6 +150,7 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
   let scope: "read" | "write" = "read";
   let secretBox: HTMLInputElement | null = null;
   let disposed = false;
+  let busy = false;
   const dialog = el("dialog", { class: "dialog", "aria-labelledby": "settings-token-title" });
 
   const dispose = (): void => {
@@ -150,6 +162,11 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
     removeNode(dialog);
   };
   dialog.addEventListener("close", dispose);
+  // Escape is a close too, and it must not take the dialog away before the server's answer — which is
+  // the only time the secret is shown — has had a chance to land.
+  dialog.addEventListener("cancel", (event) => {
+    if (busy) event.preventDefault();
+  });
 
   const name = el("input", {
     id: "settings-token-name",
@@ -162,6 +179,11 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
     scope = value === "write" ? "write" : "read";
   });
   const submit = button("Create token", { primary: true, onClick: () => void create() }) as HTMLButtonElement;
+  const cancel = button("Cancel", {
+    onClick: () => {
+      if (!busy) dispose();
+    },
+  }) as HTMLButtonElement;
 
   async function copy(secret: string): Promise<void> {
     try {
@@ -207,7 +229,9 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
 
   async function create(): Promise<void> {
     error.replaceChildren();
+    busy = true;
     submit.disabled = true;
+    cancel.disabled = true;
     try {
       const created = await api.createToken(name.value.trim(), scope);
       options.onCreated(created);
@@ -215,12 +239,15 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
       announce(`Token ${created.name} created.`);
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
+        busy = false;
         dispose();
         return;
       }
       error.replaceChildren(errorBox(problem(caught)));
     } finally {
+      busy = false;
       submit.disabled = false;
+      cancel.disabled = false;
     }
   }
 
@@ -249,7 +276,7 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
     el(
       "div",
       { class: "dialog__actions" },
-      button("Cancel", { onClick: dispose }),
+      cancel,
       submit,
     ),
   );
@@ -346,7 +373,7 @@ export async function renderSettings(view: HTMLElement, _route: Route, signal: A
     onClick: () =>
       openNewToken({
         onCreated: (created) => {
-          tokens = [...tokens, created];
+          tokens = [...tokens, withoutSecret(created)];
           tokenError.replaceChildren();
           paintTokens();
         },
