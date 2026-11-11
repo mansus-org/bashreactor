@@ -19,7 +19,7 @@ const SIGNS: Record<string, readonly string[]> = {
 
 export type State = keyof typeof SIGNS;
 
-type Child = Node | string | null | false | undefined | Child[];
+export type Child = Node | string | null | false | undefined | Child[];
 type AttrValue = string | number | boolean | null | undefined | ((event: Event) => void);
 type Attrs = Record<string, AttrValue>;
 
@@ -54,17 +54,21 @@ export function el<K extends keyof HTMLElementTagNameMap>(
   return node as HTMLElementTagNameMap[K];
 }
 
-/** A 7x7 sign, drawn cell by cell so it stays crisp in two inks at any zoom. */
-export function sign(state: State, className?: string): SVGElement {
-  const cells = SIGNS[state] ?? SIGNS.queued!;
+/**
+ * A 7x7 bitmap as one crisp SVG path. `#` is ink and every other character is paper.
+ *
+ * The signs and the shell's nav glyphs are the same drawing, so they share this instead of each
+ * growing its own cell loop.
+ */
+export function bitmap(rows: readonly string[], className = "sign"): SVGElement {
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 7 7");
   svg.setAttribute("shape-rendering", "crispEdges");
   svg.setAttribute("aria-hidden", "true");
   svg.setAttribute("focusable", "false");
-  svg.setAttribute("class", className ?? "sign");
+  svg.setAttribute("class", className);
   let d = "";
-  cells.forEach((row, y) => {
+  rows.forEach((row, y) => {
     [...row].forEach((cell, x) => {
       if (cell === "#") d += `M${x} ${y}h1v1h-1z`;
     });
@@ -76,8 +80,54 @@ export function sign(state: State, className?: string): SVGElement {
   return svg;
 }
 
+/** A 7x7 sign, drawn cell by cell so it stays crisp in two inks at any zoom. */
+export function sign(state: State, className?: string): SVGElement {
+  return bitmap(SIGNS[state] ?? SIGNS.queued!, className ?? "sign");
+}
+
 export function stateStamp(state: State): HTMLElement {
   return el("span", { class: "stamp" }, sign(state), state);
+}
+
+/**
+ * Remove an attribute, including in the test DOM, whose elements expose attributes as a Map rather
+ * than the full Element interface. The real browser takes the first branch.
+ */
+export function clearAttribute(node: Element, name: string): void {
+  const maybe = node as unknown as { removeAttribute?: (name: string) => void; attrs?: Map<string, string> };
+  if (typeof maybe.removeAttribute === "function") maybe.removeAttribute(name);
+  else maybe.attrs?.delete(name);
+}
+
+/** Insert a node, including in the test DOM, which has no `insertBefore()` of its own. */
+export function insertNode(parent: Element, node: Element, before: Element | null): void {
+  const real = parent as unknown as { insertBefore?: (node: Element, before: Element | null) => void };
+  if (typeof real.insertBefore === "function") {
+    real.insertBefore(node, before);
+    return;
+  }
+  const fakeParent = parent as unknown as { children: Element[] };
+  const fakeNode = node as unknown as { parent?: { children: Element[] } | null };
+  if (fakeNode.parent !== null && fakeNode.parent !== undefined) {
+    const at = fakeNode.parent.children.indexOf(node);
+    if (at !== -1) fakeNode.parent.children.splice(at, 1);
+  }
+  const at = before === null ? fakeParent.children.length : fakeParent.children.indexOf(before);
+  fakeParent.children.splice(at === -1 ? fakeParent.children.length : at, 0, node);
+  fakeNode.parent = fakeParent;
+}
+
+/** Remove a node, including in the test DOM, which has no `remove()` of its own. */
+export function removeNode(node: Element): void {
+  const maybe = node as unknown as {
+    remove?: () => void;
+    parent?: { children: Element[] } | null;
+  };
+  if (typeof maybe.remove === "function") maybe.remove();
+  else if (maybe.parent !== null && maybe.parent !== undefined) {
+    const at = maybe.parent.children.indexOf(node);
+    if (at !== -1) maybe.parent.children.splice(at, 1);
+  }
 }
 
 /**
@@ -95,6 +145,9 @@ export function restamp(stamp: HTMLElement, state: State): void {
 function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
+
+// The three formatters below (duration, when, clock) are kept for the screens that have not been
+// redesigned yet. New work uses relativeTime/exactTime/formatDuration in ui.ts; do not add callers.
 
 /**
  * Seconds to "4 m 07 s", the way a person reads a duration off a running job.
