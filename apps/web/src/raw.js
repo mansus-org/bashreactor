@@ -34,6 +34,7 @@ import yamlEditSource from "./client/yaml-edit.ts" with { type: "text" };
 import modelSource from "./client/model.ts" with { type: "text" };
 import graphSource from "./client/graph.ts" with { type: "text" };
 import editorSource from "./client/editor.ts" with { type: "text" };
+import startRunSource from "./client/start-run.ts" with { type: "text" };
 import runSharedSource from "./client/run-shared.ts" with { type: "text" };
 import runsListSource from "./client/runs-list.ts" with { type: "text" };
 import runPageSource from "./client/run-page.ts" with { type: "text" };
@@ -62,6 +63,7 @@ export {
   modelSource,
   graphSource,
   editorSource,
+  startRunSource,
   runSharedSource,
   runsListSource,
   runPageSource,

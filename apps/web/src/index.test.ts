@@ -128,7 +128,7 @@ describe("the mount", () => {
   test("serves the client as JavaScript the browser can run, and the stylesheet that styles it", async () => {
     const app = mount();
     try {
-      const modules = ["app", "api", "dom", "yaml", "model", "graph", "editor", "run-shared", "runs-list", "run-page", "blocks", "logs"];
+      const modules = ["app", "api", "dom", "yaml", "model", "graph", "editor", "start-run", "run-shared", "runs-list", "run-page", "blocks", "logs"];
       for (const name of modules) {
         const response = await app.call("GET", `/app/assets/${name}.js`);
         expect(response.status).toBe(200);
