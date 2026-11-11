@@ -62,6 +62,7 @@ function at(url: string | null | undefined): void {
 (globalThis.localStorage as Storage).setItem("bashreactor.token", "a_good_token");
 ANSWER.set("/v1/whoami", () => ({ name: "root", scope: "admin", admin: true }));
 ANSWER.set("/v1/runs", () => []);
+ANSWER.set("/v1/disk", () => ({ path: "/data", total_bytes: 100, used_bytes: 40, free_bytes: 60, low: false, runs_bytes: 10 }));
 ANSWER.set("/v1/blocks", () => ({ blocks: [] }));
 ANSWER.set("/v1/pipelines", () => ({ pipelines: [] }));
 
@@ -89,8 +90,8 @@ beforeAll(async () => {
 describe("the routes", () => {
   test("each screen answers at its own address, and the unbuilt ones say so", async () => {
     await go("/");
-    expect(text(view())).toContain("BASHR-56");
-    expect(text(view())).toContain("not_implemented");
+    expect(text(view())).toContain("Dashboard");
+    expect(text(view())).toContain("No runs yet.");
 
     await go("/runs");
     expect(text(view())).toContain("Runs");

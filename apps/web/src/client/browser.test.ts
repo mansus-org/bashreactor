@@ -182,11 +182,14 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
-      "the dashboard says it is still being redesigned, rather than drawing a fake one",
+      "the dashboard draws its counts, activity and two run tables",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport);
-        expect(await textOf(page, ".state--error")).toContain("not_implemented");
-        expect(await textOf(page, ".state--error")).toContain("BASHR-56");
+        await waitFor(page, ".dash-counts");
+        expect(await textOf(page, ".page-header .title")).toBe("Dashboard");
+        expect(await page.evaluate(() => document.querySelectorAll(".dash-count").length)).toBe(4);
+        expect(await page.evaluate(() => document.querySelectorAll(".chart__bar").length)).toBe(24);
+        expect(await page.evaluate(() => document.querySelectorAll(".dash-panel").length)).toBe(2);
         expect((await visible(page, ".sidebar")).shown).toBe(viewport.width > 940);
         expect((await visible(page, ".topbar")).shown).toBe(viewport.width <= 940);
         expect(designProblems(await styleFacts(page), viewport)).toEqual([]);
