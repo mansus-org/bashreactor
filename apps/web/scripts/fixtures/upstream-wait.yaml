@@ -1,0 +1,17 @@
+name: upstream-wait
+description: Wait for the upstream export before warming the cache.
+
+steps:
+  probe:
+    name: Probe the upstream export
+    uses: ./probe-upstream.sh
+    retry:
+      max_attempts: 5
+      delay: 10m
+
+  warm:
+    name: Warm the cache
+    uses: ./sleep-for.sh
+    with:
+      seconds: 2
+      label: warm
