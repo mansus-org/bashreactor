@@ -6,7 +6,7 @@
 import { api } from "./api.js";
 import type { RunPage, RunSummary } from "./api.js";
 import type { Route } from "./app.js";
-import { el, errorBox, restamp } from "./dom.js";
+import { el, errorBox } from "./dom.js";
 import {
   button,
   filterChips,
@@ -17,7 +17,7 @@ import {
   segmented,
 } from "./ui.js";
 import type { RunsTableOptions } from "./ui.js";
-import { IDLE_POLL_MS, POLL_MS, errorBody, errorWords, state, wallClock, whenShown } from "./run-shared.js";
+import { IDLE_POLL_MS, POLL_MS, errorBody, errorWords, wallClock, whenShown } from "./run-shared.js";
 import type { Clock } from "./run-shared.js";
 
 const STATUSES = ["running", "succeeded", "failed", "cancelled"] as const;
@@ -218,25 +218,9 @@ export function renderRunsList(
     return out;
   }
 
-  /**
-   * `runsTable` paints a row it has seen before, but a row that first appears after the table's first
-   * update is inserted with an empty status stamp. The list is where new rows appear all the time, so
-   * it asks for their stamps here. BASHR-62: candidate for ui.ts, where the paint belongs.
-   */
-  function paintNewStamps(loaded: RunSummary[]): void {
-    const body = table.node.querySelector("tbody");
-    if (body === null) return;
-    const bodyRows = [...body.querySelectorAll("tr")].filter((row) => !row.classList.contains("table__empty"));
-    loaded.forEach((run, index) => {
-      const stamp = bodyRows[index]?.querySelector<HTMLElement>(".stamp") ?? null;
-      if (stamp !== null && stamp.textContent !== state(run.status)) restamp(stamp, state(run.status));
-    });
-  }
-
   function showData(): void {
     const loaded = rows();
     table.update(loaded);
-    paintNewStamps(loaded);
     count.textContent = countLabel(formatCount, loaded.length, next !== null);
     count.hidden = false;
     loading.hidden = true;
