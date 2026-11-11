@@ -315,10 +315,10 @@ function screenCard(num: string, kind: string, name: string, href: string, text:
 
 const screens: Record<string, Screen> = {
   pipeline: renderPipeline,
-  runs: (view, route, signal) => {
+  runs: (target, route, signal) => {
     const id = route.parts[1];
-    if (id === undefined) renderRunsList(view, route, signal);
-    else return renderRunPage(view, id, signal);
+    if (id === undefined) renderRunsList(target, route, signal);
+    else return renderRunPage(target, id, signal);
   },
   blocks: renderBlocks,
   "blocks-new": renderBlocks,
