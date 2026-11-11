@@ -231,6 +231,11 @@ export async function startApp(): Promise<TestApp> {
   if (port === undefined) throw new Error(`the server did not say its port: ${seen}`);
 
   const base = `http://127.0.0.1:${port}`;
+  // The client tests run in this same process and swap `fetch` for fakes. One that forgets to put the
+  // real one back turns every call below into that fake's 500, which names no culprit; this does.
+  if (!Function.prototype.toString.call(globalThis.fetch).includes("[native code]")) {
+    throw new Error("globalThis.fetch is still a test's fake: a client test file that ran before this one did not restore it in afterAll");
+  }
   const api = async <T,>(path: string, init: RequestInit = {}): Promise<{ status: number; body: T }> => {
     const response = await fetch(`${base}/v1/${path}`, {
       ...init,
