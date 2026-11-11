@@ -119,20 +119,35 @@ export const runCommands: CommandSpec[] = [
   {
     group: "runs",
     name: "ls",
-    summary: "every run, newest first",
+    summary: "runs, newest first, optionally filtered",
+    flags: [
+      { name: "pipeline", help: "only runs of this pipeline", value: "string" },
+      { name: "status", help: "only these statuses, comma-separated", value: "string" },
+      { name: "since", help: "only runs created at or after this UTC instant", value: "string" },
+      { name: "limit", help: "how many runs to show (default 100, at most 500)", value: "string" },
+    ],
     run: async (ctx) => {
-      const runs = await ctx.client.json<RunSummary[]>("GET", "/v1/runs");
+      const runs = await ctx.client.json<RunSummary[]>("GET", "/v1/runs", {
+        query: {
+          pipeline: ctx.flag("pipeline"),
+          status: ctx.flag("status"),
+          since: ctx.flag("since"),
+          limit: ctx.flag("limit"),
+        },
+      });
       ctx.printer.emit(runs, (p) => {
         if (runs.length === 0) {
           p.line("no runs");
           return;
         }
         p.table(
-          ["RUN", "PIPELINE", "STATUS", "CREATED", "FINISHED", "TOOK"],
+          ["RUN", "PIPELINE", "VERSION", "STATUS", "STEPS", "CREATED", "FINISHED", "TOOK"],
           runs.map((run) => [
             run.id,
             run.pipeline,
+            run.pipeline_version === null ? "-" : `v${run.pipeline_version}`,
             run.status,
+            `${run.step_counts.succeeded}/${run.step_counts.total}`,
             localTime(run.created_at),
             localTime(run.finished_at),
             elapsed(run.created_at, run.finished_at),
