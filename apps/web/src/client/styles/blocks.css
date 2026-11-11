@@ -1,88 +1,79 @@
-/* ---------- block library ---------- */
+/* The Blocks list, one block and its writer. Only this screen's layout lives here: the components are
+   styled in base.css. */
 
-.lib { display: grid; grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.6fr); gap: clamp(20px, 3vw, 48px); align-items: start; }
-.lib__list { display: grid; gap: 14px; min-width: 0; }
-.facets { display: flex; flex-wrap: wrap; gap: 6px; }
-.blockrow {
-  display: grid; gap: 4px; padding: 10px; min-height: 44px;
-  background: var(--dots); color: inherit; text-decoration: none;
+.block-page { display: grid; gap: var(--s4); }
+.block-page .page-header { margin-bottom: 0; }
+.block-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
+.block-contract { display: grid; gap: var(--s3); min-width: 0; }
+.block-contract .table-wrap { margin-bottom: var(--s3); }
+
+.block-version { width: auto; min-width: 10ch; }
+
+.block-writer { display: grid; gap: var(--s4); }
+.block-writer__toolbar {
+  position: sticky; top: 0; z-index: 5;
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3);
+  margin: 0 calc(-1 * var(--s2)); padding: var(--s2);
+  border-bottom: var(--rule); background: var(--paper);
 }
-.blockrow:hover .blockrow__name { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.blockrow:focus-visible { outline-offset: -3px; }
-.blockrow[aria-current="true"] { background: var(--ink); color: var(--paper); }
-.blockrow[aria-current="true"]:focus-visible { outline-color: var(--paper); }
-.blockrow__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 8px; }
-.blockrow__name { font-weight: 800; font-size: 1.125rem; overflow-wrap: anywhere; }
-.blockrow__text { font-size: 0.9375rem; }
-.blockrow__meta { font-size: 0.875rem; font-weight: 700; }
+.block-writer__title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
+.block-writer__publish { margin-left: auto; }
+.block-writer__panes {
+  display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  align-items: start; gap: var(--s4) var(--s5);
+}
+.block-writer__source-pane { display: grid; gap: var(--s1); min-width: 0; }
+.block-writer__source {
+  height: 70dvh; min-height: 60dvh;
+  font-family: var(--font-code); font-variant-ligatures: none;
+  font-size: var(--fs-ui); line-height: 1.5;
+}
+.block-writer__declares { display: grid; gap: var(--s3); min-width: 0; }
+.block-writer__decls { display: grid; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
+.block-writer__decls li { overflow-wrap: anywhere; }
+.block-writer__problems { display: grid; gap: var(--s1); margin: 0; padding-left: var(--s5); }
+.block-writer__error:empty { display: none; }
 
-.detail { display: grid; gap: clamp(20px, 3vw, 32px); min-width: 0; }
-/* A grid item's automatic minimum size is its min-content, and a `pre` with `white-space: pre` is as
-   wide as its longest line: at phone width the source pane pushed the whole page past the screen and
-   scrolled nothing. The items have to be allowed to shrink for the pane to fit and the pre to scroll. */
-.detail > * { min-width: 0; }
-.detail:focus { outline: none; }
-.detail__head { display: grid; gap: 8px; }
-.detail__title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
-.detail__title:focus { outline: none; }
-.back { display: none; }
-.pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 20px 32px; }
+@media (max-width: 1100px) {
+  .block-writer__panes { grid-template-columns: minmax(0, 1fr); }
+}
 
-.table { width: 100%; border-collapse: collapse; font-size: 0.9375rem; }
-.table th, .table td { padding: 8px 12px 8px 0; text-align: left; vertical-align: top; background: var(--dots); }
-.table thead th { font-weight: 800; }
-/* `anywhere` lets the table squeeze the name column down to one letter, because it counts a broken
-   word as the column's minimum width. A name is the thing being read: it keeps its whole word. */
-.table tbody th { font-family: var(--font-code); font-weight: 700; overflow-wrap: break-word; }
-.table td:last-child { padding-right: 0; }
+/* BASHR-62: candidate for base.css, where the shared table's stacked phone layout belongs. Each row
+   becomes one block: its first cell on top, then label and value from the cell's own data-label. */
 @media (max-width: 640px) {
-  .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
-  .table, .table tbody, .table tr, .table th, .table td { display: block; }
-  .table tr { padding: 10px 0; background: var(--dots); }
-  .table th, .table td { background: none; padding: 2px 0; }
-}
-
-.versions { margin: 0; padding: 0; list-style: none; }
-.version {
-  display: grid; grid-template-columns: 4.5rem 7rem minmax(0, 1fr); align-items: baseline; gap: 2px 14px;
-  min-height: 44px; padding: 10px; background: var(--dots); color: inherit; text-decoration: none;
-}
-.version:hover .version__num { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
-.version:focus-visible { outline-offset: -3px; }
-.version[aria-current="true"] { background: var(--ink); color: var(--paper); }
-.version[aria-current="true"]:focus-visible { outline-color: var(--paper); }
-.version[aria-current="true"] .stamp { background: var(--paper); color: var(--ink); }
-.version__num { font-weight: 800; }
-.version__change { display: block; font-size: 0.9375rem; font-weight: 700; }
-@media (max-width: 640px) {
-  .version { grid-template-columns: auto minmax(0, 1fr); }
-  .version__note { grid-column: 1 / -1; }
-}
-
-.code {
-  margin: 0; padding: 12px 14px; max-height: 70dvh;
-  border: 3px solid var(--ink); overflow: auto;
-  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.875rem; line-height: 1.6; white-space: pre;
-}
-
-.usedby { margin: 0; padding: 0; list-style: none; }
-.usedby a { display: flex; align-items: center; min-height: 44px; padding: 4px 0; background: var(--dots); font-weight: 700; overflow-wrap: anywhere; }
-
-.writer { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px 32px; align-items: start; }
-.writer textarea {
-  height: max(420px, 64dvh); resize: vertical; white-space: pre; overflow: auto;
-  font-family: var(--font-code); font-variant-ligatures: none; font-size: 0.9375rem; line-height: 1.5;
-}
-.writer__side { display: grid; gap: 16px; min-width: 0; }
-.declared { margin: 0; padding: 0; list-style: none; font-size: 0.9375rem; }
-.declared li { padding: 4px 0; background: var(--dots); overflow-wrap: anywhere; }
-@media (max-width: 1100px) { .writer { grid-template-columns: minmax(0, 1fr); } }
-@media (max-width: 640px) { .writer textarea { font-size: 1rem; } }
-
-@media (max-width: 980px) {
-  .lib { grid-template-columns: minmax(0, 1fr); }
-  /* Below this one thing is on screen at a time: the list, or the block you opened. */
-  .lib--open .lib__list { display: none; }
-  .lib--open .back { display: inline-flex; justify-self: start; }
-  .lib:not(.lib--open) .detail { display: none; }
+  .blocks-list .table thead,
+  .block-page .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .blocks-list .table,
+  .blocks-list .table tbody,
+  .blocks-list .table tr,
+  .blocks-list .table th,
+  .blocks-list .table td,
+  .block-page .table,
+  .block-page .table tbody,
+  .block-page .table tr,
+  .block-page .table th,
+  .block-page .table td { display: block; }
+  .blocks-list .table tr,
+  .block-page .table tr { padding: var(--s2) 0; border-bottom: var(--rule-dotted); }
+  .blocks-list .table tr:last-child,
+  .block-page .table tr:last-child { border-bottom: 0; }
+  .blocks-list .table tbody td,
+  .blocks-list .table tbody th,
+  .block-page .table tbody td,
+  .block-page .table tbody th {
+    display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: var(--s2);
+    height: auto; padding: 2px 0; border-bottom: 0; text-align: left;
+  }
+  .blocks-list .table tbody td::before,
+  .block-page .table tbody td::before { content: attr(data-label); font-weight: 700; }
+  .blocks-list .table tbody td:first-child,
+  .block-page .table tbody td:first-child {
+    display: block; padding-bottom: var(--s1); font-weight: 700;
+  }
+  .blocks-list .table tbody td:first-child::before,
+  .block-page .table tbody td:first-child::before { content: none; }
+  .blocks-list .table__empty td,
+  .block-page .table__empty td { display: flex; }
+  .blocks-list .table__empty td::before,
+  .block-page .table__empty td::before { content: none; }
 }

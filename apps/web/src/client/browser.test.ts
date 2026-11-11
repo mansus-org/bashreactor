@@ -257,15 +257,16 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
-      "the Blocks detail pane shows the contract and the source",
+      "the block page shows its contract and its source",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, "/app/blocks/shout");
-        await waitFor(page, ".detail");
-        // The pane beside the list is the whole screen on a phone: at 390 px it used to stay hidden,
-        // because nothing in the client ever set the class that shows it.
-        expect((await visible(page, ".detail")).shown).toBe(true);
-        expect(await textOf(page, ".detail")).toContain("The line to print.");
-        expect(await textOf(page, ".detail")).toContain("#!/usr/bin/env bash");
+        await waitFor(page, ".tabs");
+        // The page is one screen at every width, and the contract is what it opens on.
+        expect(await textOf(page, ".page-header")).toContain("Print one line, and the same line in upper case.");
+        expect(await textOf(page, ".tabpanel:not([hidden])")).toContain("The line to print.");
+        await press(page, "Source");
+        await waitFor(page, ".tabpanel:not([hidden]) .codeview__code");
+        expect(await textOf(page, ".tabpanel:not([hidden]) .codeview__code")).toContain("#!/usr/bin/env bash");
         expect(designProblems(await styleFacts(page), viewport)).toEqual([]);
         expect(pageWatch.problems()).toEqual([]);
         await page.close();
@@ -390,7 +391,7 @@ suite("the pages that set an inline style", () => {
       // is gone, so the CSP has nothing left to refuse; and the writer moved to /blocks-new, so the
       // page no longer asks the API for a block called "new" and takes a 404 for its trouble.
       const { page, watch: pageWatch } = await screen(DESKTOP, "/app/blocks-new");
-      await waitFor(page, ".detail");
+      await waitFor(page, ".block-writer__toolbar");
       expect(pageWatch.problems()).toEqual([]);
       await page.close();
     },
