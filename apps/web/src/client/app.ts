@@ -5,7 +5,8 @@ import { api, canWrite, session, signIn, signOut, ApiError } from "./api.js";
 import type { ApiError as GateError } from "./api.js";
 import { announce, el, errorBox, sign, stateLine } from "./dom.js";
 import { renderPipeline } from "./editor.js";
-import { renderRuns } from "./runs.js";
+import { renderRunsList } from "./runs-list.js";
+import { renderRunPage } from "./run-page.js";
 import { renderBlocks } from "./blocks.js";
 
 /** Where the app is mounted. The server answers this path and everything under it. */
@@ -314,7 +315,11 @@ function screenCard(num: string, kind: string, name: string, href: string, text:
 
 const screens: Record<string, Screen> = {
   pipeline: renderPipeline,
-  runs: renderRuns,
+  runs: (view, route, signal) => {
+    const id = route.parts[1];
+    if (id === undefined) renderRunsList(view, route, signal);
+    else return renderRunPage(view, id, signal);
+  },
   blocks: renderBlocks,
   "blocks-new": renderBlocks,
 };
