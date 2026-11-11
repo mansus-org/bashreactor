@@ -6,7 +6,7 @@
 
 import { errorObject, McpFailure } from "./errors.ts";
 
-export type ArgType = "string" | "integer" | "boolean" | "object";
+export type ArgType = "string" | "integer" | "boolean" | "object" | "array";
 
 export interface ArgSpec {
   type: ArgType;
@@ -20,6 +20,8 @@ export interface ArgSpec {
   enum?: readonly string[];
   /** `object` only: whether keys other than a fixed set are allowed. */
   freeKeys?: boolean;
+  /** `array` only: what every element must be. */
+  items?: ArgSpec;
 }
 
 export type Args = Record<string, ArgSpec>;
@@ -29,17 +31,22 @@ export function inputSchema(args: Args): Record<string, unknown> {
   const properties: Record<string, unknown> = {};
   const required: string[] = [];
   for (const [key, spec] of Object.entries(args)) {
-    const property: Record<string, unknown> = { type: spec.type, description: spec.description };
-    if (spec.enum !== undefined) property.enum = [...spec.enum];
-    if (spec.pattern !== undefined) property.pattern = spec.pattern;
-    if (spec.minimum !== undefined) property.minimum = spec.minimum;
-    if (spec.type === "object") property.additionalProperties = spec.freeKeys !== false;
-    properties[key] = property;
+    properties[key] = propertySchema(spec);
     if (spec.required === true) required.push(key);
   }
   const schema: Record<string, unknown> = { type: "object", properties, additionalProperties: false };
   if (required.length > 0) schema.required = required;
   return schema;
+}
+
+function propertySchema(spec: ArgSpec): Record<string, unknown> {
+  const property: Record<string, unknown> = { type: spec.type, description: spec.description };
+  if (spec.enum !== undefined) property.enum = [...spec.enum];
+  if (spec.pattern !== undefined) property.pattern = spec.pattern;
+  if (spec.minimum !== undefined) property.minimum = spec.minimum;
+  if (spec.type === "object") property.additionalProperties = spec.freeKeys !== false;
+  if (spec.type === "array" && spec.items !== undefined) property.items = propertySchema(spec.items);
+  return property;
 }
 
 /** The arguments of a call, checked against the table. Throws `McpFailure` with the field as path. */
@@ -113,6 +120,13 @@ function one(key: string, spec: ArgSpec, value: unknown): unknown {
         throw new McpFailure(errorObject("type_mismatch", `"${key}" must be a JSON object`, { path }));
       }
       return value;
+    }
+    case "array": {
+      if (!Array.isArray(value)) {
+        throw new McpFailure(errorObject("type_mismatch", `"${key}" must be an array`, { path }));
+      }
+      const items = spec.items;
+      return items === undefined ? value : value.map((item) => one(key, items, item));
     }
   }
 }
