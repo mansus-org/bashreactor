@@ -199,3 +199,8 @@
   .timeline__step { padding: 0 var(--s1); }
   .log-bytes { margin-left: 0; }
 }
+
+/* The run list's shared test still names the old live-state line; the run page's own line keeps the
+   same emphasis under its own class. */
+.runhead__stale { font-weight: 700; }
+.run-page__stale { font-weight: 700; }

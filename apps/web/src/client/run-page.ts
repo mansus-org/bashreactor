@@ -7,34 +7,14 @@ import { api, ApiError, canWrite } from "./api.js";
 import type { Attempt, LogChunk, Run, RunFiles, RunStep } from "./api.js";
 import { announce, el, errorBox, fill, flash, sign, stateLine } from "./dom.js";
 import type { Child } from "./dom.js";
-import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
-import { fetchLibrary } from "./library.js";
 import { MAX_DRAWN_LINES, clipLine, emptyLog, feedLog, logLines } from "./logs.js";
 import type { LogLine, LogState } from "./logs.js";
-import { analyze, readUses } from "./model.js";
 import type { Analysis } from "./model.js";
 import { navigate } from "./app.js";
 import { POLL_MS, errorBody, errorWords, state, wallClock, whenShown } from "./run-shared.js";
 import type { Clock } from "./run-shared.js";
-import { drawTimeline } from "./timeline.js";
 import type { Timeline } from "./timeline.js";
-import {
-  alarm,
-  button,
-  confirmDialog,
-  exactTime,
-  formatBytes,
-  formatDuration,
-  pageHeader,
-  readTab,
-  relativeTime,
-  segmented,
-  statusStamp,
-  table,
-  tabs,
-  writeTab,
-} from "./ui.js";
 
 type Children = Parameters<typeof fill>[1];
 
@@ -62,25 +42,6 @@ function blockLabel(uses: string): string {
   if (!uses.startsWith("./")) return uses;
   const path = uses.replace(/@[1-9][0-9]*$/, "");
   return path.endsWith(".sh") ? path : `${path}.sh`;
-}
-
-/** A link that looks like a file and opens through the API, because the browser's own navigation
- * cannot carry the bearer token (SPEC 4.1). */
-function fileLink(href: string, label: string, onClick: () => void, size?: number): HTMLAnchorElement {
-  return el(
-    "a",
-    {
-      class: "file",
-      href,
-      "data-download": label,
-      onclick: (event: Event) => {
-        event.preventDefault();
-        onClick();
-      },
-    },
-    label,
-    size === undefined ? null : el("span", { class: "file__size" }, ` ${formatBytes(size)}`),
-  );
 }
 
 function downloadButton(label: string, href: string, onClick: () => void): HTMLAnchorElement {
@@ -145,14 +106,16 @@ function lineNode(line: LogLine, number: number): HTMLElement {
   );
 }
 
+type Model = typeof import("./model.js");
+
 /** The block versions a run's snapshot names, in the library's own vocabulary. */
-function libraryRefs(text: string): { name: string; version: number }[] {
+function libraryRefs(text: string, model: Model): { name: string; version: number }[] {
   const refs = new Map<string, { name: string; version: number }>();
   const add = (name: string, blockVersion: number): void => {
     refs.set(`${name}@${blockVersion}`, { name, version: blockVersion });
   };
   const read = (value: string): void => {
-    const ref = readUses(value);
+    const ref = model.readUses(value);
     if (ref !== null && ref.version !== null) add(ref.name, ref.version);
     else {
       // A run's snapshot keeps the file-shaped form of a library reference, because that is what
@@ -161,7 +124,7 @@ function libraryRefs(text: string): { name: string; version: number }[] {
       if (staged !== null) add(staged[1]!, Number(staged[2]));
     }
   };
-  const parsed = analyze(text, {});
+  const parsed = model.analyze(text, {});
   if (parsed.ok) {
     for (const step of parsed.steps) if (step.uses !== null) read(step.uses);
   } else {
@@ -200,6 +163,56 @@ export async function renderRunPage(
     return;
   }
   if (signal.aborted) return;
+
+  // Loaded here rather than at the top of the module: the run screens' stand-in server writes only
+  // the modules a run needs to be imported, and a screen that is not opened should not ask for the
+  // graph's parser, the editor's library or the components it never draws.
+  const [ui, timelineModule, graphModule, libraryModule, model] = await Promise.all([
+    import("./ui.js"),
+    import("./timeline.js"),
+    import("./graph.js"),
+    import("./library.js"),
+    import("./model.js"),
+  ]);
+  if (signal.aborted) return;
+  const {
+    alarm,
+    button,
+    confirmDialog,
+    exactTime,
+    formatBytes,
+    formatDuration,
+    pageHeader,
+    readTab,
+    relativeTime,
+    segmented,
+    statusStamp,
+    table,
+    tabs,
+    writeTab,
+  } = ui;
+  const { drawTimeline } = timelineModule;
+  const { createGraph } = graphModule;
+  const { fetchLibrary } = libraryModule;
+
+  /** A link that looks like a file and opens through the API, because the browser's own navigation
+   * cannot carry the bearer token (SPEC 4.1). */
+  function fileLink(href: string, label: string, onClick: () => void, size?: number): HTMLAnchorElement {
+    return el(
+      "a",
+      {
+        class: "file",
+        href,
+        "data-download": label,
+        onclick: (event: Event) => {
+          event.preventDefault();
+          onClick();
+        },
+      },
+      label,
+      size === undefined ? null : el("span", { class: "file__size" }, ` ${formatBytes(size)}`),
+    );
+  }
 
   const params = new URL(location.href).searchParams;
   let selected = params.get("step") ?? pickStep(run);
@@ -986,8 +999,8 @@ export async function renderRunPage(
     graphPanel.replaceChildren(stateLine("Loading graph."));
     try {
       const text = await api.runFileText(run.id, "pipeline.yaml");
-      const library = await fetchLibrary(libraryRefs(text));
-      const analysis = analyze(graphText(text), library);
+      const library = await fetchLibrary(libraryRefs(text, model));
+      const analysis = model.analyze(graphText(text), library);
       if (signal.aborted) return;
       if (!analysis.ok) {
         graphPanel.replaceChildren(errorBox({ code: analysis.error.code, message: analysis.error.message }));

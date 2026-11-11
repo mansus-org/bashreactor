@@ -11,7 +11,7 @@ import type { Clock } from "./run-shared.ts";
 import type { State as DomState } from "./dom.ts";
 import { FakeElement, installDom, serveModules, uninstallDom } from "./client.testkit.ts";
 
-const served = serveModules(["run-page"]);
+const served = serveModules(["run-page", "ui", "timeline", "graph", "library", "model"]);
 // The real shell starts rendering when it is imported; the run page only reaches for its navigate.
 writeFileSync(join(served, "app.js"), "export function navigate(path) { globalThis.navigateTo = path; }\n");
 
