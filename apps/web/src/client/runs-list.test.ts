@@ -223,6 +223,9 @@ describe("the runs table", () => {
     const row = one(rows(view)[0] ?? null, "the run's row");
     expect(row.textContent).toContain(failed.id);
     expect(word(one(row.querySelector(".stamp"), "the status stamp"))).toBe("failed");
+    // The stamp carries the sign and the word, so the row does not repeat the shape beside it.
+    expect(row.querySelectorAll(".stamp").length).toBe(1);
+    expect(row.querySelectorAll(".sign--large").length).toBe(0);
     expect(row.textContent).toContain("word-report");
     expect(row.textContent).toContain("v3");
     expect(row.textContent).toContain("3 / 4 · 1 failed");
@@ -403,6 +406,21 @@ describe("an empty list", () => {
     clear.click();
     await waitFor("the unfiltered read", () => server.reads === 2);
     expect(server.queries()[1]!.get("status")).toBeNull();
+  });
+
+  test("fills, and empties again, as the polls land", async () => {
+    const { view, clock, server } = await openList({ first: { runs: [] } });
+    expect(one(view.querySelector(".table__empty"), "the empty row").textContent).toContain("No runs yet.");
+
+    server.first = { runs: [run("20261104T101500Z-3fa9c2d1", "succeeded")] };
+    await clock.advance(IDLE_POLL_MS);
+    expect(rows(view).length).toBe(1);
+    expect(view.querySelector(".table__empty")).toBeNull();
+
+    server.first = { runs: [] };
+    await clock.advance(IDLE_POLL_MS);
+    expect(rows(view).length).toBe(0);
+    expect(one(view.querySelector(".table__empty"), "the empty row").textContent).toContain("No runs yet.");
   });
 });
 
