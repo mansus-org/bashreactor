@@ -1,19 +1,36 @@
-// The block library. A block's contract is read out of its own header — `GET /v1/blocks/:name` for
-// the versions and `.../content` for the bytes — so what this screen says a block declares is what
-// the file declares. The screen itself is only a reader of that library.
+// The block library: the list, one block's contract and source, and the writer. A block's contract is
+// read out of its own header, so what these screens say a block declares is what its file declares.
 //
-// The list on the left is the library's own, out of `GET /v1/blocks`: names and version counts, no
-// source. That is one small request, and it is made beside the block the address asked for rather
-// than before it, because the block is the reason the page was opened. A version has no note,
-// because the store keeps no note.
+// The list asks the API for every name and then reads each latest version at four at a time. The
+// block page reads one version at a time, because the address says which one is on screen. The writer
+// is the only place in the library that changes anything.
 
 import { api, ApiError, canWrite } from "./api.js";
-import { announce, el, errorBox, fill, sign, stateLine } from "./dom.js";
-import { latest, parseBlock } from "./model.js";
-import type { Contract, LibraryEntry, LibraryVersion } from "./model.js";
-import type { LibraryName } from "./api.js";
+import type { BlockList, BlockVersion, LibraryName } from "./api.js";
+import { announce, el, errorBox, fill, insertNode, stateLine } from "./dom.js";
+import { parseBlock } from "./model.js";
+import type { Contract, Decl, Problem } from "./model.js";
 import type { Route } from "./app.js";
 import { navigate } from "./app.js";
+import {
+  alarm,
+  button,
+  codeView,
+  emptyState,
+  exactTime,
+  formatBytes,
+  formatCount,
+  linkButton,
+  pageHeader,
+  readTab,
+  relativeTime,
+  statusStamp,
+  table,
+  tabs,
+  typeStamp,
+  writeTab,
+} from "./ui.js";
+import type { TableColumn, TabItem } from "./ui.js";
 
 const STARTERS: Record<string, string> = {
   bash: `\nout="$(printf '%s' "$INPUT_EXAMPLE" | tr a-z A-Z)"\nprintf '%s' "$out" > "$OUTPUT_RESULT"\n`,
@@ -37,460 +54,386 @@ const FRONT = `#!/usr/bin/env bash
 # ---
 `;
 
+/** What a version segment in an address has to look like to be a version at all. */
+const VERSION = /^[1-9][0-9]*$/;
+
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/** What a version segment of an address has to look like to be a version at all. */
-const VERSION = /^[1-9][0-9]*$/;
+function errorObject(caught: unknown): { code: string; message: string; path?: string; file?: string } {
+  if (caught instanceof ApiError) return caught;
+  return { code: "internal_error", message: caught instanceof Error ? caught.message : String(caught) };
+}
 
-const heading = () => [
-  el(
-    "div",
-    { class: "head" },
-    el(
-      "div",
-      { class: "head__text" },
-      el("h1", { class: "title" }, "Blocks"),
-      el(
-        "p",
-        { class: "lead" },
-        "What a pipeline can run. A block is one bash file, and its front matter says what goes in and what comes out.",
-      ),
-    ),
-    el("a", { class: "btn btn--ink", href: "/app/blocks-new", "data-link": "" }, "Write a block"),
-  ),
-];
+function unauthorized(caught: unknown): boolean {
+  return caught instanceof ApiError && caught.status === 401;
+}
+
+/** Read one version, treating a missing or broken file as the version's own news. */
+async function contentOrNull(name: string, version: number): Promise<string | null> {
+  try {
+    return (await api.blockContent(name, version)).text;
+  } catch (caught) {
+    if (unauthorized(caught)) throw caught;
+    return null;
+  }
+}
 
 /**
- * The size of a version as the server counted it. The store keeps the byte count of the file it
- * wrote, so this is the file's real size; counting the characters of the text here would be wrong
- * by however many of them are not ASCII, and say so in the same breath as the word "bytes".
+ * One block per row, with the cells the row reads once its latest content lands. The table component
+ * keeps the row structure; this only fills the two cells that need a read.
  */
-function sizeLabel(bytes: number | undefined): string {
-  return bytes === undefined ? "no stored file" : `${new Intl.NumberFormat().format(bytes)} bytes`;
+interface BlockRow {
+  entry: LibraryName;
+  nameLink: HTMLAnchorElement;
+  description: HTMLSpanElement;
+  runtime: HTMLSpanElement;
 }
 
-/** The name in the box is the block to look at. */
-function openNamed(name: string): void {
-  if (name !== "") navigate(`/blocks/${name}`);
-}
-
-export async function renderBlocks(view: HTMLElement, route: Route): Promise<void> {
-  const list = el("ul", { class: "blocklist" });
-  const nameInput = el("input", {
-    id: "block-name",
-    type: "text",
-    spellcheck: "false",
-    autocomplete: "off",
-    placeholder: "count-words",
-    "aria-describedby": "block-name-help",
+/** Work through `items` with at most `limit` promises in flight, so a big library is not a burst. */
+async function eachAtMost<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      if (index >= items.length) return;
+      await work(items[index]!);
+    }
   });
-  const openButton = el("button", { class: "btn", type: "button", onclick: () => openNamed(nameInput.value.trim()) }, "Open");
-  const count = el("p", { class: "help", role: "status" });
-  const listPane = el(
-    "section",
-    { class: "lib__list", "aria-label": "Blocks" },
-    el(
-      "div",
-      { class: "field" },
-      el("label", { class: "label", for: "block-name" }, "Open a block by name"),
-      el("div", { class: "row" }, nameInput, openButton),
-      el(
-        "p",
-        { class: "help", id: "block-name-help" },
-        "Type the name of a block to open it, or pick one out of the library below.",
-      ),
+  await Promise.all(workers);
+}
+
+// ---------- the list ----------
+
+async function renderList(view: HTMLElement, signal?: AbortSignal): Promise<void> {
+  view.replaceChildren(stateLine("Loading the blocks."));
+
+  let names: LibraryName[];
+  try {
+    names = (await api.allBlocks()).blocks;
+  } catch (caught) {
+    if (unauthorized(caught)) throw caught;
+    if (signal?.aborted) return;
+    view.replaceChildren(
+      pageHeader({
+        title: "Blocks",
+        actions: canWrite() ? [linkButton("New block", "/app/blocks-new", { primary: true })] : [],
+      }),
+      errorBox(errorObject(caught), linkButton("All blocks", "/app/blocks")),
+    );
+    return;
+  }
+  if (signal?.aborted) return;
+
+  const rows: BlockRow[] = names.map((entry) => ({
+    entry,
+    nameLink: el(
+      "a",
+      { class: "table__link", href: `/app/blocks/${encodeURIComponent(entry.name)}`, "data-link": "" },
+      entry.name,
     ),
-    count,
+    description: el("span", {}, "—"),
+    runtime: el("span", {}, "—"),
+  }));
+
+  const columns: TableColumn<BlockRow>[] = [
+    { header: "Name", cell: (row) => row.nameLink },
+    { header: "Description", cell: (row) => row.description },
+    { header: "Runtime", cell: (row) => row.runtime },
+    { header: "Latest", cell: (row) => el("span", { class: "mono" }, `v${row.entry.latest}`) },
+    { header: "Versions", cell: (row) => formatCount(row.entry.versions), align: "right" },
+  ];
+
+  const list = table(columns, rows, {
+    rowHref: (row) => `/app/blocks/${encodeURIComponent(row.entry.name)}`,
+    empty: "No blocks in the library yet.",
+    emptyAction: canWrite() ? linkButton("New block", "/app/blocks-new", { primary: true }) : undefined,
+  });
+  list.classList.add("blocks-list");
+
+  view.replaceChildren(
+    pageHeader({
+      title: "Blocks",
+      actions: canWrite() ? [linkButton("New block", "/app/blocks-new", { primary: true })] : [],
+    }),
     list,
   );
-  const detail = el("section", { class: "detail", "aria-labelledby": "detail-title", tabindex: "-1" });
-  const lib = el("div", { class: "lib" }, listPane, detail);
-  view.replaceChildren(...heading(), lib);
 
-  /** Every block the library holds, once `loadList` has had an answer. */
-  let shelf: LibraryName[] = [];
-  /** Why the list is empty when it should not be, which is the list's own news to tell. */
-  let shelfProblem: string | null = null;
-
-  function renderList(current: string | null): void {
-    list.replaceChildren(
-      ...shelf.map((block) =>
-        el(
-          "li",
-          {},
-          el(
-            "a",
-            {
-              class: "blockrow",
-              href: `/app/blocks/${block.name}`,
-              "data-link": "",
-              "aria-current": block.name === current ? "true" : null,
-            },
-            el("span", { class: "blockrow__name" }, block.name),
-            el("span", { class: "blockrow__meta" }, plural(block.versions, "version")),
-          ),
-        ),
-      ),
-    );
-    count.textContent =
-      shelfProblem ??
-      (shelf.length === 0 ? "Nothing has been published yet. Write a block of your own." : `${plural(shelf.length, "block")} in the library.`);
-    count.hidden = shelfProblem === null && shelf.length === 0;
-  }
-
-  /**
-   * The library's own list of names, asked for once per visit and painted when it lands. The block
-   * the address named is the reason for the page, so it does not wait behind a list of the others;
-   * and a list that will not answer is the list's own news, told in the list, not a wall over the
-   * block on the right.
-   */
-  async function loadList(): Promise<void> {
+  // Each row fills in when its own answer arrives, so a slow block does not hold up the others.
+  await eachAtMost(rows, 4, async (row) => {
     try {
-      shelf = (await api.allBlocks()).blocks;
-      shelfProblem = null;
-    } catch (error) {
-      shelfProblem = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
-    }
-    renderList(target ?? null);
-  }
-
-  const target = route.parts[1];
-  // The writer for a block that does not exist yet lives at `/blocks-new` of its own. It cannot live
-  // at `/blocks/new`, because `new` is a legal block name and the block called `new` has to be able
-  // to open at its own address.
-  const writing = route.parts[0] === "blocks-new";
-
-  // At 980 px and below the two panes take turns instead of sitting side by side, and whose turn it
-  // is is the route's business, not a click's: `/blocks` is the list, anything under it is the block
-  // or the writer that path opened. Read off the route, the class is put back by every render — after
-  // a publish, a version, a sign-in — where a click handler would be gone by the next one.
-  lib.classList.toggle("lib--open", target !== undefined || writing);
-
-  void loadList();
-
-  if (writing) {
-    renderList(null);
-    renderWriter(detail, null);
-    return;
-  }
-
-  if (target === undefined) {
-    renderList(null);
-    detail.replaceChildren(
-      el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "No block open"),
-      el("p", { class: "help" }, "Pick a block from the list, or write one of your own."),
-    );
-    return;
-  }
-
-  const edit = route.parts[2] === "edit";
-  const wanted = route.parts[2];
-  const name = target;
-  if (route.parts.length > 3) {
-    // Nothing under a version is an address this screen has. The tail used to be ignored, so the page
-    // showed a version under a URL that promised something else.
-    detail.replaceChildren(
-      el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "Nothing at this address"),
-      el("p", {}, `A block is ${route.path.split("/").slice(0, 2).join("/")}, and a version is that with a number after it.`),
-      el(
-        "div",
-        { class: "row" },
-        el("a", { class: "btn back", href: `/app/blocks/${name}`, "data-link": "" }, `Open ${name}`),
-        el("a", { class: "btn", href: "/app/blocks", "data-link": "" }, "All blocks"),
-      ),
-    );
-    return;
-  }
-  renderList(name);
-  detail.replaceChildren(stateLine(`Loading ${name}.`));
-  try {
-    const record = await api.blocks(name);
-    const versions: LibraryVersion[] = [];
-    // One label per version, from the size the store kept beside the file: `size` is a byte count,
-    // where `source.length` counts UTF-16 code units and is not one.
-    const sizes = new Map<number, string>();
-    for (const version of record.versions) {
-      try {
-        versions.push({ version: version.version, source: (await api.blockContent(name, version.version)).text });
-      } catch (error) {
-        // A 401 is the token's news, and the gate has already been drawn over this render.
-        if (error instanceof ApiError && error.status === 401) throw error;
-        // Everything else about one version is that version's own news. The store answers
-        // `block_not_found` when it has the row but not the file, and a 500 or a lost socket is the
-        // same shape from here: the version keeps its place in the list with the reason beside it,
-        // and the versions that did read stay on the screen instead of going down with it.
-        versions.push({
-          version: version.version,
-          source: null,
-          unreadable: error instanceof ApiError ? `${error.code}: ${error.message}` : String(error),
-        });
-        sizes.set(version.version, sizeLabel(undefined));
-        continue;
-      }
-      sizes.set(version.version, sizeLabel(version.size));
-    }
-    const entry: LibraryEntry = { name, versions };
-    if (edit) {
-      renderWriter(detail, entry);
-      return;
-    }
-    // Only a plain decimal is a version. `1.0`, `0x1`, `+1` and `1e0` all satisfy `Number(wanted) === 1`
-    // and used to open v1 under an address that said something else; they are now the same kind of
-    // nothing `abc` is.
-    const chosen =
-      wanted !== undefined && VERSION.test(wanted)
-        ? versions.find((version) => version.version === Number(wanted))
-        : undefined;
-    if (wanted !== undefined && chosen === undefined) {
-      // Asking for v99 used to fall through to whatever was newest, so the screen said "Source of v1"
-      // under an address that said 99. A version the library does not have is called what it is.
-      detail.replaceChildren(
-        el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, `No version ${wanted} of ${name}`),
-        el("p", {}, `The library has ${versions.map((version) => `v${version.version}`).join(", ")}.`),
-        el(
-          "div",
-          { class: "row" },
-          el("a", { class: "btn back", href: `/app/blocks/${name}`, "data-link": "" }, `Latest of ${name}`),
-          el("a", { class: "btn", href: "/app/blocks", "data-link": "" }, "All blocks"),
-        ),
+      const content = await api.blockContent(row.entry.name, row.entry.latest);
+      if (signal?.aborted) return;
+      const parsed = parseBlock(content.text);
+      row.description.replaceChildren(parsed.description === "" ? "—" : parsed.description);
+      row.runtime.replaceChildren(typeStamp(parsed.runtime));
+    } catch (caught) {
+      if (unauthorized(caught)) throw caught;
+      if (signal?.aborted) return;
+      const error = errorObject(caught);
+      row.description.replaceChildren(
+        `v${row.entry.latest} could not be read: `,
+        el("code", {}, error.code),
+        " ",
+        error.message,
       );
-      return;
     }
-    renderBlock(detail, entry, chosen ?? latest(entry), sizes);
-  } catch (error) {
-    if (error instanceof ApiError && error.code === "block_not_found") {
-      detail.replaceChildren(
-        el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "No such block"),
-        el("p", {}, `The library has nothing called ${name}.`),
-        el(
-          "div",
-          { class: "row" },
-          el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
-          el("a", { class: "btn", href: "/app/blocks-new", "data-link": "" }, "Write it here"),
-        ),
-      );
-      return;
-    }
-    // A refusal is shown in the detail pane, so at phone width it has to be able to get back to the
-    // list the same way an open block can; the error card carries the API's own words untouched.
-    detail.replaceChildren(
-      errorBox(
-        error instanceof ApiError ? error : { code: "internal_error", message: String(error) },
-        el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
-      ),
-    );
-  }
+  });
 }
 
 // ---------- one block ----------
 
-const names = (contract: Contract, kind: "inputs" | "outputs") => contract[kind].map((decl) => decl.name);
-const added = (a: string[], b: string[]) => a.filter((name) => !b.includes(name));
-
-function contractDiff(versions: LibraryVersion[], index: number): string | null {
-  if (index === 0) return null;
-  const now = versions[index]!;
-  const before = versions[index - 1]!;
-  // A contract is read out of the bytes, so a version without them cannot be compared to one. The
-  // row says which one is missing rather than keeping quiet or inventing a change.
-  if (now.source === null) return null;
-  if (before.source === null) return `Contract unknown: v${before.version} could not be read.`;
-  const parsedNow = parseBlock(now.source);
-  const parsedBefore = parseBlock(before.source);
-  const parts: string[] = [];
-  for (const name of added(names(parsedNow, "inputs"), names(parsedBefore, "inputs"))) parts.push(`adds input ${name}`);
-  for (const name of added(names(parsedBefore, "inputs"), names(parsedNow, "inputs"))) parts.push(`removes input ${name}`);
-  for (const name of added(names(parsedNow, "outputs"), names(parsedBefore, "outputs"))) parts.push(`adds output ${name}`);
-  for (const name of added(names(parsedBefore, "outputs"), names(parsedNow, "outputs"))) parts.push(`removes output ${name}`);
-  return parts.length > 0 ? `Contract: ${parts.join(", ")}.` : "Contract unchanged.";
+interface BlockHeaderInput {
+  view: HTMLElement;
+  name: string;
+  version: BlockVersion;
+  record: BlockList;
+  route: Route;
 }
 
-/** The newest version whose bytes are actually there, which is not always the newest one listed. */
-function newestReadable(entry: LibraryEntry): LibraryVersion | null {
-  for (let index = entry.versions.length - 1; index >= 0; index -= 1) {
-    const version = entry.versions[index]!;
-    if (version.source !== null) return version;
+function openVersion(view: HTMLElement, route: Route, name: string, version: string): void {
+  const query = new URLSearchParams(route.query);
+  query.set("version", version);
+  const path = `/blocks/${encodeURIComponent(name)}`;
+  history.replaceState({}, "", `/app${path}?${query.toString()}`);
+  void renderBlocks(view, { path, parts: ["blocks", name], query }).then(() => {
+    const select = document.getElementById("block-version");
+    select?.focus();
+  });
+}
+
+function versionSelect(input: BlockHeaderInput): HTMLSelectElement {
+  const select = el("select", {
+    id: "block-version",
+    class: "block-version",
+    "aria-label": "Version",
+    onchange: (event) => openVersion(input.view, input.route, input.name, (event.target as HTMLSelectElement).value),
+  });
+  for (const version of input.record.versions.toReversed()) {
+    select.append(
+      el(
+        "option",
+        { value: String(version.version) },
+        version.version === input.record.latest ? `v${version.version} (latest)` : `v${version.version}`,
+      ),
+    );
   }
-  return null;
+  select.value = String(input.version.version);
+  return select;
 }
 
 /**
- * The version list, which is the same list whether or not the version being looked at can be read:
- * the reason to open an unreadable one is usually to get from it to one that can be.
+ * The block's runtime belongs immediately after its name, which is the one part of a page header the
+ * shared component does not take. Grouping the title and its stamp keeps them together while the
+ * actions stay on the right.
  */
-function versionsList(entry: LibraryEntry, version: LibraryVersion, sizes: Map<number, string>): HTMLElement {
+// BASHR-62: candidate for ui.ts
+function titleWithStamp(header: HTMLElement, node: HTMLElement): void {
+  const title = header.querySelector<HTMLElement>("h1.title");
+  if (title === null) return;
+  const parent = title.parentElement ?? (title as unknown as { parent?: HTMLElement | null }).parent ?? null;
+  if (parent === null) return;
+  const group = el("div", { class: "block-title" });
+  insertNode(parent, group, title);
+  group.append(title, node);
+}
+
+function problemAlarm(problems: Problem[]): HTMLElement {
+  return alarm({
+    status: "failed",
+    lead: plural(problems.length, "header problem"),
+    text: el(
+      "span",
+      {},
+      ...problems.flatMap((problem, index) => [
+        index === 0 ? null : " · ",
+        `Line ${problem.line}: ${problem.message} `,
+        el("code", {}, problem.code),
+      ]),
+    ),
+  });
+}
+
+function unreadableAlarm(caught: unknown, version: number): HTMLElement {
+  const error = errorObject(caught);
+  return alarm({
+    status: "failed",
+    lead: `v${version} could not be read.`,
+    text: el("span", {}, el("code", {}, error.code), " ", error.message),
+  });
+}
+
+function declarationTable(kind: "inputs" | "outputs", declarations: Decl[]): HTMLElement {
+  if (kind === "inputs") {
+    const columns: TableColumn<Decl>[] = [
+      { header: "Name", cell: (decl) => el("span", { class: "mono" }, decl.name) },
+      { header: "Type", cell: (decl) => typeStamp(decl.type) },
+      {
+        header: "Default",
+        cell: (decl) => (decl.required ? "required" : el("code", {}, String(decl.default))),
+      },
+      { header: "Description", cell: (decl) => decl.description === "" ? "—" : decl.description },
+    ];
+    return table(columns, declarations, { empty: "This block takes no inputs." });
+  }
+  const columns: TableColumn<Decl>[] = [
+    { header: "Name", cell: (decl) => el("span", { class: "mono" }, decl.name) },
+    { header: "Type", cell: (decl) => typeStamp(decl.type) },
+    { header: "Description", cell: (decl) => decl.description === "" ? "—" : decl.description },
+  ];
+  return table(columns, declarations, { empty: "This block declares no outputs." });
+}
+
+function contractPanel(parsed: Contract | null): HTMLElement {
+  if (parsed === null) return emptyState("This version's file could not be read.");
   return el(
-    "section",
-    { "aria-labelledby": "h-versions" },
-    el("h3", { class: "h3", id: "h-versions" }, "Versions"),
-    el(
-      "ol",
-      { class: "versions", reversed: true },
-      entry.versions.toReversed().map((known, index) => {
-        const change = contractDiff(entry.versions, entry.versions.length - 1 - index);
-        return el(
-          "li",
-          {},
-          el(
-            "a",
-            { class: "version", href: `/app/blocks/${entry.name}/${known.version}`, "data-link": "", "aria-current": known === version ? "true" : null },
-            el("span", { class: "version__num" }, `v${known.version}`),
-            el("span", {}, sizes.get(known.version) ?? sizeLabel(undefined)),
-            el("span", { class: "version__note" }, change !== null ? el("span", { class: "version__change" }, change) : null),
-          ),
-        );
-      }),
+    "div",
+    { class: "block-contract" },
+    el("h2", { class: "h2" }, "Inputs"),
+    declarationTable("inputs", parsed.inputs),
+    el("h2", { class: "h2" }, "Outputs"),
+    declarationTable("outputs", parsed.outputs),
+  );
+}
+
+function sourcePanel(source: string | null): HTMLElement {
+  return source === null ? emptyState("This version's file could not be read.") : codeView(source, { lineNumbers: true });
+}
+
+function versionsPanel(name: string, record: BlockList): HTMLElement {
+  const columns: TableColumn<BlockVersion>[] = [
+    { header: "Version", cell: (version) => el("span", { class: "mono" }, `v${version.version}`) },
+    {
+      header: "Stored",
+      cell: (version) => {
+        const time = el("time", { datetime: version.created_at }, relativeTime(version.created_at));
+        const exact = exactTime(version.created_at);
+        if (exact !== "") time.setAttribute("title", exact);
+        return time;
+      },
+    },
+    { header: "sha256", cell: (version) => el("span", { class: "mono" }, version.sha256.slice(0, 12)) },
+    { header: "Size", cell: (version) => formatBytes(version.size), align: "right" },
+  ];
+  const node = table(columns, record.versions.toReversed());
+  node.setAttribute("aria-label", `Versions of ${name}`);
+  return node;
+}
+
+function renderMissingBlock(view: HTMLElement, name: string): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }], title: "No block" }),
+    emptyState(`There is no block called ${name}.`, linkButton("All blocks", "/app/blocks")),
+  );
+}
+
+function renderNoVersion(view: HTMLElement, name: string, wanted: string, record: BlockList): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+    emptyState(
+      `No version ${wanted} of ${name}. This block has ${record.versions.map((version) => `v${version.version}`).join(", ")}.`,
+      linkButton(`Open v${record.latest}`, `/app/blocks/${encodeURIComponent(name)}`),
     ),
   );
 }
 
-function renderBlock(
-  detail: HTMLElement,
-  entry: LibraryEntry,
-  version: LibraryVersion,
-  sizes: Map<number, string>,
-): void {
-  if (version.source === null) {
-    // The list has this version and the store cannot produce its file. Nothing on this card may
-    // pretend to know what the block declares: no contract, and no empty source standing in for one.
-    const readable = newestReadable(entry);
-    fill(detail, [
-      el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
-      el(
-        "div",
-        { class: "detail__head" },
-        el(
-          "div",
-          { class: "bar" },
-          el(
-            "div",
-            { class: "detail__title" },
-            el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, `${entry.name} v${version.version}`),
-            el("span", { class: "stamp" }, sign("failed"), "unreadable"),
-          ),
-        ),
-        el(
-          "p",
-          {},
-          `The library lists v${version.version} and does not have its bytes, so nothing here can be said about what it declares.`,
-        ),
-        el("p", {}, el("code", {}, version.unreadable ?? "the library would not say why")),
-        el(
-          "div",
-          { class: "row" },
-          readable !== null
-            ? el(
-                "a",
-                { class: "btn back", href: `/app/blocks/${entry.name}/${readable.version}`, "data-link": "" },
-                `Read v${readable.version} instead`,
-              )
-            : el("p", { class: "help" }, "None of this block's versions can be read."),
-          el("a", { class: "btn", href: `/app/blocks/${entry.name}`, "data-link": "" }, `All of ${entry.name}`),
-        ),
-      ),
-      versionsList(entry, version, sizes),
-      el(
-        "section",
-        { "aria-labelledby": "h-source" },
-        el("h3", { class: "h3", id: "h-source" }, `Source of v${version.version}`),
-        el(
-          "p",
-          { class: "help" },
-          "The file is not there to read, and nothing is drawn in its place: an empty source would look like a block that does nothing.",
-        ),
-      ),
-    ]);
-    return;
-  }
-  const parsed = parseBlock(version.source);
-  const newest = latest(entry);
-
-  const inputTable = parsed.inputs.length > 0
-    ? el(
-        "table",
-        { class: "table" },
-        el("caption", { class: "sr" }, `Inputs of ${entry.name}`),
-        el("thead", {}, el("tr", {}, ["Name", "Type", "If not set", "What it is"].map((label) => el("th", { scope: "col" }, label)))),
-        el(
-          "tbody",
-          {},
-          parsed.inputs.map((decl) =>
-            el(
-              "tr",
-              {},
-              el("th", { scope: "row" }, decl.name),
-              el("td", {}, el("span", { class: "stamp stamp--type" }, decl.type)),
-              el("td", {}, decl.required ? "Required" : el("span", {}, "Defaults to ", el("code", {}, String(decl.default)))),
-              el("td", {}, decl.description),
-            ),
-          ),
-        ),
-      )
-    : el("p", { class: "help" }, "This block reads nothing.");
-
-  const outputTable = parsed.outputs.length > 0
-    ? el(
-        "table",
-        { class: "table" },
-        el("caption", { class: "sr" }, `Outputs of ${entry.name}`),
-        el("thead", {}, el("tr", {}, ["Name", "Type", "What it is"].map((label) => el("th", { scope: "col" }, label)))),
-        el(
-          "tbody",
-          {},
-          parsed.outputs.map((decl) =>
-            el("tr", {}, el("th", { scope: "row" }, decl.name), el("td", {}, el("span", { class: "stamp stamp--type" }, decl.type)), el("td", {}, decl.description)),
-          ),
-        ),
-      )
-    : el("p", { class: "help" }, "This block declares no outputs. It passes or fails, and that is all a step can read from it.");
-
-  fill(detail, [
-    el("a", { class: "btn back", href: "/app/blocks", "data-link": "" }, "All blocks"),
-    el(
-      "div",
-      { class: "detail__head" },
-      el(
-        "div",
-        { class: "bar" },
-        el(
-          "div",
-          { class: "detail__title" },
-          el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, entry.name),
-          el("span", { class: "stamp stamp--type" }, parsed.runtime),
-        ),
-        canWrite()
-          ? el("a", { class: "btn", href: `/app/blocks/${entry.name}/edit`, "data-link": "" }, "Write a new version")
-          : el("span", { class: "stamp stamp--type" }, "read only"),
-      ),
-      el("p", { class: "lead" }, parsed.description),
-      parsed.problems.length > 0
-        ? el(
-            "ul",
-            { class: "declared" },
-            parsed.problems.map((problem) => el("li", {}, el("strong", {}, `Line ${problem.line}: `), problem.message, " ", el("code", {}, problem.code))),
-          )
-        : null,
-      version !== newest ? el("p", {}, el("span", { class: "stamp" }, `viewing v${version.version}`), " Pipelines that name no version run ", el("a", { href: `/app/blocks/${entry.name}`, "data-link": "" }, `v${newest.version}`), ".") : null,
-    ),
-    el(
-      "div",
-      { class: "pair" },
-      el("section", { "aria-labelledby": "h-inputs" }, el("h3", { class: "h3", id: "h-inputs" }, "Inputs"), inputTable),
-      el("section", { "aria-labelledby": "h-outputs" }, el("h3", { class: "h3", id: "h-outputs" }, "Outputs"), outputTable),
-    ),
-    versionsList(entry, version, sizes),
-    el(
-      "section",
-      { "aria-labelledby": "h-source" },
-      el("h3", { class: "h3", id: "h-source" }, `Source of v${version.version}`),
-      el("pre", { class: "code", tabindex: "0", "aria-labelledby": "h-source" }, el("code", {}, version.source)),
-    ),
-  ]);
+function renderNoVersions(view: HTMLElement, name: string): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+    emptyState("This block has no versions.", linkButton("All blocks", "/app/blocks")),
+  );
 }
 
-// ---------- writing ----------
+function renderAddress(view: HTMLElement, name: string): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+    emptyState("There is nothing at this address.", linkButton(`Open ${name}`, `/app/blocks/${encodeURIComponent(name)}`)),
+  );
+}
+
+async function renderBlockPage(view: HTMLElement, route: Route, name: string, legacy: string | undefined): Promise<void> {
+  view.replaceChildren(stateLine(`Loading ${name}.`));
+  let record: BlockList;
+  try {
+    record = await api.blocks(name);
+  } catch (caught) {
+    if (unauthorized(caught)) throw caught;
+    if (caught instanceof ApiError && caught.code === "block_not_found") {
+      renderMissingBlock(view, name);
+      return;
+    }
+    view.replaceChildren(
+      pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+      errorBox(errorObject(caught), linkButton("All blocks", "/app/blocks")),
+    );
+    return;
+  }
+
+  const newest = record.versions.at(-1);
+  if (newest === undefined) {
+    renderNoVersions(view, name);
+    return;
+  }
+  const raw = route.query.get("version") ?? legacy ?? null;
+  const wanted = raw === null ? newest.version : VERSION.test(raw) ? Number(raw) : null;
+  const chosen = wanted === null ? undefined : record.versions.find((version) => version.version === wanted);
+  if (raw !== null && chosen === undefined) {
+    renderNoVersion(view, name, raw, record);
+    return;
+  }
+  const version = chosen ?? newest;
+
+  let source: string | null = null;
+  let readError: unknown = null;
+  try {
+    source = (await api.blockContent(name, version.version)).text;
+  } catch (caught) {
+    if (unauthorized(caught)) throw caught;
+    readError = caught;
+  }
+  const parsed = source === null ? null : parseBlock(source);
+
+  const header = pageHeader({
+    crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }],
+    title: name,
+    actions: [
+      versionSelect({ view, name, version, record, route }),
+      ...(canWrite()
+        ? [linkButton("New version", `/app/blocks/${encodeURIComponent(name)}/edit?version=${version.version}`)]
+        : []),
+    ],
+  });
+  if (parsed !== null) titleWithStamp(header, typeStamp(parsed.runtime));
+  if (parsed !== null && parsed.description !== "") header.append(el("p", { class: "lead" }, parsed.description));
+
+  const problems =
+    parsed !== null && parsed.problems.length > 0
+      ? problemAlarm(parsed.problems)
+      : source === null
+        ? unreadableAlarm(readError, version.version)
+        : null;
+
+  const selectedTab = route.query.get("tab") ?? readTab("contract");
+  const items: TabItem[] = [
+    { id: "contract", label: "Contract", panel: contractPanel(parsed) },
+    { id: "source", label: "Source", panel: sourcePanel(source) },
+    { id: "versions", label: "Versions", panel: versionsPanel(name, record) },
+  ];
+
+  view.replaceChildren(
+    el(
+      "div",
+      { class: "block-page" },
+      header,
+      problems,
+      tabs(items, selectedTab, (id) => writeTab(id)),
+    ),
+  );
+}
+
+// ---------- the writer ----------
 
 function readDraft(key: string): string | null {
   try {
@@ -517,241 +460,408 @@ function discardDraft(key: string): void {
   }
 }
 
-function renderWriter(detail: HTMLElement, base: LibraryEntry | null): void {
-  // The newest version, and the newest one that actually has bytes to start from. When the newest
-  // row's file is gone the writer starts from the one below it and says that it did, rather than
-  // opening an empty file and letting a person publish it over the top of a block they cannot see.
-  const newest = base !== null ? latest(base) : null;
-  const start = base !== null ? newestReadable(base) : null;
-  const startText = start?.source ?? FRONT + STARTERS.bash!;
-  const skipped = newest !== null && start !== null && newest.version !== start.version;
-  // A draft is this tab's unsaved work: one per block being revised, and one for the writer at
-  // /blocks-new whatever name the file inside it ends up declaring.
-  const draftKey = `bashreactor.draft.${base !== null ? `block.${base.name}` : "newblock"}`;
+interface WriterBase {
+  name: string;
+  latest: number;
+  latestSource: string | null;
+}
+
+function renderReadOnlyWriter(view: HTMLElement, name: string | null): void {
+  view.replaceChildren(
+    pageHeader({
+      crumbs: name === null ? [{ label: "Blocks", href: "/app/blocks" }] : [{ label: "Blocks", href: "/app/blocks" }, { label: name }],
+      title: name ?? "New block",
+    }),
+    emptyState("This token can read only. Publishing a block needs a token that can write.", linkButton("All blocks", "/app/blocks")),
+  );
+}
+
+function renderWriterMissing(view: HTMLElement, name: string): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+    emptyState(`There is no block called ${name}.`, linkButton("All blocks", "/app/blocks")),
+  );
+}
+
+function renderWriterNoReadable(view: HTMLElement, name: string): void {
+  view.replaceChildren(
+    pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+    emptyState(`No version of ${name} could be read.`, linkButton(`Open ${name}`, `/app/blocks/${encodeURIComponent(name)}`)),
+  );
+}
+
+async function renderWriter(view: HTMLElement, route: Route, name: string | null): Promise<void> {
+  if (!canWrite()) {
+    renderReadOnlyWriter(view, name);
+    return;
+  }
+  if (name === null) {
+    renderWriterShell(view, route, null, FRONT + STARTERS.bash!, null);
+    return;
+  }
+
+  view.replaceChildren(stateLine(`Loading ${name}.`));
+  let record: BlockList;
+  try {
+    record = await api.blocks(name);
+  } catch (caught) {
+    if (unauthorized(caught)) throw caught;
+    if (caught instanceof ApiError && caught.code === "block_not_found") {
+      renderWriterMissing(view, name);
+      return;
+    }
+    view.replaceChildren(
+      pageHeader({ crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }], title: name }),
+      errorBox(errorObject(caught), linkButton("All blocks", "/app/blocks")),
+    );
+    return;
+  }
+  const newest = record.versions.at(-1);
+  if (newest === undefined) {
+    renderWriterMissing(view, name);
+    return;
+  }
+
+  const raw = route.query.get("version") ?? null;
+  const wanted = raw === null ? newest.version : VERSION.test(raw) ? Number(raw) : null;
+  const chosen = wanted === null ? undefined : record.versions.find((version) => version.version === wanted);
+  if (raw !== null && chosen === undefined) {
+    renderNoVersion(view, name, raw, record);
+    return;
+  }
+
+  // The selected version is what the writer opens. If its file is gone, start from the newest one
+  // that can be read and say which one that was, rather than opening an empty file.
+  const first = chosen?.version ?? newest.version;
+  const order = [...new Set([first, ...record.versions.toReversed().map((version) => version.version)])];
+  let startVersion: BlockVersion | null = null;
+  let startText: string | null = null;
+  for (const number of order) {
+    const text = await contentOrNull(name, number);
+    if (text !== null) {
+      startVersion = record.versions.find((version) => version.version === number) ?? null;
+      startText = text;
+      break;
+    }
+  }
+  if (startVersion === null || startText === null) {
+    renderWriterNoReadable(view, name);
+    return;
+  }
+  const latestSource =
+    startVersion.version === newest.version ? startText : await contentOrNull(name, newest.version);
+  const skipped = startVersion.version === first ? null : { wanted: first, started: startVersion.version };
+
+  renderWriterShell(
+    view,
+    route,
+    { name, latest: newest.version, latestSource },
+    startText,
+    skipped,
+  );
+}
+
+function writerInputs(parsed: Contract): HTMLElement {
+  if (parsed.inputs.length === 0) return el("p", { class: "help" }, "No inputs.");
+  return el(
+    "ul",
+    { class: "block-writer__decls" },
+    ...parsed.inputs.map((decl) =>
+      el(
+        "li",
+        {},
+        el("code", {}, el("strong", {}, decl.name)),
+        " ",
+        typeStamp(decl.type),
+        " ",
+        decl.required ? "required" : `defaults to ${String(decl.default)}`,
+        decl.description === "" ? null : el("p", { class: "help" }, decl.description),
+      ),
+    ),
+  );
+}
+
+function writerOutputs(parsed: Contract): HTMLElement {
+  if (parsed.outputs.length === 0) return el("p", { class: "help" }, "No outputs.");
+  return el(
+    "ul",
+    { class: "block-writer__decls" },
+    ...parsed.outputs.map((decl) =>
+      el(
+        "li",
+        {},
+        el("code", {}, el("strong", {}, decl.name)),
+        " ",
+        typeStamp(decl.type),
+        decl.description === "" ? null : el("p", { class: "help" }, decl.description),
+      ),
+    ),
+  );
+}
+
+function renderWriterShell(
+  view: HTMLElement,
+  _route: Route,
+  base: WriterBase | null,
+  startText: string,
+  skipped: { wanted: number; started: number } | null,
+): void {
+  const draftKey = base !== null ? `bashreactor.draft.block.${base.name}` : "bashreactor.draft.newblock";
   const draft = readDraft(draftKey);
   const source = el("textarea", {
     id: "writer-source",
+    class: "block-writer__source",
     wrap: "off",
     spellcheck: "false",
     autocapitalize: "off",
-    value: draft ?? startText,
-    "aria-describedby": "writer-help",
+    "aria-label": "Block source",
   });
-  const declared = el("div", { class: "writer__side" });
-  const error = el("p", { class: "form-error", role: "alert", hidden: true });
-  // The version these bytes would become, and the bytes they are compared against. For a name the
-  // library may not have yet, neither is knowable until the name has been looked up.
+  source.value = draft ?? startText;
+
+  const unsaved = statusStamp("unsaved");
+  unsaved.hidden = true;
+  const declared = el("section", { class: "block-writer__declares", "aria-labelledby": "declares-title" });
+  const errorSlot = el("div", { class: "block-writer__error" });
+  const publishSlot = el("span", { class: "block-writer__publish" });
+  const title = el("span", { class: "h2" }, base !== null ? base.name : "New block");
+  const startNote = skipped === null
+    ? null
+    : el("p", { class: "help" }, `v${skipped.wanted} could not be read. This starts from v${skipped.started}.`);
+
+  // What these bytes would become if published: the newest version's bytes, so identical bytes are
+  // not offered as a new version and the API's own idempotence is not presented as a publish.
   let against: { version: number; source: string | null } | null =
-    newest !== null ? { version: newest.version, source: newest.source } : null;
-  let lookup: Promise<void> = Promise.resolve();
-  let nameAsked: string | null = null;
-  let nameUnknown = false;
-  const publish = el("button", { class: "btn btn--ink", type: "submit" }, "Publish");
-  const title = el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, base !== null ? `New version of ${base.name}` : "New block");
-  const starters = base === null
-    ? el(
-        "div",
-        { class: "row", role: "group", "aria-label": "Start from a template" },
-        el("span", { class: "label label--inline" }, "Start from"),
-        ...Object.keys(STARTERS).map((runtime) =>
-          el(
-            "button",
-            {
-              class: "btn",
-              type: "button",
-              onclick: () => {
-                source.value = FRONT + STARTERS[runtime]!;
-                save();
-                update();
-              },
-            },
-            runtime,
-          ),
-        ),
-      )
-    : null;
+    base !== null ? { version: base.latest, source: base.latestSource } : null;
+  let askedName: string | null = null;
+  const known = new Map<string, { version: number; source: string | null }>();
+  const unknown = new Set<string>();
 
-  /**
-   * Whether the library already has this name, and what its newest bytes are. Only the writer at
-   * /blocks-new has to ask: a new version of a block was handed all of that with the block. The
-   * answer decides what the button may promise, and whether there is anything to publish at all.
-   */
-  function askAbout(name: string): Promise<void> {
-    if (base !== null || name === "" || name === "new-block" || name === nameAsked) return lookup;
-    nameAsked = name;
-    nameUnknown = false;
-    against = null;
-    lookup = (async () => {
-      try {
-        const record = await api.blocks(name);
-        against = { version: record.latest, source: null };
-        try {
-          against = { version: record.latest, source: (await api.blockContent(name, record.latest)).text };
-        } catch {
-          // The name is taken and the newest file is not there to compare against: the writer can
-          // still say which version this would be, only not whether it would change anything.
-        }
-      } catch (caught: unknown) {
-        // A name the library does not have is the answer "this one is v1". Anything else is a
-        // question the writer cannot answer, and it stops naming a version it does not know.
-        if (!(caught instanceof ApiError) || caught.status !== 404) nameUnknown = true;
+  async function askAbout(name: string): Promise<{ version: number; source: string | null } | null> {
+    if (known.has(name)) return known.get(name)!;
+    if (unknown.has(name)) return null;
+    try {
+      const record = await api.blocks(name);
+      const content = await contentOrNull(name, record.latest);
+      const entry = { version: record.latest, source: content };
+      known.set(name, entry);
+      return entry;
+    } catch (caught) {
+      if (unauthorized(caught)) throw caught;
+      if (caught instanceof ApiError && caught.status === 404) {
+        unknown.add(name);
+        return null;
       }
-    })().then(() => {
-      if (nameAsked === name) update();
-    });
-    return lookup;
+      throw caught;
+    }
   }
 
-  /** Whether these are already the bytes of the version this file is measured against. */
-  function unchanged(): boolean {
-    return against !== null && against.source !== null && source.value === against.source;
+  /** The one reason the Publish button is off right now, or null when it can work. */
+  function blocker(parsed: Contract): string | null {
+    if (parsed.problems.length > 0) return `Fix ${plural(parsed.problems.length, "problem")} first.`;
+    if (parsed.name === null || parsed.name === "") return "The file needs a name.";
+    if (parsed.name === "new-block") return 'Give the block its own name: "new-block" is the template\u2019s.';
+    if (base !== null && parsed.name !== base.name) return `This is a new version of ${base.name}, so its name has to stay ${base.name}.`;
+    if (against !== null && against.source !== null && source.value === against.source) {
+      return `Nothing has changed: v${against.version} is already these exact bytes.`;
+    }
+    return null;
   }
 
-  /** What the button may say right now, which is never a version number it has not confirmed. */
-  function label(): string {
-    if (against === null) return nameUnknown ? "Publish" : "Publish v1";
-    return unchanged() ? `Unchanged, still v${against.version}` : `Publish v${against.version + 1}`;
+  let paintedReason: string | null | undefined;
+  function paintPublish(reason: string | null): void {
+    if (reason === paintedReason) return;
+    paintedReason = reason;
+    publishSlot.replaceChildren(
+      reason === null
+        ? button("Publish version", { primary: true, type: "submit" })
+        : button("Publish version", { primary: true, type: "submit", disabledReason: reason }),
+    );
   }
 
-  function save(): void {
-    if (source.value === startText) discardDraft(draftKey);
-    else keepDraft(draftKey, source.value);
+  function renderDeclared(parsed: Contract): void {
+    fill(declared, [
+      el("h2", { class: "h2", id: "declares-title" }, "What this file declares"),
+      parsed.description === "" ? null : el("p", { class: "lead" }, parsed.description),
+      parsed.problems.length > 0
+        ? el(
+            "ul",
+            { class: "block-writer__problems" },
+            ...parsed.problems.map((problem) =>
+              el(
+                "li",
+                {},
+                el("strong", {}, `Line ${problem.line}: `),
+                problem.message,
+                " ",
+                el("code", {}, problem.code),
+              ),
+            ),
+          )
+        : null,
+      el("h3", { class: "h3" }, "Inputs"),
+      writerInputs(parsed),
+      el("h3", { class: "h3" }, "Outputs"),
+      writerOutputs(parsed),
+    ]);
+  }
+
+  function currentName(parsed: Contract): string | null {
+    return parsed.name === null || parsed.name === "" || parsed.name === "new-block" ? null : parsed.name;
   }
 
   function update(): void {
     const parsed = parseBlock(source.value);
-    // Words about a publish that has already been answered are not news the moment the text moves.
-    error.hidden = true;
-    error.textContent = "";
-    // SPEC 3.4: a new version exists only if the SHA-256 differs from the latest one, and the store
-    // answers identical bytes by handing back the version it already has. A button that still said
-    // "Publish v2" at that moment promised a thing that cannot happen, and the person found out by
-    // pressing it and landing on v1.
+    unsaved.hidden = source.value === startText;
+    renderDeclared(parsed);
+    paintPublish(blocker(parsed));
+
     if (base === null) {
-      void askAbout(parsed.name ?? "");
-      title.textContent = against !== null && parsed.name !== null ? `New version of ${parsed.name}` : "New block";
+      const name = currentName(parsed);
+      if (name === null || name !== askedName) askedName = name;
+      if (name === null) {
+        against = null;
+      } else if (known.has(name)) {
+        against = known.get(name)!;
+      } else if (!unknown.has(name)) {
+        against = null;
+        void askAbout(name)
+          .then((entry) => {
+            if (askedName !== name) return;
+            against = entry;
+            update();
+          })
+          .catch((caught) => {
+            if (unauthorized(caught)) return;
+            if (askedName !== name) return;
+            // A name that could not be checked is not a reason to forbid publishing: the API still
+            // answers with the version it stored, and this screen does not invent one.
+            against = null;
+            update();
+          });
+      } else {
+        against = null;
+      }
+    } else {
+      against = { version: base.latest, source: base.latestSource };
     }
-    publish.textContent = label();
-    fill(declared, [
-      el(
-        "div",
-        {},
-        el("h3", { class: "h3" }, "What this file declares"),
-        parsed.problems.length > 0
-          ? el("p", {}, el("span", { class: "stamp" }, sign("failed"), plural(parsed.problems.length, "problem")))
-          : el("p", {}, el("span", { class: "stamp" }, sign("succeeded"), "valid"), " ", el("span", { class: "stamp stamp--type" }, parsed.runtime)),
-      ),
-      parsed.problems.length > 0
-        ? el("ul", { class: "declared" }, parsed.problems.map((problem) => el("li", {}, el("strong", {}, `Line ${problem.line}: `), problem.message, " ", el("code", {}, problem.code))))
-        : null,
-      el(
-        "div",
-        {},
-        el("h3", { class: "h3" }, "Inputs"),
-        parsed.inputs.length > 0
-          ? el("ul", { class: "declared" }, parsed.inputs.map((decl) => el("li", {}, el("code", {}, el("strong", {}, decl.name)), ` ${decl.type}, ${decl.required ? "required" : `defaults to ${decl.default}`}`)))
-          : el("p", { class: "help" }, "None."),
-      ),
-      el(
-        "div",
-        {},
-        el("h3", { class: "h3" }, "Outputs"),
-        parsed.outputs.length > 0
-          ? el("ul", { class: "declared" }, parsed.outputs.map((decl) => el("li", {}, el("code", {}, el("strong", {}, decl.name)), ` ${decl.type}`)))
-          : el("p", { class: "help" }, "None."),
-      ),
-    ]);
+    paintPublish(blocker(parsed));
   }
 
+  function saveDraft(): void {
+    if (source.value === startText) discardDraft(draftKey);
+    else keepDraft(draftKey, source.value);
+  }
+
+  function failLocal(message: string): void {
+    errorSlot.replaceChildren(el("p", { class: "form-error", role: "alert" }, message));
+    source.focus();
+  }
+
+  function failApi(caught: unknown): void {
+    errorSlot.replaceChildren(errorBox(errorObject(caught)));
+    source.focus();
+  }
+
+  async function publish(): Promise<void> {
+    const parsed = parseBlock(source.value);
+    const reason = blocker(parsed);
+    if (reason !== null) {
+      failLocal(reason);
+      return;
+    }
+    const name = parsed.name!;
+
+    if (base === null) {
+      try {
+        against = await askAbout(name);
+      } catch (caught) {
+        if (unauthorized(caught)) throw caught;
+        // The POST is the next answer; a failed lookup does not create a version by itself.
+        against = null;
+      }
+      const now = blocker(parseBlock(source.value));
+      if (now !== null) {
+        update();
+        failLocal(now);
+        return;
+      }
+    }
+
+    try {
+      const record = await api.addBlockVersion(name, source.value);
+      discardDraft(draftKey);
+      announce(`${name} published as version ${record.version}.`);
+      navigate(`/blocks/${encodeURIComponent(name)}?version=${record.version}`);
+    } catch (caught) {
+      if (unauthorized(caught)) throw caught;
+      failApi(caught);
+    }
+  }
+
+  const form = el(
+    "form",
+    {
+      class: "block-writer",
+      onsubmit: (event) => {
+        event.preventDefault();
+        void publish();
+      },
+    },
+    el(
+      "div",
+      { class: "block-writer__toolbar" },
+      el("span", { class: "block-writer__title" }, title, unsaved),
+      publishSlot,
+    ),
+    startNote,
+    el(
+      "div",
+      { class: "block-writer__panes" },
+      el("div", { class: "block-writer__source-pane" }, source),
+      declared,
+    ),
+    errorSlot,
+  );
+
   source.addEventListener("input", () => {
-    save();
+    errorSlot.replaceChildren();
+    saveDraft();
     update();
   });
 
-  if (!canWrite()) {
-    detail.replaceChildren(
-      el("h2", { class: "h2", id: "detail-title", tabindex: "-1" }, "This token can read only"),
-      el("p", { class: "help" }, "Publishing a block is a write. Sign in with a write token, or use the API directly."),
-      el("a", { class: "btn", href: "/app/blocks", "data-link": "" }, "Back to the library"),
-    );
+  view.replaceChildren(form);
+  update();
+}
+
+// ---------- the routes ----------
+
+export async function renderBlocks(view: HTMLElement, route: Route, signal?: AbortSignal): Promise<void> {
+  const first = route.parts[0];
+  if (first === "blocks-new") {
+    await renderWriter(view, route, null);
     return;
   }
-
-  fill(
-    detail,
-    [
-    el("a", { class: "btn back", href: base !== null ? `/app/blocks/${base.name}` : "/app/blocks", "data-link": "" }, base !== null ? `Back to ${base.name}` : "All blocks"),
-    el(
-      "form",
-      {
-        class: "detail",
-        onsubmit: (event) => {
-          event.preventDefault();
-          const parsed = parseBlock(source.value);
-          const fail = (message: string) => {
-            error.hidden = false;
-            error.textContent = message;
-            source.focus();
-          };
-          if (parsed.problems.length > 0) return fail(`Fix line ${parsed.problems[0]!.line} first: ${parsed.problems[0]!.message}`);
-          if (parsed.name === "new-block") return fail('Give the block its own name: "new-block" is the template\u2019s.');
-          if (base !== null && parsed.name !== base.name) return fail(`This is a new version of ${base.name}, so its name has to stay ${base.name}.`);
-          const name = parsed.name ?? "";
-          publish.disabled = true;
-          // At /blocks-new the name may already belong to a block, and what this file becomes is not
-          // known until that has been asked. Asking before posting is the difference between
-          // "published as version 3" and a promise of a v1 that was never going to happen.
-          void askAbout(name)
-            .then(() => {
-              if (unchanged()) {
-                publish.disabled = false;
-                return fail(`Nothing has changed: v${against!.version} is already these exact bytes.`);
-              }
-              return api.addBlockVersion(name, source.value).then((record) => {
-                discardDraft(draftKey);
-                announce(`${name} published as version ${record.version}.`);
-                navigate(`/blocks/${name}/${record.version}`);
-              });
-            })
-            .catch((caught: unknown) => {
-              publish.disabled = false;
-              // The store keeps the exact bytes it is given, so a refusal is about the file: show the
-              // server's own code, message and path rather than a paraphrase of them.
-              fail(caught instanceof ApiError ? `${caught.code}: ${caught.message}` : String(caught));
-            });
-        },
-      },
-      title,
-      skipped
-        ? el("p", { class: "help" }, `v${newest!.version} is listed and its bytes could not be read, so this starts from v${start!.version}.`)
-        : null,
-      draft !== null ? el("p", { class: "help" }, "This is what you had written here, not what the library has.") : null,
-      starters,
-      el(
-        "div",
-        { class: "writer" },
-        el(
-          "div",
-          { class: "field" },
-          el("label", { class: "label", for: "writer-source" }, "The block file"),
-          source,
-          el(
-            "p",
-            { class: "help", id: "writer-help" },
-            "These exact bytes are what the store keeps, and what a run of a step that names this version will execute.",
-          ),
-        ),
-        declared,
-      ),
-      error,
-      el(
-        "div",
-        { class: "row" },
-        publish,
-        el("a", { class: "btn", href: base !== null ? `/app/blocks/${base.name}` : "/app/blocks", "data-link": "", onclick: () => discardDraft(draftKey) }, "Discard"),
-      ),
-    ),
-    ],
-  );
-  update();
+  if (first !== "blocks") {
+    await renderList(view, signal);
+    return;
+  }
+  const name = route.parts[1];
+  if (name === undefined) {
+    await renderList(view, signal);
+    return;
+  }
+  if (route.parts[2] === "edit") {
+    if (route.parts.length > 3) {
+      renderAddress(view, name);
+      return;
+    }
+    await renderWriter(view, route, name);
+    return;
+  }
+  if (route.parts.length > 3) {
+    renderAddress(view, name);
+    return;
+  }
+  const legacy = route.parts.length === 3 ? route.parts[2] : undefined;
+  await renderBlockPage(view, route, name, legacy);
 }
