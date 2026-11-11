@@ -23,7 +23,11 @@
   align-items: start; gap: var(--s4) var(--s5);
 }
 .block-writer__source-pane { display: grid; gap: var(--s1); min-width: 0; }
-.block-writer__source { height: 70dvh; min-height: 60dvh; }
+.block-writer__source {
+  height: 70dvh; min-height: 60dvh;
+  font-family: var(--font-code); font-variant-ligatures: none;
+  font-size: var(--fs-ui); line-height: 1.5;
+}
 .block-writer__declares { display: grid; gap: var(--s3); min-width: 0; }
 .block-writer__decls { display: grid; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
 .block-writer__decls li { overflow-wrap: anywhere; }

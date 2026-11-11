@@ -6,6 +6,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildAssets } from "../assets.ts";
 import { blockSource, decls, installDom, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Route } from "./app.ts";
 
@@ -14,6 +15,15 @@ const served = serveModules(["blocks"]);
 const { session } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { renderBlocks } = (await import(join(served, "blocks.js"))) as typeof import("./blocks.ts");
 const { formatBytes } = (await import(join(served, "ui.js"))) as typeof import("./ui.ts");
+const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+
+/** The body of one rule, written out with this exact selector. */
+function ruleBody(selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const found = new RegExp(`(?:^|\\n)${escaped}\\s*\\{([^}]*)\\}`).exec(sheet);
+  if (found === null) throw new Error(`style.css has no rule whose selector is exactly ${selector}`);
+  return found[1]!;
+}
 
 const realFetch = globalThis.fetch;
 
@@ -463,6 +473,14 @@ describe("one block", () => {
 // ---------- the writer ----------
 
 describe("the block writer", () => {
+  test("the source pane is code: the mono face, no ligatures, the code line height", () => {
+    const body = ruleBody(".block-writer__source");
+
+    expect(body).toMatch(/font-family:\s*var\(--font-code\)/);
+    expect(body).toMatch(/font-variant-ligatures:\s*none/);
+    expect(body).toMatch(/line-height:\s*1\.5/);
+  });
+
   test("a new block opens with its toolbar and live declaration", async () => {
     const view = await open("/blocks-new");
 
