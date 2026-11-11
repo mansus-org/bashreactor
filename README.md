@@ -302,7 +302,6 @@ two made, so it runs after them and starts no run of its own.
 | `apps/mcp/` | MCP server for agents. |
 | `apps/cli/` | `bashreactor` CLI: a client of the API over HTTP with a bearer token. |
 | `apps/web/` | Web UI: pipeline editor, live run view, block library. |
-| `mockup/` | Static UI mockup, no build step. |
 
 ## One command
 

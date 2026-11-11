@@ -45,7 +45,7 @@ There is no build step for the UI. `bun run build` at the repo root bundles `src
   `with { type: "text" }` imports in `src/raw.js`, and each client module is transpiled by
   `Bun.Transpiler` when the server starts, so what the server holds is what the source file says;
 - the three woff2 faces are base64 inside `src/fonts.ts`, which `bun apps/web/scripts/embed-fonts.ts`
-  regenerates from `mockup/fonts/` — run it after touching a font;
+  regenerates from `apps/web/fonts/` — run it after touching a font;
 - the YAML parser is bundled for the browser at build time by `src/yaml-lib.macro.ts`, because the
   image ships one file with nothing beside it to fetch.
 
@@ -90,8 +90,8 @@ because SPEC 2.6 says the engine refuses to start without them.
 - `src/server.ts` stays a near-copy of `apps/api/src/main.ts`. When that file changes, this one has to
   follow, because the container runs this one.
 - The look is the Mansus 1-bit language — paper `#e4e2db`, ink `#141414`, grey only as dither. The
-  reasoning is in `AGENTS.md` and the two design repos it names; `mockup/` is the static version of
-  these screens, and `mockup/fonts/` is where the faces come from.
+  reasoning is in `AGENTS.md` and the two design repos it names; `apps/web/fonts/` is where the
+  faces come from.
 
 ## Tests
 

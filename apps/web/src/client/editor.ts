@@ -2,9 +2,8 @@
 // directly; every control on the graph side computes a new text through model.ts. Everything on
 // screen is drawn from analysing that text, so there is no second copy to keep in step.
 //
-// On top of the mockup's editor this adds the API: the block contracts come from the library, the
-// document is opened and stored as versions, `Validate` is the server's own report, and `Start a run`
-// is a POST. Ported from mockup/editor.js.
+// The API is what this edits against: the block contracts come from the library, the document is
+// opened and stored as versions, `Validate` is the server's own report, and `Start a run` is a POST.
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { LibraryName, ValidationIssue } from "./api.js";

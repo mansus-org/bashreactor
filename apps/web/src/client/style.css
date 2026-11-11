@@ -1,7 +1,7 @@
-/* Bashreactor, the app. This is mockup/style.css with the font paths pointed at the routes the app
-   serves and the rules below added for the things only the app has: the token gate, the byte-offset
-   log column and the library's "opened by name" list. The 1-bit language, the dither greys and
-   every control rule are the mockup's, unchanged; docs/design/README.md says why. */
+/* Bashreactor, the app. The font paths point at the routes the app serves, and the rules below cover
+   the things only the app has: the token gate, the byte-offset log column and the library's "opened by
+   name" list. The 1-bit language, the dither greys and every control rule are the design's, unchanged;
+   docs/design/README.md says why. */
 
 @font-face {
   font-family: "Anybody";
@@ -492,8 +492,8 @@ input[type="checkbox"]:disabled:not(:checked)::before { background: var(--paper)
 }
 .log__lines { display: inline-block; min-width: 100%; margin: 0; padding: 8px 12px 8px 0; list-style: none; }
 .log__line { display: flex; white-space: pre; }
-/* The cursor stays put while a long line scrolls under it. The mockup had a clock here; the log is
-   the bytes a block wrote (SPEC 4.8), so what is real to show is the byte offset we read it at. */
+/* The cursor stays put while a long line scrolls under it. The log is the bytes a block wrote
+   (SPEC 4.8), so what is real to show is the byte offset we read it at. */
 .log__offset { position: sticky; left: 0; flex: none; min-width: 8ch; padding: 0 10px 0 12px; background: var(--paper); font-variant-numeric: tabular-nums; text-align: right; }
 .log__empty { padding: 14px 16px; font-family: var(--font-text); font-size: 1rem; line-height: 1.45; max-width: 62ch; white-space: normal; }
 

@@ -1,7 +1,7 @@
 // The run screen. The list is `GET /v1/runs`; one run is rendered from its own `run.json` and
 // nothing else — steps in declaration order, their statuses, attempt counts and durations, and a log
-// pane that follows one attempt by byte offset. Ported from mockup/run.js with the simulator
-// replaced by polling, because the engine is the only thing that knows what a step is doing.
+// pane that follows one attempt by byte offset. It polls, because the engine is the only thing that
+// knows what a step is doing.
 
 import { api, ApiError, canWrite } from "./api.js";
 import { announce, duration, el, errorBox, fill, flash, isoInstant, restamp, sign, stateLine, stateStamp, when } from "./dom.js";

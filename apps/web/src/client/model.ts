@@ -1,6 +1,6 @@
 // The document model: YAML text goes in, the steps, wires and problems come out, and every edit from
 // the graph side is a change to the text. Nothing here stores a pipeline, so the graph and the YAML
-// cannot drift apart. Ported from mockup/model.js.
+// cannot drift apart.
 //
 // Two things changed on the way in. The block library is what the API serves — `GET /v1/blocks/:name`
 // and its `.../content` — so a step's contract is read from the bytes of the version it names, and

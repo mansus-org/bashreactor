@@ -3,8 +3,8 @@
 //
 // Two layouts, picked by the room the stage has and not by device: columns by dependency depth when
 // every column fits, otherwise one column of steps with the wires in lanes down its left side.
-// Ported from mockup/graph.js, which drew a document whose blocks were all local: here the contracts
-// arrive from the API after the first paint, and a wire has to cope with that.
+// The blocks a document names are not local: their contracts arrive from the API after the first
+// paint, and a wire has to cope with that.
 
 import { el, flash, sign } from "./dom.js";
 import type { Analysis, Step } from "./model.js";
