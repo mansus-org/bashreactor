@@ -317,11 +317,11 @@ suite("the graph at desktop width", () => {
       // `total_words` on both the step that produces it and the one that consumes it, and
       // `report_bytes` — each measured 42 px against its own 21 px line height, broken inside the
       // word (`interrupt/_at`). The port column is 88 px inside a 212 px node, and `.port` sets
-      // `overflow-wrap: anywhere` (apps/web/src/client/style.css:284-288), so a name longer than the
-      // column breaks mid-word instead of widening it. At 390 px the graph is one column, the same
-      // labels measure 214 px and none of them break, which is why nobody noticed. The fix is to size
-      // a node from its longest port name, or give the port column a `max-content` minimum:
-      // style.css and graph.ts, both files BASHR-30 is editing.
+      // `overflow-wrap: anywhere` (`src/client/styles/editor.css`, the `.port` rule), so a name longer
+      // than the column breaks mid-word instead of widening it. At 390 px the graph is one column, the
+      // same labels measure 214 px and none of them break, which is why nobody noticed. The fix is to
+      // size a node from its longest port name, or give the port column a `max-content` minimum:
+      // the stylesheet and graph.ts, both files BASHR-30 is editing.
       const { page } = await screen(DESKTOP, "/app/pipeline/word-report");
       await waitFor(page, ".node");
       const tall = await page.evaluate(() =>
@@ -350,7 +350,7 @@ suite("what a stylesheet is for", () => {
       // pane does not clip its own unbroken line, so the page grows instead of the pane scrolling.
       // `.lead` is a second symptom rather than the cause — one 724 px line 26 px tall, because
       // `.title` beside it has `overflow-wrap: anywhere` and `.lead` does not
-      // (apps/web/src/client/style.css:139). Both rules are in the file BASHR-30 owns.
+      // (`src/client/styles/base.css`, the `.lead` rule). Both rules are in the stylesheet.
       for (const viewport of VIEWPORTS) {
         const { page } = await screen(viewport, "/app/pipeline");
         await pasteYaml(page, `name: long-one-line\ndescription: ${"y".repeat(300)}\nsteps:\n  a:\n    uses: shout@1\n`);
@@ -371,9 +371,9 @@ suite("the pages that set an inline style", () => {
       // logs one console error — `Applying inline style violates the following Content Security
       // Policy directive 'style-src 'self''. ... The action has been blocked.` — from
       // `el("span", { class: "label", style: "margin:0" }, "Attempt")` at
-      // apps/web/src/client/runs.ts:286, against the app's own CSP (apps/web/src/index.ts:29) of
+      // apps/web/src/client/run-page.ts, against the app's own CSP (apps/web/src/index.ts:29) of
       // `style-src 'self'`. The declaration is dropped, so the Attempt label sits out of line with
-      // its buttons. The fix is a class in style.css: BASHR-30 owns both files.
+      // its buttons. The fix is a class in the stylesheet.
       const { page, watch: pageWatch } = await screen(DESKTOP, `/app/runs/${run.id}`);
       await waitFor(page, ".steprow");
       expect(pageWatch.problems()).toEqual([]);
