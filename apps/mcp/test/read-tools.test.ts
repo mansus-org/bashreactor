@@ -145,7 +145,9 @@ describe("runs", () => {
       "finished_at",
       "id",
       "pipeline",
+      "pipeline_version",
       "status",
+      "step_counts",
     ]);
   });
 

@@ -60,7 +60,7 @@ answer differently:
 
 | Status | Codes |
 | --- | --- |
-| 400 | `bad_request`, a path that is not decodable percent-encoded UTF-8 |
+| 400 | `bad_request`, a path that is not decodable percent-encoded UTF-8; `type_mismatch` for a malformed run-list filter |
 | 401 | `unauthenticated` |
 | 403 | `forbidden` |
 | 404 | `run_not_found`, `block_not_found`, `pipeline_not_found`, `token_not_found`, `step_not_found`, `attempt_not_found`, `file_not_found`, and `not_found` for a path with no route |
@@ -109,7 +109,7 @@ server print the same word for the same failure. `file_not_found` is the spec's 
 | `GET` | `/v1/pipelines/:name/:version` | read | one version, with its YAML and parsed form |
 | `POST` | `/v1/pipelines/validate` | read | validate YAML, report every issue, create nothing |
 | `POST` | `/v1/pipelines/:name/versions` | write | store a version (validated first) |
-| `GET` | `/v1/runs` | read | one page of runs, newest first; `?limit=` and `?cursor=`, `X-Next-Cursor` when there is more |
+| `GET` | `/v1/runs` | read | one page of runs, newest first; `?pipeline=`, `?status=`, `?since=`, `?limit=` and `?cursor=`, `X-Next-Cursor` when there is more |
 | `POST` | `/v1/runs` | write | start a run and drive it in the background |
 | `GET` | `/v1/runs/:id` | read | the whole `run.json`, plus `claim` (SPEC 4.7) |
 | `POST` | `/v1/runs/:id/cancel` | write | ask for a cancel (SPEC 4.6) |
@@ -184,10 +184,11 @@ curl -s -H "Authorization: Bearer $READ" $BR/v1/pipelines/word-report/latest
 
 ```bash
 # start a run of a stored pipeline (or of raw YAML with "yaml" instead of "pipeline");
-# "version" is optional and means the latest version when absent
+# "version" is optional, means the latest version when absent, and may also be "latest"
 curl -s -X POST -H "Authorization: Bearer $WRITE" -H 'content-type: application/json' \
   -d '{"pipeline":"word-report","version":2,"inputs":{"lines":200}}' $BR/v1/runs
-# -> 201 and the run as created, with every step pending; it runs in the background
+# -> 201 and the run as created, with every step pending and pipeline_version 2;
+#    it runs in the background. Inline YAML records pipeline_version null.
 
 curl -s -H "Authorization: Bearer $READ" $BR/v1/runs
 # one page of twenty, and the page after it: the cursor is the last id of the page before it
@@ -282,22 +283,53 @@ are run-relative — the strings SPEC 4.2 documents — and every one of them go
 An unknown run, step or attempt is the same 404 the log route gives. A path with no file behind it is
 `file_not_found`; a path that names a directory is `bad_request` telling you to use the archive.
 
-## How the run list is paged
+## Filtering runs, and how the run list is paged
 
 `GET /v1/runs` answers with a page, never with the history. The id is a timestamp to the second
 (SPEC 4.2), so it is the whole ordering: the server lists the run directories, sorts the ids newest
-first, and reads the `run.json` of the page it chose and nothing else. Reading every run to throw all
-but a page away made one request cost what the whole history does, and nothing bounded it.
+first, and then narrows that list with the filters. `cursor` and `since` are applied to the ids alone,
+so they never read a record. `pipeline` and `status` are facts of `run.json`, so the server reads the
+surviving ids in id order, in batches of at most 32 at once, and stops as soon as the page is full.
+
+Each filter is optional, an empty value means the filter is absent, and the filters AND together and
+combine with `limit` and `cursor`:
+
+- `?pipeline=<name>` keeps runs whose `pipeline` equals that name. The name must match SPEC 1.1's
+  pipeline-name regex.
+- `?status=<s>[,<s>…]` keeps runs whose status is any of a comma-separated list of `running`,
+  `succeeded`, `failed` and `cancelled`.
+- `?since=<instant>` keeps runs created at or after a UTC instant such as
+  `2026-11-11T00:00:00Z` or `2026-11-11T00:00:00.000Z`. It is compared with the creation time
+  encoded in the id (SPEC 4.2), so it reads no record and a fraction is compared to the millisecond.
+
+A malformed filter value is 400 `type_mismatch` with the parameter name as `path`; that is the
+request's shape rather than a document inside it. `limit` keeps its own rule below.
+
+```bash
+# only one pipeline
+curl -s -H "Authorization: Bearer $READ" "$BR/v1/runs?pipeline=word-report"
+# only runs that are still going or have failed
+curl -s -H "Authorization: Bearer $READ" "$BR/v1/runs?status=running,failed"
+# only runs created from 11 November 2026 onward
+curl -s -H "Authorization: Bearer $READ" "$BR/v1/runs?since=2026-11-11T00:00:00Z"
+# all three together, still newest first
+curl -s -H "Authorization: Bearer $READ" \
+  "$BR/v1/runs?pipeline=word-report&status=failed&since=2026-11-11T00:00:00Z"
+```
 
 - `?limit=` is how many the page holds. Absent, empty or `0` is 100; more than 500 is clamped to 500;
   something that is not a count is 422 `type_mismatch`.
 - `?cursor=` is the last id of the page before this one. Absent or unparseable starts at the newest.
-- `X-Next-Cursor` is sent when there is a page below this one, and it is the id to pass as `?cursor=`
-  to get it. Absent means you are at the bottom.
+- `X-Next-Cursor` is sent when the page filled before the ids ran out. It is the id of the last run
+  the walk examined, so the next request carries on where this one stopped; absent means the ids ran
+  out first and there is nothing below.
 
-The body is unchanged: an array of `{id, pipeline, status, created_at, finished_at,
-cancel_requested_at}`, newest first. A client that used to be handed everything is handed the newest
-page, and stops when the header is absent.
+Each object is `{id, pipeline, status, created_at, finished_at, cancel_requested_at, step_counts,
+pipeline_version}`, newest first. `step_counts` is `{total, pending, running, waiting_retry,
+succeeded, failed, skipped, cancelled}`, every key always present, counted from the record's steps.
+`pipeline_version` is the stored version the run started from, and `null` for inline YAML or a record
+written before SPEC 4.9 gained the field. A client that used to be handed everything is handed the
+newest matching page, and stops when the header is absent.
 
 Two things follow from the cursor being an id rather than an offset, and both are the point:
 
@@ -305,12 +337,16 @@ Two things follow from the cursor being an id rather than an offset, and both ar
   against ids and not against positions.
 - A run the server cannot read does not wedge the walk. A directory that is not a run id is not a
   run, and a run whose `run.json` is missing or cannot be parsed is left out of the body, logged, and
-  still moves the cursor along — one bad file is not allowed to be a listing that never answers.
+  still moves the walk along — one bad file is not allowed to be a listing that never answers. A
+  filtered page reads more than its own length when matches are sparse, but never more than it needs
+  to examine the run that fills it.
 
 ## How a run is started, and why it is not waited for
 
 `POST /v1/runs` validates the pipeline, calls `engine.start`, answers 201 with the run as created,
-and drives it in the background. A block can run for six hours; a request cannot. `retry` and
+and drives it in the background. The version it resolves is written to `run.json` as
+`pipeline_version` (SPEC 4.9): a number, an omitted version or `"latest"` all resolve in the store,
+inline `yaml` records `null`, and retry and resume keep what the record holds. A block can run for six hours; a request cannot. `retry` and
 `resume` are given a short grace (`settleMs`, 250 ms) to fail fast or finish: if they do, the answer
 is the run itself, and otherwise it is 202 Accepted with the run as last seen. Poll
 `GET /v1/runs/:id` after that.

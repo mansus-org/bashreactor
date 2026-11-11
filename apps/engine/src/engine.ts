@@ -43,6 +43,11 @@ export interface EngineOptions {
   path?: string;
 }
 
+export interface StartOptions {
+  /** The stored pipeline version this run is starting from; absent for inline YAML. */
+  pipelineVersion?: number | null;
+}
+
 interface RunPlan {
   pipeline: Pipeline;
   blocks: Map<string, Block>;
@@ -126,7 +131,11 @@ export class Engine {
     });
   }
 
-  async start(pipelinePath: string, inputs: Record<string, Value> = {}): Promise<RunRecord> {
+  async start(
+    pipelinePath: string,
+    inputs: Record<string, Value> = {},
+    options: StartOptions = {},
+  ): Promise<RunRecord> {
     this.ensureRuntime();
     const pipelineBytes = readFileSync(pipelinePath);
     const pipelineSource = new TextDecoder("utf-8", { fatal: true }).decode(pipelineBytes);
@@ -189,6 +198,7 @@ export class Engine {
       schema: 1,
       id,
       pipeline: pipeline.name,
+      pipeline_version: options.pipelineVersion ?? null,
       status: "running",
       created_at: nowIso(),
       finished_at: null,
