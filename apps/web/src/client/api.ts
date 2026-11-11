@@ -58,6 +58,17 @@ export interface ValidationReport {
   issues: ValidationIssue[];
 }
 
+export interface StepCounts {
+  total: number;
+  pending: number;
+  running: number;
+  waiting_retry: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+  cancelled: number;
+}
+
 export interface RunSummary {
   id: string;
   pipeline: string;
@@ -65,6 +76,9 @@ export interface RunSummary {
   created_at: string;
   finished_at: string | null;
   cancel_requested_at: string | null;
+  /** Older servers do not send these two; a screen shows an em dash for a field it did not get. */
+  step_counts?: StepCounts;
+  pipeline_version?: number | null;
 }
 
 export interface Attempt {
@@ -118,6 +132,36 @@ export interface Run {
   outputs: Record<string, unknown> | null;
   steps: Record<string, RunStep>;
   claim: RunClaim | null;
+  pipeline_version?: number | null;
+}
+
+export interface RunPage {
+  runs: RunSummary[];
+  /** Where the next page starts, or null when there is nowhere left to go. */
+  next: string | null;
+}
+
+/** `GET /v1/disk`, SPEC 4.11. */
+export interface DiskSpace {
+  path: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  low: boolean;
+  runs_bytes: number;
+}
+
+export interface TokenInfo {
+  id: string;
+  name: string;
+  scope: "read" | "write";
+  created_at: string;
+  last_used: string | null;
+}
+
+/** A created token carries its secret once, and the list never does. */
+export interface CreatedToken extends TokenInfo {
+  token: string;
 }
 
 export interface LogChunk {
@@ -307,8 +351,43 @@ export const api = {
   savePipeline: (name: string, yaml: string) =>
     send("POST", `pipelines/${encodeURIComponent(name)}/versions`, { body: { yaml } }).then(json<PipelineVersion>),
 
+  /** The old list, without filters or paging. Kept until the Runs screen is redesigned. */
   runs: () => send("GET", "runs").then(json<RunSummary[]>),
+  /**
+   * One page of runs, newest first. `next` is the cursor for the page after this one, read off the
+   * `X-Next-Cursor` header; a server that sent none has no next page.
+   */
+  listRuns: async (filters: {
+    limit?: number;
+    cursor?: string;
+    pipeline?: string;
+    status?: string[];
+    since?: string;
+  } = {}): Promise<RunPage> => {
+    const response = await send("GET", "runs", {
+      query: {
+        limit: filters.limit,
+        cursor: filters.cursor,
+        pipeline: filters.pipeline,
+        status: filters.status !== undefined && filters.status.length > 0 ? filters.status.join(",") : undefined,
+        since: filters.since,
+      },
+    });
+    if (!response.ok) throw await errorOf(response);
+    return {
+      runs: (await response.json()) as RunSummary[],
+      next: response.headers.get("x-next-cursor"),
+    };
+  },
   run: (id: string) => send("GET", `runs/${encodeURIComponent(id)}`).then(json<Run>),
+  deleteRun: (id: string) =>
+    send("DELETE", `runs/${encodeURIComponent(id)}`).then(json<{ deleted: string }>),
+  /** The text of one file of a run, for reading the pipeline and block snapshots back out. */
+  runFileText: async (id: string, path: string): Promise<string> => {
+    const response = await send("GET", `runs/${encodeURIComponent(id)}/file`, { query: { path } });
+    if (!response.ok) throw await errorOf(response);
+    return response.text();
+  },
   startRun: (body: { pipeline?: string; version?: number; yaml?: string; inputs?: Record<string, unknown> }) =>
     send("POST", "runs", { body }).then(json<Run>),
   cancelRun: (id: string) => send("POST", `runs/${encodeURIComponent(id)}/cancel`).then(json<Run>),
@@ -321,6 +400,13 @@ export const api = {
 
   runFiles: (id: string, query: Record<string, string | number | undefined> = {}) =>
     send("GET", `runs/${encodeURIComponent(id)}/files`, { query }).then(json<RunFiles>),
+
+  disk: () => send("GET", "disk").then(json<DiskSpace>),
+  tokens: () => send("GET", "tokens").then(json<TokenInfo[]>),
+  createToken: (name: string, scope: "read" | "write") =>
+    send("POST", "tokens", { body: { name, scope } }).then(json<CreatedToken>),
+  revokeToken: (id: string) =>
+    send("DELETE", `tokens/${encodeURIComponent(id)}`).then(json<{ deleted: string }>),
 
   /** The address of one file of a run, as the API spells it. */
   runFileUrl: (id: string, path: string) => url(`runs/${encodeURIComponent(id)}/file`, { path }),
