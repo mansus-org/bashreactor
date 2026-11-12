@@ -146,6 +146,7 @@ describe("runsTable", () => {
     expect(body.children[0]!.querySelector(".stamp")!.textContent).toContain("failed");
     expect(firstRow.querySelector(".stamp")!.textContent).toContain("running");
     expect(firstRow.querySelector(".table__link--id")!.textContent).toBe("b");
+    expect(firstRow.querySelector(".table__link--name")!.textContent).toBe("word-report");
   });
 
   test("shows an em dash for a field an older server did not send", () => {

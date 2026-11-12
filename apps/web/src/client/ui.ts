@@ -598,7 +598,7 @@ export function runsTable(options: RunsTableOptions = {}): { node: HTMLElement; 
   function makeRow(run: RunSummary): RunRow {
     const stamp = el("span", { class: "stamp stamp--status" });
     const runLink = el("a", { class: "table__link table__link--id", href: `/app/runs/${run.id}`, "data-link": "" }, run.id);
-    const pipelineLink = el("a", { href: `/app/pipelines/${run.pipeline}`, "data-link": "" }, run.pipeline);
+    const pipelineLink = el("a", { class: "table__link--name", href: `/app/pipelines/${run.pipeline}`, "data-link": "" }, run.pipeline);
     const version = el("span", { class: "mono" });
     const started = el("time");
     const duration = el("span", { class: "num" });
