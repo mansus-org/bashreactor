@@ -5,6 +5,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildAssets } from "../assets.ts";
 import { installDom, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 
 const dom = installDom({ href: "http://x/app/runs" });
@@ -226,6 +227,13 @@ describe("barChart", () => {
 });
 
 describe("table", () => {
+  test("every table stacks below 640 px, and not a screen's copy of one", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/@media \(max-width: 640px\) \{\s*\.table \{[^}]*table-layout: auto;/);
+    expect(sheet).toContain(".table tbody td::before, .table tbody th::before { content: attr(data-label)");
+    expect(sheet).not.toMatch(/\.(runs-list__body|blocks-list|block-page|pipeline-runs-table) \.table thead/);
+  });
+
   test("an empty table is a sentence and one action", () => {
     const node = ui.table([{ header: "Name", cell: (row: string) => row }], [], {
       empty: "No blocks in the library yet.",

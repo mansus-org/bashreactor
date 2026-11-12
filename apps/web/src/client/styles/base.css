@@ -283,6 +283,30 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .runstable .stamp { vertical-align: middle; }
 .runstable time { white-space: nowrap; }
 
+/* A table is the same table on a phone as on a laptop: one block per row, its first cell on top,
+   then a label and value line for every other cell. */
+@media (max-width: 640px) {
+  .table { table-layout: auto; }
+  .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table, .table tbody, .table tr, .table th, .table td { display: block; width: 100%; }
+  .table tbody tr { padding: var(--s2) 0; border-bottom: var(--rule-dotted); }
+  .table tbody tr:last-child { border-bottom: 0; }
+  .table tbody td, .table tbody th {
+    display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--s2);
+    height: auto; padding: 2px 0; border: 0; text-align: left;
+  }
+  .table tbody td::before, .table tbody th::before { content: attr(data-label); font-weight: 700; }
+  .table tbody td:first-child, .table tbody th:first-child { display: block; padding-bottom: var(--s1); }
+  .table tbody td:first-child::before, .table tbody th:first-child::before { content: none; }
+  .table .num { text-align: left; }
+  .table tbody tr.table__empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+  .table tbody tr.table__empty td {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3);
+    padding: var(--s4) 0;
+  }
+  .table tbody tr.table__empty td::before { content: none; }
+}
+
 /* ---------- run history ---------- */
 
 .history-strip { display: flex; align-items: center; gap: 2px; margin: 0; padding: 0; list-style: none; }
