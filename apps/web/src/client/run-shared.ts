@@ -52,13 +52,7 @@ export function whenShown(signal: AbortSignal, again: () => void): void {
     if (!document.hidden && !signal.aborted) again();
   };
   document.addEventListener("visibilitychange", onVisibility);
-  signal.addEventListener("abort", () => {
-    // The client stand-in DOM used by the sign-in tests has no removeEventListener, and a screen
-    // reached from that test must still abort cleanly; a browser always has the method.
-    if (typeof document.removeEventListener === "function") {
-      document.removeEventListener("visibilitychange", onVisibility);
-    }
-  });
+  signal.addEventListener("abort", () => document.removeEventListener("visibilitychange", onVisibility));
 }
 /** Bytes the way a person reads them, because a run that ingested URLs has gigabytes in it. */
 export function bytes(count: number): string {

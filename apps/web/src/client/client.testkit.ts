@@ -178,6 +178,10 @@ export class FakeElement {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler]);
   }
 
+  removeEventListener(type: string, handler: (event: unknown) => void): void {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((entry) => entry !== handler));
+  }
+
   /** What the browser does when a person types, ticks or submits: run the handlers wired for it. */
   fire(type: string, event: Record<string, unknown> = {}): void {
     for (const handler of this.listeners.get(type) ?? []) handler({ target: this, preventDefault(): void {}, ...event });
@@ -308,7 +312,21 @@ export class FakeDocument {
     return this.body.querySelectorAll(selector);
   }
 
-  addEventListener(): void {}
+  private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+  addEventListener(type: string, handler: (event: unknown) => void): void {
+    const handlers = this.listeners.get(type) ?? new Set();
+    handlers.add(handler);
+    this.listeners.set(type, handlers);
+  }
+
+  removeEventListener(type: string, handler: (event: unknown) => void): void {
+    this.listeners.get(type)?.delete(handler);
+  }
+
+  listenerCount(type: string): number {
+    return this.listeners.get(type)?.size ?? 0;
+  }
 }
 
 class FakeStorage {

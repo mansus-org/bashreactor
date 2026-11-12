@@ -23,6 +23,7 @@ const served = serveModules(["app"]);
 // so nothing here may import these two statically.
 const { session, signIn, signOut } = (await import(join(served, "api.js"))) as typeof import("./api.ts");
 const { navigate } = (await import(join(served, "app.js"))) as typeof import("./app.ts");
+const { whenShown } = (await import(join(served, "run-shared.js"))) as typeof import("./run-shared.ts");
 
 const BASE = "http://127.0.0.1:5949";
 const GOOD = "brv_a_token_that_is_perfectly_fine";
@@ -214,6 +215,17 @@ describe("the gate, when the server gives an answer of each kind", () => {
     expect(text(view())).toContain("This token was revoked.");
     expect(text(view())).toContain("no longer accepted");
     expect(dom.document.querySelector(".nav")!.getAttribute("hidden")).toBe("");
+  });
+});
+
+describe("the stand-in browser", () => {
+  test("removes a visibility listener when the view aborts", () => {
+    const controller = new AbortController();
+    const before = dom.document.listenerCount("visibilitychange");
+    whenShown(controller.signal, () => {});
+    expect(dom.document.listenerCount("visibilitychange")).toBe(before + 1);
+    controller.abort();
+    expect(dom.document.listenerCount("visibilitychange")).toBe(before);
   });
 });
 
