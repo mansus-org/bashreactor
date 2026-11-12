@@ -363,6 +363,8 @@ export interface InstalledDom {
   document: FakeDocument;
   /** The browser globals this put in place, so a test can put them back. */
   names: string[];
+  /** What each name held before it was borrowed, including whether it existed at all. */
+  previous: Map<string, { had: boolean; value: unknown }>;
 }
 
 /**
@@ -389,8 +391,10 @@ export function installDom(options: { href?: string } = {}): InstalledDom {
   }
 
   const names: string[] = [];
+  const previous = new Map<string, { had: boolean; value: unknown }>();
   const install = (name: string, value: unknown): void => {
     names.push(name);
+    previous.set(name, { had: Object.prototype.hasOwnProperty.call(globals, name), value: globals[name] });
     globals[name] = value;
   };
 
@@ -409,13 +413,17 @@ export function installDom(options: { href?: string } = {}): InstalledDom {
   install("CSS", { escape: escapeSelector });
   install("ResizeObserver", FakeResizeObserver);
 
-  return { document: doc, names };
+  return { document: doc, names, previous };
 }
 
-/** Puts the globals installDom() took back the way they were. */
+/** Puts the globals installDom() borrowed back exactly as they were. */
 export function uninstallDom(installed: InstalledDom): void {
   const globals = globalThis as unknown as Record<string, unknown>;
-  for (const name of installed.names) delete globals[name];
+  for (const name of installed.names) {
+    const before = installed.previous.get(name);
+    if (before?.had === true) globals[name] = before.value;
+    else delete globals[name];
+  }
 }
 
 /**

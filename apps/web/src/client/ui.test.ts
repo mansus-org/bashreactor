@@ -351,6 +351,17 @@ describe("codeView", () => {
   });
 });
 
+describe("the test kit", () => {
+  test("puts back the globals a file borrowed, rather than deleting someone else's", () => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const before = globals.localStorage;
+    const nested = installDom({ href: "http://x/nested" });
+    globals.localStorage = { borrowed: true };
+    uninstallDom(nested);
+    expect(globals.localStorage).toBe(before);
+  });
+});
+
 afterAll(() => {
   uninstallDom(dom);
   rmSync(served, { recursive: true, force: true });
