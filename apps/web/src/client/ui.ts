@@ -782,10 +782,10 @@ export function confirmDialog(options: { title: string; text?: string; confirmLa
       if (settled) return;
       settled = true;
       resolve(answer);
-      if (dialog.open) dialog.close(answer ? "confirm" : "cancel");
-      removeNode(dialog);
+      if (modal.open) modal.close(answer ? "confirm" : "cancel");
+      removeNode(modal);
     };
-    const dialog = el(
+    const modal = el(
       "dialog",
       { class: "dialog" },
       el(
@@ -801,9 +801,9 @@ export function confirmDialog(options: { title: string; text?: string; confirmLa
         ),
       ),
     );
-    dialog.addEventListener("close", () => finish(dialog.returnValue === "confirm"));
-    document.body.append(dialog);
-    dialog.showModal();
+    modal.addEventListener("close", () => finish(modal.returnValue === "confirm"));
+    document.body.append(modal);
+    modal.showModal();
   });
 }
 
@@ -1063,17 +1063,17 @@ export function barChart(options: BarChartOptions): HTMLElement {
         if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
         const segmentHeight = (Math.max(0, segment.value) / max) * plotHeight;
         baseline -= segmentHeight;
-        const fill = segmentFill(segment.status);
+        const tone = segmentFill(segment.status);
         group.append(
           svg("rect", {
             x,
             y: baseline,
             width: barWidth,
             height: segmentHeight,
-            fill: fill.fill,
-            stroke: fill.stroke ?? "none",
-            "stroke-width": fill.stroke === null ? 0 : 1,
-            ...(fill.dash === null ? {} : { "stroke-dasharray": fill.dash }),
+            fill: tone.fill,
+            stroke: tone.stroke ?? "none",
+            "stroke-width": tone.stroke === null ? 0 : 1,
+            ...(tone.dash === null ? {} : { "stroke-dasharray": tone.dash }),
           }),
         );
       }
