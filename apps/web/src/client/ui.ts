@@ -795,6 +795,65 @@ export function confirmDialog(options: { title: string; text?: string; confirmLa
   });
 }
 
+let dialogCount = 0;
+
+export interface DialogOptions {
+  title: Child;
+  body?: Child;
+  /** Called once, however the dialog was closed. */
+  onClose?: () => void;
+  /** Return false to keep Escape from taking the dialog away while it is busy. */
+  canDismiss?: () => boolean;
+}
+
+export interface DialogHandle {
+  node: HTMLDialogElement;
+  body: HTMLElement;
+  title: HTMLElement;
+  setTitle(title: Child): void;
+  setBody(...children: Child[]): void;
+  close(): void;
+}
+
+/**
+ * A modal dialog with a title and a body the caller can replace, for a screen whose dialog has more
+ * than one face. It is appended and opened at once; `close` removes it and calls `onClose` exactly
+ * once, whether it was closed from a button or with Escape.
+ */
+export function dialog(options: DialogOptions): DialogHandle {
+  const id = `dialog-title-${++dialogCount}`;
+  const title = el("h2", { class: "dialog__title", id }, options.title);
+  const body = el("div", { class: "dialog__body" }, title, options.body ?? null);
+  const node = el("dialog", { class: "dialog", "aria-labelledby": id }, body);
+  let closed = false;
+  const finish = (): void => {
+    if (closed) return;
+    closed = true;
+    if (node.open) node.close();
+    removeNode(node);
+    options.onClose?.();
+  };
+  node.addEventListener("close", finish);
+  node.addEventListener("cancel", (event) => {
+    if (options.canDismiss?.() === false) event.preventDefault();
+  });
+  const handle: DialogHandle = {
+    node,
+    body,
+    title,
+    setTitle(next) {
+      title.replaceChildren(next);
+    },
+    setBody(...children) {
+      body.replaceChildren(title, ...children);
+    },
+    close: finish,
+  };
+  document.body.append(node);
+  node.showModal();
+  return handle;
+}
+
 /** One 15 px sentence and, at most, one action. */
 export function emptyState(text: string, action?: Child): HTMLElement {
   return el("section", { class: "empty-state" }, el("p", {}, text), action ?? null);

@@ -4,12 +4,13 @@
 
 import { api, ApiError, session, signOut } from "./api.js";
 import type { CreatedToken, DiskSpace, Health, Identity, TokenInfo } from "./api.js";
-import { announce, el, errorBox, removeNode } from "./dom.js";
+import { announce, el, errorBox } from "./dom.js";
 import type { Child } from "./dom.js";
 import {
   alarm,
   button,
   confirmDialog,
+  dialog,
   exactTime,
   formatBytes,
   meter,
@@ -136,7 +137,6 @@ function withoutSecret(token: CreatedToken): TokenInfo {
   };
 }
 
-// BASHR-62: candidate for ui.ts — ui.ts has the confirmation dialog but no general Dialog component.
 /**
  * The new-token dialog. It has two faces — the form, then the one answer that carries the secret — and
  * closing either of them forgets the secret: it is never in a screen variable after the dialog is
@@ -145,24 +145,18 @@ function withoutSecret(token: CreatedToken): TokenInfo {
 function openNewToken(options: { onCreated: (token: CreatedToken) => void }): void {
   let scope: "read" | "write" = "read";
   let secretBox: HTMLInputElement | null = null;
-  let disposed = false;
   let busy = false;
-  const dialog = el("dialog", { class: "dialog", "aria-labelledby": "settings-token-title" });
-
-  const dispose = (): void => {
-    if (disposed) return;
-    disposed = true;
-    if (secretBox !== null) secretBox.value = "";
-    secretBox = null;
-    if (dialog.open) dialog.close();
-    removeNode(dialog);
-  };
-  dialog.addEventListener("close", dispose);
-  // Escape is a close too, and it must not take the dialog away before the server's answer — which is
-  // the only time the secret is shown — has had a chance to land.
-  dialog.addEventListener("cancel", (event) => {
-    if (busy) event.preventDefault();
+  const tokenDialog = dialog({
+    title: "New token",
+    // Escape must not take the dialog away before the server's answer — which is the only time the
+    // secret is shown — has had a chance to land.
+    canDismiss: () => !busy,
+    onClose: () => {
+      if (secretBox !== null) secretBox.value = "";
+      secretBox = null;
+    },
   });
+  const dispose = (): void => tokenDialog.close();
 
   const name = el("input", {
     id: "settings-token-name",
@@ -200,23 +194,19 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
       class: "settings__secret",
       value: created.token,
     });
-    dialog.replaceChildren(
+    tokenDialog.setTitle("Token created");
+    tokenDialog.setBody(
       el(
         "div",
-        { class: "dialog__body" },
-        el("h2", { class: "dialog__title", id: "settings-token-title" }, "Token created"),
-        el(
-          "div",
-          { class: "field" },
-          el("label", { class: "label", for: "settings-token-secret" }, "Token"),
-          el("div", { class: "row" }, secretBox, button("Copy", { onClick: () => void copy(created.token) })),
-        ),
-        el("p", { class: "dialog__help" }, "This is the only time it is shown."),
-        el(
-          "div",
-          { class: "dialog__actions" },
-          button("Close", { onClick: dispose }),
-        ),
+        { class: "field" },
+        el("label", { class: "label", for: "settings-token-secret" }, "Token"),
+        el("div", { class: "row" }, secretBox, button("Copy", { onClick: () => void copy(created.token) })),
+      ),
+      el("p", { class: "dialog__help" }, "This is the only time it is shown."),
+      el(
+        "div",
+        { class: "dialog__actions" },
+        button("Close", { onClick: dispose }),
       ),
     );
     secretBox.focus();
@@ -277,16 +267,7 @@ function openNewToken(options: { onCreated: (token: CreatedToken) => void }): vo
     ),
   );
 
-  dialog.replaceChildren(
-    el(
-      "div",
-      { class: "dialog__body" },
-      el("h2", { class: "dialog__title", id: "settings-token-title" }, "New token"),
-      form,
-    ),
-  );
-  document.body.append(dialog);
-  dialog.showModal();
+  tokenDialog.setBody(form);
   name.focus();
 }
 

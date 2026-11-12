@@ -190,6 +190,48 @@ describe("tabs and segmented controls", () => {
   });
 });
 
+describe("dialog", () => {
+  test("shows a title and a body, replaces both, and closes once", () => {
+    let closed = 0;
+    const handle = ui.dialog({ title: "First", body: "the first body", onClose: () => void (closed += 1) });
+    expect(fake(document.body.querySelector("dialog")!)).toBe(handle.node);
+    expect(handle.title.textContent).toBe("First");
+    expect(handle.body.textContent).toContain("the first body");
+
+    handle.setTitle("Second");
+    handle.setBody("the second body");
+    expect(handle.body.textContent).toContain("Second");
+    expect(handle.body.textContent).toContain("the second body");
+    expect(handle.body.textContent).not.toContain("the first body");
+
+    handle.close();
+    expect(document.body.querySelector("dialog")).toBeNull();
+    handle.close();
+    expect(closed).toBe(1);
+  });
+
+  test("Escape cannot take a busy dialog away", () => {
+    let busy = true;
+    let prevented = false;
+    const handle = ui.dialog({ title: "Busy", canDismiss: () => !busy });
+    fake(handle.node).fire("cancel", {
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(true);
+    busy = false;
+    prevented = false;
+    fake(handle.node).fire("cancel", {
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(false);
+    handle.close();
+  });
+});
+
 describe("barChart", () => {
   test("one group with a title per bar, stacked from the baseline, with a hidden table", () => {
     const chart = ui.barChart({
