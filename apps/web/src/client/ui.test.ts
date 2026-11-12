@@ -223,7 +223,8 @@ describe("barChart", () => {
     expect(hidden.textContent).toContain("5 Nov, 20:00");
     expect(hidden.textContent).toContain("1");
     expect(hidden.textContent).toContain("2");
-    expect(chart.querySelectorAll(".chart__legend-entry").length).toBe(2);
+    const legend = chart.querySelectorAll(".chart__legend-entry").map((node) => node.textContent.trim());
+    expect(legend).toEqual(["succeeded", "running", "failed", "cancelled"]);
   });
 });
 

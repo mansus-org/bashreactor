@@ -890,6 +890,8 @@ function segmentFill(status: string): { fill: string; stroke: string | null; das
 }
 
 const CHART_TONES = ["succeeded", "running", "failed", "cancelled", "interrupted", "waiting_retry"];
+/** The four states a run can be in, whether or not this window has one in it. */
+const CHART_LEGEND = ["succeeded", "running", "failed", "cancelled"] as const;
 
 /**
  * Inline SVG bars, stacked from the baseline in the order each bar's segments are given. Each bar is a
@@ -993,7 +995,7 @@ export function barChart(options: BarChartOptions): HTMLElement {
       : el(
           "figcaption",
           { class: "chart__legend" },
-          ...present.map((status) =>
+          ...CHART_LEGEND.map((status) =>
             el(
               "span",
               { class: `chart__legend-entry chart__legend-entry--${status}` },
