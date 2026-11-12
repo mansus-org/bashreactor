@@ -8,6 +8,7 @@
 import { api, ApiError, canWrite } from "./api.js";
 import type { LibraryName, ValidationIssue } from "./api.js";
 import { announce, el, errorBox, isoInstant, when } from "./dom.js";
+import type { Child } from "./dom.js";
 import { button, statusStamp, typeStamp } from "./ui.js";
 import { INTEGER, blankOf, openStartRun, parseTyped, writable } from "./start-run.js";
 import { createGraph } from "./graph.js";

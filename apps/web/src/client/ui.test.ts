@@ -120,7 +120,7 @@ describe("pageHeader", () => {
 
 describe("runsTable", () => {
   test("inserts in order, patches in place and flashes only the row that changed", () => {
-    const table = ui.runsTable({ columns: ["status", "run", "version", "steps"] });
+    const table = ui.runsTable({ columns: ["status", "run", "pipeline", "version", "steps"] });
     table.update([run("b", "succeeded")]);
     const body = fake(table.node.querySelector(".table tbody")!);
     const firstRow = body.children[0]!;
@@ -214,7 +214,7 @@ describe("dialog", () => {
   test("shows a title and a body, replaces both, and closes once", () => {
     let closed = 0;
     const handle = ui.dialog({ title: "First", body: "the first body", onClose: () => void (closed += 1) });
-    expect(fake(document.body.querySelector("dialog")!)).toBe(handle.node);
+    expect(document.body.querySelector("dialog")).toBe(handle.node);
     expect(handle.title.textContent).toBe("First");
     expect(handle.body.textContent).toContain("the first body");
 
@@ -285,7 +285,7 @@ describe("barChart", () => {
     expect(hidden.textContent).toContain("5 Nov, 20:00");
     expect(hidden.textContent).toContain("1");
     expect(hidden.textContent).toContain("2");
-    const legend = chart.querySelectorAll(".chart__legend-entry").map((node) => node.textContent.trim());
+    const legend = [...chart.querySelectorAll(".chart__legend-entry")].map((node) => node.textContent.trim());
     expect(legend).toEqual(["succeeded", "running", "failed", "cancelled"]);
   });
 });
@@ -329,7 +329,7 @@ describe("table", () => {
     const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
     expect(sheet).toMatch(/\.table__link--name \{[^}]*font-family: var\(--font-text\);[^}]*font-weight: 700;/);
     expect(sheet).toMatch(/\.table__link--id \{[^}]*font-family: var\(--font-code\);/);
-    expect(sheet).toMatch(/\.table__row--link:hover \.table__link, \.table__link:hover \{[^}]*text-decoration: underline;/);
+    expect(sheet).toMatch(/\.table__link--id:hover \{[^}]*text-decoration: underline;/);
     expect(sheet).not.toContain(".pipelines-name");
   });
 

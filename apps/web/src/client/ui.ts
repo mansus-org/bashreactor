@@ -2,7 +2,7 @@
 // a second version of one. The doc comment on each export is the whole of the contract another screen
 // needs: what it is for and how it is called.
 
-import { clearAttribute, el, errorBox, flash, insertNode, removeNode, restamp, sign } from "./dom.js";
+import { clearAttribute, el, errorBox, fill, flash, insertNode, removeNode, restamp, sign } from "./dom.js";
 import type { Child } from "./dom.js";
 import { state as stateOf } from "./run-shared.js";
 import type { RunSummary } from "./api.js";
@@ -854,10 +854,10 @@ export function dialog(options: DialogOptions): DialogHandle {
     body,
     title,
     setTitle(next) {
-      title.replaceChildren(next);
+      fill(title, [next]);
     },
     setBody(...children) {
-      body.replaceChildren(title, ...children);
+      fill(body, [title, ...children]);
     },
     close: finish,
   };
