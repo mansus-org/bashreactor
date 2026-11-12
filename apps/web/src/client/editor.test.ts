@@ -9,6 +9,7 @@
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildAssets } from "../assets.ts";
 import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Route } from "./app.ts";
 
@@ -410,6 +411,21 @@ describe("the workbench", () => {
     expect(view.querySelector(".editor__inspector")).not.toBeNull();
     expect(view.querySelector(".editor__problems")).not.toBeNull();
     expect(view.querySelector(".editor .legend")!.textContent).toContain("wired");
+  });
+
+  test("the inspector folds to its header, so the graph gets the column's spare height", async () => {
+    const view = await open(PINNED);
+    const body = view.querySelector(".editor__inspector-body")!;
+    expect(body.hidden).toBe(true);
+    const expand = button(view, "Expand")!;
+    expect(expand).toBeDefined();
+    expand.fire("click");
+    expect(body.hidden).toBe(false);
+    expect(button(view, "Collapse")!.textContent).toBe("Collapse");
+
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/\.editor__right \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;/);
+    expect(sheet).toMatch(/\.editor__inspector \{[^}]*max-height: 45%;/);
   });
 
   test("the open-by-name box and the New pipeline button are gone; Add step and Undo stay", async () => {

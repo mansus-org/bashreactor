@@ -780,20 +780,51 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     );
   }
 
+  let inspectorOpen = false;
+
+  /**
+   * The inspector's frame: a header that stays, and a body the reader opens. The graph owns the rest
+   * of the column, which is what makes it readable at a laptop's height.
+   */
+  function inspectorFrame(title: string, actions: Child[], body: Child[], foldable = false): void {
+    const bodyNode = el("div", { class: "editor__inspector-body" }, body);
+    bodyNode.hidden = foldable && !inspectorOpen;
+    let toggle: HTMLElement | null = null;
+    if (foldable) {
+      toggle = button(inspectorOpen ? "Collapse" : "Expand", {
+        ariaLabel: inspectorOpen ? "Collapse the step inspector" : "Expand the step inspector",
+        onClick: () => {
+          inspectorOpen = !inspectorOpen;
+          bodyNode.hidden = !inspectorOpen;
+          toggle!.textContent = inspectorOpen ? "Collapse" : "Expand";
+          toggle!.setAttribute("aria-expanded", String(inspectorOpen));
+        },
+      });
+      toggle.setAttribute("aria-expanded", String(inspectorOpen));
+    }
+    inspector.replaceChildren(
+      el(
+        "div",
+        { class: "bar" },
+        el("h2", { class: "h2", id: "inspector-title" }, title),
+        el("div", { class: "row" }, ...actions, toggle),
+      ),
+      bodyNode,
+    );
+  }
+
   function renderInspector(): void {
     if (!analysis.ok) {
-      inspector.replaceChildren(
-        el("h2", { class: "h2", id: "inspector-title" }, "Step"),
+      inspectorFrame("Step", [], [
         el("p", { class: "help" }, `Fix line ${analysis.error.line} in the YAML to edit steps here again.`),
-      );
+      ]);
       return;
     }
     const step = selected !== null ? (analysis.byId[selected] ?? null) : null;
     if (step === null) {
-      inspector.replaceChildren(
-        el("h2", { class: "h2", id: "inspector-title" }, "Step"),
+      inspectorFrame("Step", [], [
         el("p", { class: "help" }, "Add a step and its block, timeout, retries and wiring can be edited here."),
-      );
+      ]);
       return;
     }
 
@@ -818,38 +849,33 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const others = analysis.steps.filter((other) => other.id !== step.id);
     const fedBy = new Set(analysis.edges.filter((edge) => edge.to === step.id && edge.kind === "data").map((edge) => edge.from));
 
-    inspector.replaceChildren(
-      el(
-        "div",
-        { class: "bar" },
-        el("h2", { class: "h2", id: "inspector-title" }, step.id),
+    inspectorFrame(
+      step.id,
+      [
+        el("button", { class: "btn", type: "button", onclick: () => placeCaret(step.range.start) }, "Edit in YAML"),
+        step.blockName !== null ? el("a", { class: "btn", href: `/app/blocks/${step.blockName}`, "data-link": "" }, "Open block") : null,
         el(
-          "div",
-          { class: "row" },
-          el("button", { class: "btn", type: "button", onclick: () => placeCaret(step.range.start) }, "Edit in YAML"),
-          step.blockName !== null ? el("a", { class: "btn", href: `/app/blocks/${step.blockName}`, "data-link": "" }, "Open block") : null,
-          el(
-            "button",
-            {
-              class: "btn",
-              type: "button",
-              disabled: readOnly(),
-              onclick: () => {
-                edit(removeStep(text, analysis as Analysis, step.id), null, null);
-                announce(`Step ${step.id} removed. Undo brings it back.`);
-                addButton.focus();
-              },
+          "button",
+          {
+            class: "btn",
+            type: "button",
+            disabled: readOnly(),
+            onclick: () => {
+              edit(removeStep(text, analysis as Analysis, step.id), null, null);
+              announce(`Step ${step.id} removed. Undo brings it back.`);
+              addButton.focus();
             },
-            "Remove step",
-          ),
+          },
+          "Remove step",
         ),
-      ),
-      el(
-        "div",
-        { class: "inspector__body" },
+      ],
+      [
         el(
           "div",
-          { class: "grid2" },
+          { class: "inspector__body" },
+          el(
+            "div",
+            { class: "grid2" },
           textField({
             id: "f-name",
             label: "Name",
@@ -927,7 +953,9 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
               ),
             )
           : null,
-      ),
+        ),
+      ],
+      true,
     );
     if (active !== null) document.getElementById(active)?.focus();
   }

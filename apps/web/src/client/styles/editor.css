@@ -35,12 +35,14 @@
 .editor__left { grid-area: left; display: flex; flex-direction: column; gap: var(--s2); min-height: 0; }
 .editor__right {
   grid-area: right;
-  display: grid; grid-template-rows: minmax(0, 55fr) minmax(0, 45fr); gap: var(--s4);
+  display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: var(--s4);
   min-height: 0;
 }
 .editor__yaml { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
 .editor__graph { display: flex; flex-direction: column; min-height: 0; }
-.editor__inspector { min-height: 0; overflow: auto; padding: var(--s3); border: var(--rule); }
+.editor__inspector { min-height: 0; max-height: 45%; overflow: auto; padding: var(--s3); border: var(--rule); }
+.editor__inspector-body { min-height: 0; }
+.editor__inspector-body[hidden] { display: none; }
 .editor .editor__yaml .bar, .editor .editor__graph .bar { margin-bottom: var(--s2); }
 
 /* ---------- the graph, shared by every screen that draws one ---------- */
@@ -197,7 +199,7 @@
   .editor__graph { order: 1; height: auto; }
   .editor .stage { flex: none; min-height: 320px; }
   .editor__yaml { order: 2; height: max(420px, 70dvh); }
-  .editor__inspector { order: 3; }
+  .editor__inspector { order: 3; max-height: none; }
   .editor__problems { order: 4; max-height: none; }
 }
 
