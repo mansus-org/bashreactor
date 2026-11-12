@@ -444,6 +444,7 @@ describe("the workbench", () => {
     const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
     expect(sheet).toMatch(/\.editor__panes \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
     expect(sheet).toMatch(/\.editor__right \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;/);
+    expect(sheet).toMatch(/\.editor--inspector-open \.editor__right \{[^}]*grid-template-rows: minmax\(0, 55fr\) minmax\(0, 45fr\);/);
     expect(sheet).toMatch(/\.editor__inspector \{[^}]*max-height: 45%;/);
   });
 

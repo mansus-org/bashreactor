@@ -340,6 +340,13 @@ suite("the graph at desktop width", () => {
     async () => {
       const { page, watch: pageWatch } = await screen(DESKTOP, "/app/pipelines/shout-report/edit");
       await waitFor(page, ".node");
+      const open = await page.evaluate(() => {
+        const stage = document.querySelector(".stage")!.getBoundingClientRect();
+        const body = document.querySelector(".editor__inspector-body") as HTMLElement;
+        return { stageHeight: stage.height, bodyHidden: body.hidden };
+      });
+      expect(open.bodyHidden).toBe(false);
+      expect(open.stageHeight).toBeGreaterThan(200);
       await press(page, "Collapse");
       await page.waitForFunction(() => document.querySelector(".editor__inspector-body")?.hasAttribute("hidden") === true);
       const facts = await page.evaluate(() => {

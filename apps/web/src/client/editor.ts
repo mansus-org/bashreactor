@@ -303,6 +303,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     ),
   );
 
+  const editor = view.querySelector<HTMLElement>(".editor");
+
   /** The route's name, kept apart from `openName` because a failed open still names its pipeline. */
   let routeName: string | null = null;
 
@@ -799,6 +801,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         onClick: () => {
           inspectorOpen = !inspectorOpen;
           inspectorCollapsed = !inspectorOpen;
+          editor?.classList.toggle("editor--inspector-open", inspectorOpen);
           bodyNode.hidden = !inspectorOpen;
           toggle!.textContent = inspectorOpen ? "Collapse" : "Expand";
           toggle!.setAttribute("aria-expanded", String(inspectorOpen));
@@ -824,6 +827,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       lastInspectorStep = stepId;
       inspectorOpen = stepId !== null && !inspectorCollapsed;
     }
+    editor?.classList.toggle("editor--inspector-open", inspectorOpen);
     if (!analysis.ok) {
       inspectorFrame("Step", [], [
         el("p", { class: "help" }, `Fix line ${analysis.error.line} in the YAML to edit steps here again.`),

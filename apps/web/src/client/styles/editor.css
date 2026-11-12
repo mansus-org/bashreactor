@@ -42,6 +42,8 @@
 .editor__yaml { display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
 .editor__graph { display: flex; flex-direction: column; min-height: 0; }
 .editor__inspector { min-height: 0; max-height: 45%; overflow: auto; padding: var(--s3); border: var(--rule); }
+.editor--inspector-open .editor__right { grid-template-rows: minmax(0, 55fr) minmax(0, 45fr); }
+.editor--inspector-open .editor__inspector { max-height: none; }
 .editor__inspector-body { min-height: 0; }
 .editor__inspector-body[hidden] { display: none; }
 .editor .editor__yaml .bar, .editor .editor__graph .bar { margin-bottom: var(--s2); }
