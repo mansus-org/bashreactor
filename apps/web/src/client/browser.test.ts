@@ -385,6 +385,36 @@ suite("the graph at desktop width", () => {
   );
 });
 
+suite("the dashboard's run tables at three widths", () => {
+  test(
+    "they stack where they do not fit, and sit side by side only where they do",
+    async () => {
+      for (const width of [1280, 1440, 1920]) {
+        const { page, watch: pageWatch } = await screen({ name: `dashboard-${width}`, width, height: 900 });
+        await waitFor(page, ".dash-pair");
+        const facts = await page.evaluate(() => {
+          const pair = document.querySelector(".dash-pair") as HTMLElement;
+          const wraps = [...document.querySelectorAll<HTMLElement>(".dash-panel .table-wrap")];
+          return {
+            columns: getComputedStyle(pair).gridTemplateColumns.trim().split(/\s+/).length,
+            clipped: wraps.some((wrap) => wrap.scrollWidth > wrap.clientWidth + 1),
+            steps: [...document.querySelectorAll<HTMLElement>(".dash-panel .runstable .num")].every(
+              (cell) => getComputedStyle(cell).whiteSpace === "nowrap",
+            ),
+          };
+        });
+        expect(facts.clipped).toBe(false);
+        expect(facts.steps).toBe(true);
+        if (width >= 1700) expect(facts.columns).toBe(2);
+        else expect(facts.columns).toBe(1);
+        expect(pageWatch.problems()).toEqual([]);
+        await page.close();
+      }
+    },
+    120_000,
+  );
+});
+
 suite("what a stylesheet is for", () => {
   test(
     "a long unbroken description does not widen the page",

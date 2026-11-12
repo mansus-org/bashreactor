@@ -109,7 +109,7 @@ Breakpoints, the same everywhere:
 
 - **640 px:** below it, tables stack into one block per row, and columns become `label value` lines.
 - **940 px:** below it, the sidebar becomes a top bar with a Menu button.
-- **1100 px:** above it, paired sections such as the dashboard's two tables sit side by side.
+- **1100 px:** above it, paired sections such as the editor's YAML and graph sit side by side. The dashboard's two run tables need their whole width, so they wait until 1700 px.
 
 ### Status tones
 
@@ -302,7 +302,7 @@ What is happening, and what needs you.
   - Bars are stacked from the baseline up: failed, cancelled, running, succeeded.
   - It is 160 px tall and as wide as the main area, with a legend under it.
   - An empty bucket has no bar, and the axis says so.
-- **Running now** and **Failed:** two runs tables, side by side above 1100 px.
+- **Running now** and **Failed:** two runs tables, stacked below 1700 px and side by side above it.
   - Running now: Run, Pipeline, Started, Duration, Steps; every row is running, so it has no Status
     column.
   - Failed: Run, Pipeline, Started, Steps, and a Retry button per row, for tokens that can write.

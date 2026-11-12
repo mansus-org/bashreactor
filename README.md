@@ -144,11 +144,12 @@ link can point at exactly the document you meant.
 
 ### The editor: write the YAML, run it
 
-![The editor for word-report: YAML with line numbers and problems on the left, the graph on the right, and the step inspector folded to a header](docs/screenshots/02-editor.png)
+![The editor for word-report: YAML with line numbers and problems on the left, the graph on the right, and the selected step's inspector open under it](docs/screenshots/02-editor.png)
 
 The editor holds one pipeline document, and it is the only place in the UI that writes YAML. YAML is on
-the left with line numbers and a Problems panel under it; the graph is on the right, with the step
-inspector folded to a header until you expand it. The legend under the graph says how the drawing
+the left with line numbers and a Problems panel under it; the graph is on the right, with the selected
+step's inspector open under it. Collapse gives the graph the column, and selecting a step opens it
+again unless you have collapsed it. The legend under the graph says how the drawing
 reads: an output feeding an input is a wire, a `needs:` entry is a wire with no data on it, and an
 input port fed by a reference is marked differently from one set to a literal value. Click a step in
 the graph and its block, timeout, attempts and wiring can be edited there, or the caret can follow you

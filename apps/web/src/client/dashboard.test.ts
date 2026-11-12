@@ -508,10 +508,11 @@ function ruleBody(selector: string): string {
 }
 
 describe("the dashboard's layout", () => {
-  test("the paired tables only sit side by side above 1100 px", () => {
-    expect(sheet).toContain("@media (min-width: 1100px)");
+  test("the paired tables only sit side by side where both fit whole", () => {
+    expect(sheet).toContain("@media (min-width: 1700px)");
     expect(sheet).toContain(".dash-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(ruleBody(".dash-pair")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(sheet).toContain(".runstable time, .runstable .num { white-space: nowrap; }");
   });
 
   test("the counts are four across, and two by two below 640 px", () => {

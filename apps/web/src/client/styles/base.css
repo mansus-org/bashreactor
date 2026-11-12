@@ -291,7 +291,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
   font-size: var(--fs-body); line-height: 1.5;
 }
 .runstable .stamp { vertical-align: middle; }
-.runstable time { white-space: nowrap; }
+.runstable time, .runstable .num { white-space: nowrap; }
 
 /* A table is the same table on a phone as on a laptop: one block per row, its first cell on top,
    then a label and value line for every other cell. */
