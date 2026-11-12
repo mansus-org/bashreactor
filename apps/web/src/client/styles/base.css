@@ -98,8 +98,6 @@ main:focus { outline: none; }
   margin: 0;
   font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
   font-size: var(--fs-title);
-  /* The old run-page test reads the display floor as a clamp; 2rem is --fs-title at the default size. */
-  font-size: clamp(2rem, 2.5vw, 2rem);
   line-height: 1; letter-spacing: 0.01em;
   overflow-wrap: anywhere;
 }

@@ -331,6 +331,14 @@ describe("table", () => {
     expect(sheet).toMatch(/\.table__row--link:hover \.table__link, \.table__link:hover \{[^}]*text-decoration: underline;/);
     expect(sheet).not.toContain(".pipelines-name");
   });
+
+  test("the page title has one font size, not a transition hack's second one", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    const found = /(?:^|\n)\.title \{([^}]*)\}/.exec(sheet);
+    expect(found).not.toBeNull();
+    expect(found![1]!.match(/font-size:/g)?.length).toBe(1);
+    expect(found![1]).toContain("font-size: var(--fs-title);");
+  });
 });
 
 describe("codeView", () => {
