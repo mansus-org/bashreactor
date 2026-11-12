@@ -200,6 +200,23 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
+      "the chart's labels stay at reading size, on the dashboard and a pipeline's runs",
+      async () => {
+        for (const path of ["/app/", "/app/pipelines/shout-report"]) {
+          const { page, watch: pageWatch } = await screen(viewport, path);
+          await waitFor(page, ".chart__axis text");
+          const sizes = await page.evaluate(() =>
+            [...document.querySelectorAll(".chart__axis text")].map((node) => Number.parseFloat(getComputedStyle(node).fontSize)),
+          );
+          expect(Math.min(...sizes)).toBeGreaterThanOrEqual(14);
+          expect(pageWatch.problems()).toEqual([]);
+          await page.close();
+        }
+      },
+      60_000,
+    );
+
+    test(
       "the pipeline editor opens a stored pipeline and draws its graph",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, "/app/pipelines/shout-report/edit");

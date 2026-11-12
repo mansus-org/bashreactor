@@ -964,101 +964,146 @@ const CHART_TONES = ["succeeded", "running", "failed", "cancelled", "interrupted
 /** The four states a run can be in, whether or not this window has one in it. */
 const CHART_LEGEND = ["succeeded", "running", "failed", "cancelled"] as const;
 
+function niceStep(rough: number): number {
+  if (!Number.isFinite(rough) || rough <= 0) return 1;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const fraction = rough / power;
+  const multiplier = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return multiplier * power;
+}
+
+/** Round tick values, from zero to the first one at or above `max`. */
+function chartTicks(max: number): number[] {
+  const rough = max / 3;
+  // A count is never half a run; a sub-second duration still needs fractions.
+  const step = max >= 1 && rough < 1 ? 1 : niceStep(rough);
+  const top = Math.ceil(max / step - 1e-9) * step;
+  const count = Math.max(1, Math.round(top / step));
+  return Array.from({ length: count + 1 }, (_unused, index) =>
+    index === 0 ? 0 : Number((index * step).toPrecision(12)),
+  );
+}
+
+const chartObservers = new Map<Element, ResizeObserver>();
+
+/** A chart replaced by a live screen takes its observer with it when the next one is drawn. */
+function sweepCharts(): void {
+  for (const [node, observer] of chartObservers) {
+    if ((node as unknown as { isConnected?: boolean }).isConnected === false) {
+      observer.disconnect();
+      chartObservers.delete(node);
+    }
+  }
+}
+
 /**
  * Inline SVG bars, stacked from the baseline in the order each bar's segments are given. Each bar is a
- * `<g>` with a `<title>`; a bar with `href` is a link. `yFormat` formats the three y ticks, and the
- * numbers are repeated in a visually hidden table. `height` is the whole chart's height.
+ * `<g>` with a `<title>`; a bar with `href` is a link. Y ticks are round numbers with the top one at or
+ * above the maximum, and the numbers are repeated in a visually hidden table. The SVG is drawn at the
+ * plot's own pixel width, so its labels stay at their size on a phone instead of shrinking with a
+ * viewBox. `height` is the whole chart's height.
  */
 export function barChart(options: BarChartOptions): HTMLElement {
   const bars = options.bars;
   const height = options.height ?? 160;
-  const width = 720;
-  const left = 48;
+  const left = 72;
   const right = 8;
   const top = 8;
   const bottom = 22;
-  const plotWidth = Math.max(1, width - left - right);
-  const plotHeight = Math.max(1, height - top - bottom);
   const yFormat = options.yFormat ?? formatCount;
   const totals = bars.map((bar) => bar.segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0));
   const max = Math.max(1, ...totals);
+  const ticks = chartTicks(max);
   const present = CHART_TONES.filter((status) => bars.some((bar) => bar.segments.some((segment) => segment.status === status && segment.value > 0)));
+  const plot = el("div", { class: "chart__plot" });
+  let drawnWidth = 0;
 
-  const graphic = svg("svg", {
-    class: "chart__svg",
-    viewBox: `0 0 ${width} ${height}`,
-    width: "100%",
-    height,
-    role: "img",
-    "aria-label": options.yLabel ?? "Chart",
-    "shape-rendering": "crispEdges",
-  });
-  graphic.append(tonePatterns());
-  const axis = svg("g", { class: "chart__axis", fill: "currentColor", stroke: "currentColor" });
-  axis.append(svg("line", { x1: left, y1: top, x2: left, y2: top + plotHeight, "stroke-width": 1 }));
-  axis.append(svg("line", { x1: left, y1: top + plotHeight, x2: left + plotWidth, y2: top + plotHeight, "stroke-width": 1 }));
-  const ticks = [...new Set([0, max / 2, max])];
-  for (const tick of ticks) {
-    const y = top + plotHeight - (tick / max) * plotHeight;
-    axis.append(svg("line", { x1: left - 4, y1: y, x2: left, y2: y, "stroke-width": 1 }));
-    const label = svg("text", {
-      x: left - 8,
-      y: y + 4,
-      "text-anchor": "end",
-      "font-size": 12,
-      stroke: "none",
-      fill: "currentColor",
+  function graphicAt(width: number): SVGSVGElement {
+    const plotWidth = Math.max(1, width - left - right);
+    const plotHeight = Math.max(1, height - top - bottom);
+    const graphic = svg("svg", {
+      class: "chart__svg",
+      viewBox: `0 0 ${width} ${height}`,
+      width,
+      height,
+      role: "img",
+      "aria-label": options.yLabel ?? "Chart",
+      "shape-rendering": "crispEdges",
     });
-    label.textContent = yFormat(tick);
-    axis.append(label);
-  }
-  graphic.append(axis);
-
-  const slot = plotWidth / Math.max(1, bars.length);
-  const barWidth = Math.max(2, Math.min(40, slot * 0.72));
-  bars.forEach((bar, index) => {
-    const x = left + index * slot + (slot - barWidth) / 2;
-    const group = svg("g", { class: "chart__bar", "data-key": bar.key });
-    const title = svg("title");
-    title.textContent = bar.title;
-    group.append(title);
-    let baseline = top + plotHeight;
-    for (const segment of bar.segments) {
-      if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
-      const segmentHeight = (Math.max(0, segment.value) / max) * plotHeight;
-      baseline -= segmentHeight;
-      const fill = segmentFill(segment.status);
-      group.append(
-        svg("rect", {
-          x,
-          y: baseline,
-          width: barWidth,
-          height: segmentHeight,
-          fill: fill.fill,
-          stroke: fill.stroke ?? "none",
-          "stroke-width": fill.stroke === null ? 0 : 1,
-          ...(fill.dash === null ? {} : { "stroke-dasharray": fill.dash }),
-        }),
-      );
-    }
-    if (bar.href !== undefined) {
-      group.setAttribute("data-href", bar.href);
-      group.setAttribute("role", "link");
-      group.setAttribute("tabindex", "0");
-      const open = (): void => {
-        location.href = bar.href!;
-      };
-      group.addEventListener("click", open);
-      group.addEventListener("keydown", (event) => {
-        const key = (event as KeyboardEvent).key;
-        if (key === "Enter" || key === " ") {
-          (event as KeyboardEvent).preventDefault();
-          open();
-        }
+    graphic.append(tonePatterns());
+    const axis = svg("g", { class: "chart__axis", fill: "currentColor", stroke: "currentColor" });
+    axis.append(svg("line", { x1: left, y1: top, x2: left, y2: top + plotHeight, "stroke-width": 1 }));
+    axis.append(svg("line", { x1: left, y1: top + plotHeight, x2: left + plotWidth, y2: top + plotHeight, "stroke-width": 1 }));
+    for (const tick of ticks) {
+      const y = top + plotHeight - (tick / max) * plotHeight;
+      axis.append(svg("line", { x1: left - 4, y1: y, x2: left, y2: y, "stroke-width": 1 }));
+      const label = svg("text", {
+        x: left - 8,
+        y: y + 5,
+        "text-anchor": "end",
+        "font-size": 14,
+        stroke: "none",
+        fill: "currentColor",
       });
+      label.textContent = yFormat(tick);
+      axis.append(label);
     }
-    graphic.append(group);
-  });
+    graphic.append(axis);
+
+    const slot = plotWidth / Math.max(1, bars.length);
+    const barWidth = Math.max(2, Math.min(40, slot * 0.72));
+    bars.forEach((bar, index) => {
+      const x = left + index * slot + (slot - barWidth) / 2;
+      const group = svg("g", { class: "chart__bar", "data-key": bar.key });
+      const title = svg("title");
+      title.textContent = bar.title;
+      group.append(title);
+      let baseline = top + plotHeight;
+      for (const segment of bar.segments) {
+        if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
+        const segmentHeight = (Math.max(0, segment.value) / max) * plotHeight;
+        baseline -= segmentHeight;
+        const fill = segmentFill(segment.status);
+        group.append(
+          svg("rect", {
+            x,
+            y: baseline,
+            width: barWidth,
+            height: segmentHeight,
+            fill: fill.fill,
+            stroke: fill.stroke ?? "none",
+            "stroke-width": fill.stroke === null ? 0 : 1,
+            ...(fill.dash === null ? {} : { "stroke-dasharray": fill.dash }),
+          }),
+        );
+      }
+      if (bar.href !== undefined) {
+        group.setAttribute("data-href", bar.href);
+        group.setAttribute("role", "link");
+        group.setAttribute("tabindex", "0");
+        const open = (): void => {
+          location.href = bar.href!;
+        };
+        group.addEventListener("click", open);
+        group.addEventListener("keydown", (event) => {
+          const key = (event as KeyboardEvent).key;
+          if (key === "Enter" || key === " ") {
+            (event as KeyboardEvent).preventDefault();
+            open();
+          }
+        });
+      }
+      graphic.append(group);
+    });
+    return graphic;
+  }
+
+  function draw(): void {
+    const width = plot.clientWidth > 0 ? Math.round(plot.clientWidth) : 720;
+    if (drawnWidth === width && plot.children.length > 0) return;
+    drawnWidth = width;
+    plot.replaceChildren(graphicAt(width));
+  }
 
   const legend =
     options.legend === false
@@ -1098,9 +1143,16 @@ export function barChart(options: BarChartOptions): HTMLElement {
     ),
   );
 
-  return el("figure", { class: "chart" }, graphic, legend, data);
+  const figure = el("figure", { class: "chart" }, plot, legend, data);
+  sweepCharts();
+  draw();
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(() => draw());
+    observer.observe(plot);
+    chartObservers.set(plot, observer);
+  }
+  return figure;
 }
-
 /** The honest answer for a screen that its own ticket has not built yet. */
 export function notImplemented(view: HTMLElement, screen: string, ticket: string): void {
   view.replaceChildren(

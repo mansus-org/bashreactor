@@ -364,6 +364,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 /* ---------- charts ---------- */
 
 .chart { display: grid; gap: var(--s2); margin: 0; min-width: 0; }
+.chart__plot { min-width: 0; }
 .chart__svg { display: block; width: 100%; height: auto; color: var(--ink); }
 .chart__legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); font-size: var(--fs-ui); }
 .chart__legend-entry { display: inline-flex; align-items: center; gap: var(--s1); }
