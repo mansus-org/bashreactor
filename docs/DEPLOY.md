@@ -165,8 +165,9 @@ The four things this task was opened for, and where each stands:
 What is left is smaller than that list, and it is still nothing a worktree can do. Everything below
 needs the cluster or Argo CD.
 
-1. **Merge, and let the image roll.** `.github/workflows/deploy.yml` tags `sha-<newest>` and
-   `latest`; Image Updater picks it up within two minutes. Check where it landed:
+1. **Merge, and let the image roll.** Once `ci` has passed on the merge commit,
+   `.github/workflows/deploy.yml` tags `sha-<newest>` and `latest`; Image Updater picks it up within
+   two minutes. A merge whose `ci` fails is not deployed. Check where it landed:
 
    ```
    curl -sS https://bashreactor.mansus.org/healthz

@@ -1,4 +1,6 @@
-# Build the repo's Dockerfile and push it to GHCR on every push to main.
+# Build the repo's Dockerfile and push it to GHCR once the ci workflow has
+# passed on a commit of main. Production only ever runs a commit whose tests
+# passed: a push to main whose ci fails is never built here.
 # The cluster notices the new sha-<commit> tag within a few minutes and
 # deploys it (Argo CD Image Updater). Nothing else to do per release.
 # Pull requests get a preview: pr-<number>-<commit> is pushed and the cluster
@@ -7,59 +9,99 @@
 name: deploy
 
 on:
-  push:
+  # Production waits for ci. workflow_run fires when ci finishes, for every
+  # branch it ran on; the job below keeps only a successful push run on main.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
     branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
+  # A person deploying main's tip by hand, on purpose: the one way past ci.
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
-# main: one build at a time; a newer push waits instead of racing an older one.
-# PRs (ref refs/pull/<n>/merge): a new push cancels the PR's running build.
+# main (a workflow_run event's ref is main's): one build at a time, a newer
+# run waits instead of racing an older one. PRs (ref refs/pull/<n>/merge): a
+# new push cancels the PR's running build.
 concurrency:
   group: deploy-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-push:
-    # On main only: a manual dispatch from a branch would otherwise push a
-    # sha-* tag, which Image Updater ships to production.
-    if: github.ref == 'refs/heads/main'
+    # A ci run that passed for a push to main, or a person's dispatch on main.
+    # A dispatch from any other branch would push a sha-* tag, which Image
+    # Updater ships to production, so it is refused like before.
+    if: >-
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     # Self-hosted ARC runners on the cluster (apps/arc-runner.yaml).
     runs-on: arc-runner
+    env:
+      # The commit ci passed on. github.sha on a workflow_run event is wherever
+      # main points when the event fires, which can already be a later commit.
+      DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.DEPLOY_SHA }}
+
+      # ci runs finish in any order. Only the commit main points at now is
+      # built, so a slow run for an older commit can never roll production
+      # back; the newer commit's own ci run deploys it when it passes.
+      - id: tip
+        shell: bash
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" = "$DEPLOY_SHA" ]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "main is at ${tip::7} now, not ${DEPLOY_SHA::7}: that commit's ci run deploys it"
+            echo "current=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # Image names must be lowercase: ghcr.io/mansus-org/<repo>.
       - id: image
+        if: steps.tip.outputs.current == 'true'
         shell: bash
         run: |
           {
             echo "name=ghcr.io/${GITHUB_REPOSITORY,,}"
-            echo "version=sha-${GITHUB_SHA::7}"
+            echo "version=sha-${DEPLOY_SHA::7}"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-buildx-action@v3
+      - if: steps.tip.outputs.current == 'true'
+        uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
+      - if: steps.tip.outputs.current == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Tags: sha-<7 char commit> (what the cluster deploys) and latest.
+      # Tags: sha-<7 char commit> (what the cluster deploys) and latest, both
+      # from DEPLOY_SHA rather than the event's own sha.
       - id: meta
+        if: steps.tip.outputs.current == 'true'
         uses: docker/metadata-action@v5
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
-            type=sha,prefix=sha-,format=short
+            type=raw,value=${{ steps.image.outputs.version }}
             type=raw,value=latest
+          labels: |
+            org.opencontainers.image.revision=${{ env.DEPLOY_SHA }}
 
-      - uses: docker/build-push-action@v6
+      - if: steps.tip.outputs.current == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: true
