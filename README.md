@@ -28,20 +28,13 @@ same scopes.
 
 ## What it looks like
 
-These are screenshots of the web UI, taken in Chromium against a local server running this repo. The
-pipeline is [`docs/examples/word-report.yaml`](docs/examples/word-report.yaml), the worked example
-[`docs/SPEC.md`](docs/SPEC.md) section 7 is written against, and the two finished runs are the two
-scenarios [`docs/examples/README.md`](docs/examples/README.md) fixes expected results for: the
-defaults, and `lines` 50. That file says a correct run returns a 163 byte report and `total_words`
-1300, [`examples/demo.sh`](examples/demo.sh) checks those numbers on every run, and
-`examples/demo.test.ts` runs that script as part of `bun run check`. So the figures on these screens
-are the ones the tests expect. The run still in flight in the Runs list is the one exception, and its
-caption says so.
-
-Three of them were recaptured at `ee5453c`, after BASHR-13 gave every step status its own stamp
-(`dac64fe`): the two shots of the failed run and the full-page one in *Reading a log*. The rest are
-from the build just before it, and none of them shows a step status that the fix changed:
-`04-run-succeeded.png` is all-succeeded, and the two Runs lists stamp the run, not its steps.
+These are screenshots of the web UI, taken in Chromium against a local server running this repo at
+1440 × 900 and 390 × 844. The data is `apps/web/scripts/seed.ts`: the worked example
+[`docs/examples/word-report.yaml`](docs/examples/word-report.yaml), the pipeline
+[`docs/SPEC.md`](docs/SPEC.md) section 7 is written against, plus the small pipelines the seed adds so
+the lists have every state a screen has to draw. It starts the default run, a run with `lines` 50 that
+fails, one whose `generate` step spends a retry, one cancelled half way, one waiting for its next
+attempt and one still running, so a picture of a live screen is a picture of a real engine working.
 
 ### The gate
 
@@ -54,145 +47,151 @@ agent token from `POST /v1/tokens`, and the scope on that token decides what the
 do. Nothing else is kept on the device, apart from the list of block names you have opened on the
 Blocks screen.
 
-### The entry page
+### Dashboard
 
-![The entry page signed in as admin: what the server reports about itself, and the three screens listed with what each one is for](docs/screenshots/01-entry.png)
+![The Dashboard signed in as admin: four count tiles, the activity chart with all four states in its legend, and the Running now and Failed tables above the disk meter](docs/screenshots/01-dashboard.png)
 
-Once the token is in, the entry page says what this server is and what you may do on it: the version
-and API base it reports, a health line reading `ok`, and whether this token can store pipelines,
-publish blocks and start runs. Below that are the three screens, each with the line that says what it
-is for. The Pipeline editor draws its graph from the YAML instead of keeping a second copy of it. Runs
-is where you watch a run and read its logs by byte offset, with cancel, retry and resume. Blocks is
-the library of bash files, whose front matter says what goes in and what comes out.
+Once the token is in, `/app` is the Dashboard, which replaced the entry page that used to list the
+screens. Four tiles count the window: running, succeeded, failed and cancelled, each a link to the
+Runs list with that filter. Running counts every run that is going now, whatever its age; the other
+three count runs created in the window. The window control says 24 h, 7 d or 30 d, and each is a local
+calendar span — the current local hour or day plus the ones before it, not a rolling duration.
 
-The same page at phone width, a 390 px viewport.
+Activity is one stacked bar per hour or day, with failed, cancelled, running and succeeded stacked from
+the baseline, and a legend that names all four states even when this window has none of one. Below it
+are the two tables that need someone: Running now, which has no Status column because every row is
+running, and Failed, with Retry on each row for a token that can write. Both stop at ten rows and link
+to the filtered list. The disk meter at the bottom is the same disk the Settings screen shows, and the
+alarm above it appears only when `GET /v1/disk` says `low`.
 
-![The entry page at phone width](docs/screenshots/09-mobile-entry.png)
+### Runs: the list, then one run
 
-## The three screens
+![The Runs screen with eight seeded runs, newest first, and the status, pipeline and window filters above them](docs/screenshots/03-runs-list.png)
 
-### Pipeline: write the YAML, run it
+`GET /v1/runs`, newest first: the run id, the pipeline it is a run of, its version, when it started,
+how long it took and how many steps succeeded. The filters — status, pipeline and window — live in the
+address, so a reload, a bookmark and the back button all agree with what is on screen. The subtitle
+states the design: a run is a directory, and this list is its `run.json`.
 
-![The Pipeline screen with an empty editor: New pipeline, Validate, Save version and Start a run above an empty graph pane, with the YAML pane beside it and a Problems panel under that](docs/screenshots/02-pipeline-editor.png)
+![A run still going: nightly-sync, its timeline with transform running, the live log reading 243 B, and Cancel offered instead of Retry](docs/screenshots/06-run-running.png)
 
-The editor holds one pipeline document, and it is the only place in the UI that writes YAML. A new
-document starts with `name`, `description` and an empty `steps:`, and the graph pane stays empty until
-there is a step. The legend under the graph says how the drawing reads: an output feeding an input is
-a wire, a `needs:` entry is a wire with no data on it, and an input port fed by a reference is marked
-differently from one set to a literal value. The buttons are the routes: `Validate` is
-`POST /v1/pipelines/validate`, `Save version` is `POST /v1/pipelines/:name/versions`, `Start a run` is
-`POST /v1/runs`. A stored document is opened by name, because the API has no route that lists every
-pipeline, and the screen says so.
+The same list leads to one run. This one is still going: its header says how long it has been running
+and offers Cancel; the timeline puts every step on a common clock, with `transform` in its dither
+because it is the running one; and the log pane is reading `transform` attempt 1, 243 bytes so far.
+There is no websocket and no callback: both screens poll. The list re-reads `GET /v1/runs` once a
+second while any run on it is `running`, and drops to one read every fifteen seconds (`IDLE_POLL_MS`)
+once none is, because a run started from the CLI or in another tab has to turn up without a reload; a
+run's own page re-reads `GET /v1/runs/:id` on the same beat (`POLL_MS` in
+`apps/web/src/client/run-shared.ts`) until the run is final. Neither reads while the tab is in another
+window, and both say so in the status line when a read fails rather than going quiet on you.
+
+#### The run that worked
+
+![Run detail for the succeeded word-report run: generate took 2 attempts, check, count and report are done, and the report output is 163 bytes](docs/screenshots/04-run-succeeded.png)
+
+`word-report` at its default inputs (`lines` 200, `seed` 7, `title` Word report), finished in 1 s. The
+meta line under the id reads Started, Finished, Duration, Steps and Version, with the exact instant on
+each time. The timeline shows the four steps; `generate` needed two attempts, which is exit 75 spending
+one retry, the first of the hard cases below. The tabs hold the log, the steps, the graph, the run's
+inputs and outputs, and its files. The output `report` is 163 bytes, the same number
+`examples/demo.sh` checks.
+
+#### The run that did not
+
+![Run detail for the failed word-report run: the alarm says check failed with block_fatal, the timeline shows count succeeded and report skipped, and the log holds check's one line](docs/screenshots/05-run-failed.png)
+
+The same pipeline with `lines` 50. The corpus is below `min_lines`, so `check` exits 78 and the run is
+`failed`. The alarm box names the step and the code and offers *Show log* and *Retry 2 steps*. On the
+timeline, `count` is `succeeded` because it needs nothing from `check`, and `report` is `skipped`
+because it does; the log pane has `check` attempt 1, 42 bytes, one line: `check-corpus: 50 lines, need
+at least 100`. The run took less than a second, so its Duration says `<1 s` rather than rounding down to
+a `0 s` that would look like no run at all.
+
+#### Reading a log
+
+The log pane holds one attempt of one step, and its cursor is a byte offset (SPEC 4.8). The pane asks
+for whatever comes after its offset on every poll, and *Pause* stops it asking. *Follow* is about
+keeping up rather than about fetching: it holds the pane at the newest line and moves it to a step's
+newest attempt, and when the step you are watching ends while the run goes on, it moves the pane to the
+step that is running now — watch `one` in a pipeline of `one` and a dependent `two`, and the pane goes
+to `two` the moment `one` succeeds. Turn it off to pin the pane to one step. Because the cursor is an
+offset, an answer only carries what is new, and the page only goes forward: it starts over from byte 0
+when you point the pane at another step or attempt, and otherwise never does. A poll is one `run.json`
+request and at least one log request, and each answer is capped at 1 MiB (`MAX_LOG_TEXT_BYTES` in
+`apps/api/src/app.ts`), so the page asks again in the same poll while the server says there is more.
+What keeps a six-hour run cheap to watch is the server side of that: `readLog` opens the log and reads
+only the window it was asked for, through `readFileRange` in `apps/engine/src/run-store.ts`, whatever
+the offset. On this side the pane keeps every line it has read and paints the last 2000 of them
+(`MAX_DRAWN_LINES` in `apps/web/src/client/logs.ts`), with a note saying how many are not drawn. The
+CLI's `bashreactor runs logs <id> check --offset 42` and the `get_run_log` tool use the same cursor.
+
+### Pipelines: the stored documents
+
+![The Pipelines screen with four stored pipelines, each row showing its description, latest version, last run and a strip of recent runs](docs/screenshots/08-pipelines-list.png)
+
+`GET /v1/pipelines` is the library of stored documents. Each row names the pipeline and reads its
+latest version's description and its recent runs beside the row, four pipelines at a time, so one slow
+pipeline cannot hold up the other nineteen. *New pipeline* opens the editor on a blank document, and a
+row opens the pipeline itself.
+
+![One pipeline: word-report at v1, its duration chart and run table on the Runs tab, with Definition, Versions and Inputs beside it](docs/screenshots/09-pipeline.png)
+
+One pipeline has a header with its description, stored time and short hash, a version picker, and the
+four things you can look at. Runs is a duration chart over its last thirty runs and the shared runs
+table under it; Definition is the stored YAML beside the same graph the editor draws; Versions lists
+every stored version; Inputs is the contract the pipeline declares. A version is in the address, so a
+link can point at exactly the document you meant.
+
+### The editor: write the YAML, run it
+
+![The editor for word-report: YAML with line numbers and problems on the left, the graph on the right, and the selected step's inspector open under it](docs/screenshots/02-editor.png)
+
+The editor holds one pipeline document, and it is the only place in the UI that writes YAML. YAML is on
+the left with line numbers and a Problems panel under it; the graph is on the right, with the selected
+step's inspector open under it. Collapse gives the graph the column, and selecting a step opens it
+again unless you have collapsed it. The legend under the graph says how the drawing
+reads: an output feeding an input is a wire, a `needs:` entry is a wire with no data on it, and an
+input port fed by a reference is marked differently from one set to a literal value. Click a step in
+the graph and its block, timeout, attempts and wiring can be edited there, or the caret can follow you
+through the YAML; moving it into a step selects the node.
 
 The Problems panel is one list with two sources: the editor's own checks, run in the browser on every
 keystroke against the block contracts it has fetched from the library, and the issues the API answered
 with the last time you pressed `Validate`. Nothing goes to `POST /v1/pipelines/validate` until you
-press that button, and the API is what refuses to store a pipeline it cannot resolve.
+press that button, and the API is what refuses to store a pipeline it cannot resolve. The buttons are
+the routes: `Validate` is `POST /v1/pipelines/validate`, `Save version` is
+`POST /v1/pipelines/:name/versions`, `Run` opens the inputs dialog and is `POST /v1/runs`.
 
 To see a stored pipeline as the library holds it, use the CLI: `bun apps/cli/src/bin.ts pipelines get
 word-report` prints the document back with `uses: generate-corpus@1` where the file on disk says
 `uses: ./generate-corpus.sh`. The CLI publishes each block beside the file and rewrites the reference,
 which is the first row of the table below.
 
-### Runs: the list, then one run
-
-![The Runs screen with two runs, newest first, one failed and one succeeded](docs/screenshots/03-runs-list.png)
-
-`GET /v1/runs`, newest first: the run id, the pipeline it is a run of, when it started, and its
-status. The subtitle states the design: a run is a directory, and this list is its `run.json`.
-
-![The Runs screen with a run still going, above the failed and succeeded runs](docs/screenshots/08-run-live-list.png)
-
-The same list while a run is in flight, with the newest row reading `running`. That run is not one of
-the two `examples/demo.sh` starts; it was started on its own, with its own inputs. There is no
-websocket and no callback: both screens poll. The list re-reads `GET /v1/runs` once a second for as
-long as any run on it is `running`, and drops to one read every fifteen seconds (`IDLE_POLL_MS`) once
-none is, because a run started from the CLI or in another tab has to turn up without a reload; a run's
-own page re-reads `GET /v1/runs/:id` on the same beat (`POLL_MS` in `apps/web/src/client/runs.ts`)
-until the run is final. Neither reads while the tab is in another window, and both say so in the status
-line when a read fails rather than going quiet on you.
-
-One thing catches out everyone who reads a live run: a step whose first attempt is running reports
-`attempts_used: 0`, in `run.json`, in `GET /v1/runs/:id`, and in the `ATTEMPTS` column of
-`bashreactor runs get <id>`. That is SPEC 4.5 read literally — the count goes up when an attempt
-*ends* `succeeded` or `failed`, and an interrupted or cancelled attempt costs nothing, which is what
-makes a restart cheap. The attempt itself is already there: `attempts` holds it, `running`, with its
-number and its log. The run screen prints the same number, so the note under a live step reads
-*Attempt 0, 1 attempt so far.* (`stepNote` in `apps/web/src/client/runs.ts`).
-
-#### The run that worked
-
-![Run detail for the succeeded run: generate took 2 attempts, check, count and report are done, and the report output is 163 bytes](docs/screenshots/04-run-succeeded.png)
-
-`word-report` at its default inputs (`lines` 200, `seed` 7, `title` Word report), finished in 1 s. The
-step list is in declaration order with a duration and a status per step, and the note under `generate`
-reads *Took 2 attempts*: that is exit 75 spending one retry, the first of the hard cases below. The
-panel on the right is the selected step, `report`: which block it ran and the sha256 of the stored
-bytes, a picker for which attempt's log to read, its outputs (`report` at
-`steps/report/attempts/1/outputs/report`, `report_bytes` 163), and the log pane.
-
-#### The run that did not
-
-![Run detail for the failed run: the alarm box says check failed with block_fatal, generate and count read succeeded and check reads failed, and the report row is cut off at the bottom edge](docs/screenshots/05-run-failed.png)
-
-The same pipeline with `lines` 50. The corpus is below `min_lines`, so `check` exits 78 and the run is
-`failed` after 0 s. The alarm box names the step and the code and offers *Retry from check* and *Read
-its log*. The `check` row reads `1 attempt used`, and the pipeline gives that step two attempts
-(`docs/examples/word-report.yaml`): exit 78 does not spend the rest. `count` needs nothing from
-`check`, so it is `succeeded` as well. This frame is a 1440 x 900 viewport and it runs out part-way
-down the `report` row, so the picture holds that step's name and not its stamp or its note; the
-full-page shot in *Reading a log* below shows both.
-
-The `report` row is the one thing this screen used to get wrong, and it reads `skipped`, the word
-`run.json` holds. `state()` in `apps/web/src/client/runs.ts` used to know four statuses and answer
-every other one with `pending`, so `skipped` and `waiting_retry` both printed as `pending` and the
-screen contradicted the run it was showing. It now stamps every status SPEC 4.4 allows plus
-`interrupted`, each with its own word and its own sign, and keeps `pending` for a status this UI has
-never seen: that word claims nothing about the outcome and is not final, so it cannot call a live run
-finished. `apps/web/src/client/runs.test.ts` stamps all eight of them and one the spec has never heard
-of, and checks the word and the shape each time. The note under `report`, *check failed, so this never
-started.*, is the half that was never wrong.
-
-![The same failed run at phone width: the run head, the inputs and the alarm box, with the step list beginning below them](docs/screenshots/11-mobile-run.png)
-
-The same failed run at phone width, a 390 px viewport. Below 980 px the step list and the log panel
-stack into one column (`@media (max-width: 980px)` in `apps/web/src/client/style.css`), and the stack
-is taller than the phone: this frame ends inside the first step row, so the alarm box is the last
-thing it shows whole, and `report`, with its `skipped` stamp, is one scroll away.
-
-#### Reading a log
-
-![The whole failed run screen at desktop width: the step list with report stamped skipped, and beside it the log panel for the failed check step, read to byte 42 with its one line of output](docs/screenshots/14-run-log.png)
-
-The log pane holds one attempt of one step, and its cursor is a byte offset (SPEC 4.8). This pane has
-*Read to byte 42*, which is all of `check` attempt 1: one line, `check-corpus: 50 lines, need at least
-100`. The pane asks for whatever comes after its offset on every poll, and *Pause* stops it asking.
-*Follow* is about keeping up rather than about fetching: it holds the pane at the newest line and moves
-it to a step's newest attempt, and when the step you are watching ends while the run goes on, it moves
-the pane to the step that is running now — watch `one` in a pipeline of `one` and a dependent `two`,
-and the pane goes to `two` the moment `one` succeeds. Turn it off to pin the pane to one step. Because the cursor is an offset, an answer only carries what is new, and
-the page only goes forward: it starts over from byte 0 when you point the pane at another step or
-attempt, and otherwise never does. A poll is one `run.json` request and at least one log request, and
-each answer is capped at 1 MiB (`MAX_LOG_TEXT_BYTES` in `apps/api/src/app.ts`), so the page asks again
-in the same poll while the server says there is more. What keeps a six-hour run cheap to watch is the
-server side of that: `readLog` opens the log and reads only the window it was asked for, through
-`readFileRange` in `apps/engine/src/run-store.ts`, whatever the offset. On this side the pane keeps
-every line it has read and paints the last 2000 of them (`MAX_DRAWN_LINES` in
-`apps/web/src/client/logs.ts`), with a note saying how many are not drawn. The CLI's
-`bashreactor runs logs <id> check --offset 42` and the `get_run_log` tool use the same cursor. The
-note on the `check` row gives the other half of why
-a failure is not a dead end: `1 attempt used; the work directory is kept`.
-
 ### Blocks: the library
 
 ![The Blocks screen showing count-words v1: its inputs and outputs tables and the bash source with its front matter](docs/screenshots/07-block-detail.png)
 
-`GET /v1/blocks/:name`, with the version you are looking at and its size in bytes. The two tables are
-the block's own front matter read out of the stored bytes: `corpus` (file, required) and `top`
-(integer, default 5) going in; `total_words`, `top_words` and `counts` coming out. Under them is the
-source with the header still attached, so the contract and the code that honours it are on one screen.
-Like pipelines, a block is opened by name, and for the same reason. The short list of names on that
-screen is this browser's history of blocks you have opened, kept in `localStorage`.
+`GET /v1/blocks/:name`, with the version you are looking at and its size in bytes. The contract tab has
+the two tables that are the block's own front matter read out of the stored bytes: `corpus` (file,
+required) and `top` (integer, default 5) going in; `total_words`, `top_words` and `counts` coming out.
+The source tab is the file with its header still attached, so the contract and the code that honours it
+are on one screen, and the versions tab lists everything the library has stored for the name. Like
+pipelines, a block is opened by name, and for the same reason.
+
+### On a phone
+
+![The Dashboard at phone width: two count tiles per row, the chart, and the two run tables stacked into one block per row](docs/screenshots/10-mobile-dashboard.png)
+
+At 390 px the sidebar becomes a top bar, the counts go two by two, and every table becomes one block
+per row: the first cell on top, then a label and value for each remaining cell. Nothing scrolls
+sideways. The Dashboard is the same information as at desktop width, read down the page instead of
+across it.
+
+![The same failed run at phone width: the run head, its inputs and alarm box, with the timeline and tabs below them](docs/screenshots/11-mobile-run.png)
+
+A run at the same width. The header, the alarm and the log stay one column, and the timeline keeps its
+own scroll rather than widening the page. The design targets a 1280 to 1440 px desktop; the phone is
+the same screen, not a second one.
 
 ## One run, four surfaces
 

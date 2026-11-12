@@ -7,8 +7,8 @@ import { api, canWrite } from "./api.js";
 import type { DiskSpace, RunSummary } from "./api.js";
 import { navigate } from "./app.js";
 import type { Route } from "./app.js";
-import { el, errorBox, sign } from "./dom.js";
-import { errorBody, errorWords, state, wallClock } from "./run-shared.js";
+import { el, errorBox } from "./dom.js";
+import { errorBody, errorWords, wallClock, whenShown } from "./run-shared.js";
 import type { Clock } from "./run-shared.js";
 import {
   alarm,
@@ -185,24 +185,6 @@ function failedHref(window: DashboardWindow): string {
   return `/app/runs?status=failed&window=${window}`;
 }
 
-/** The one legend the bar chart cannot draw when a status has no runs in the window. */
-// BASHR-62: candidate for ui.ts — barChart's legend lists only the tones present in its bars.
-function allStatusesLegend(): HTMLElement {
-  return el(
-    "div",
-    { class: "chart__legend", "aria-label": "Statuses" },
-    ...LEGEND.map((status) =>
-      el(
-        "span",
-        { class: `chart__legend-entry chart__legend-entry--${status}` },
-        el("span", { class: `swatch swatch--${status}`, "aria-hidden": "true" }),
-        sign(state(status)),
-        status,
-      ),
-    ),
-  );
-}
-
 /** The chart's title is also its hidden table's row label, so it names the hour or the day. */
 function chartFor(model: DashboardModel, window: DashboardWindow): HTMLElement {
   return barChart({
@@ -210,11 +192,10 @@ function chartFor(model: DashboardModel, window: DashboardWindow): HTMLElement {
     height: 160,
     yLabel: WINDOWS[window].unit === "hour" ? "Runs per hour" : "Runs per day",
     yFormat: (value) => formatCount(value),
-    legend: false,
   });
 }
 
-const TABLE_COLUMNS: RunColumn[] = ["status", "run", "pipeline", "started", "duration", "steps"];
+const TABLE_COLUMNS: RunColumn[] = ["run", "pipeline", "started", "duration", "steps"];
 const FAILED_COLUMNS: RunColumn[] = ["run", "pipeline", "started", "steps"];
 
 interface Tile {
@@ -251,23 +232,6 @@ async function readWindowRuns(since: string): Promise<RunSummary[]> {
     cursor = next;
   }
   return all;
-}
-
-/**
- * Start `again` whenever the tab is shown, the way run-shared's whenShown does. The removal is
- * guarded because the client stand-in DOM used by the sign-in tests has no removeEventListener, and
- * a dashboard reached from that test must still abort cleanly; a browser always has the method.
- */
-function whenShownAgain(signal: AbortSignal, again: () => void): void {
-  const onVisibility = (): void => {
-    if (!document.hidden && !signal.aborted) again();
-  };
-  document.addEventListener("visibilitychange", onVisibility);
-  signal.addEventListener("abort", () => {
-    if (typeof document.removeEventListener === "function") {
-      document.removeEventListener("visibilitychange", onVisibility);
-    }
-  });
 }
 
 interface DashboardData {
@@ -374,7 +338,6 @@ export function renderDashboard(view: HTMLElement, route: Route, signal: AbortSi
       { class: "dash-activity", "aria-labelledby": "dash-activity-title" },
       el("h2", { class: "h2", id: "dash-activity-title" }, "Activity"),
       activitySlot,
-      allStatusesLegend(),
     );
 
     runningTable = runsTable({ columns: TABLE_COLUMNS, empty: "Nothing is running." });
@@ -506,7 +469,7 @@ export function renderDashboard(view: HTMLElement, route: Route, signal: AbortSi
     unmake = clock.after(busy ? LIVE_POLL_MS : IDLE_POLL_MS, () => void tick());
   }
 
-  whenShownAgain(signal, () => void tick());
+  whenShown(signal, () => void tick());
   signal.addEventListener("abort", () => unmake?.());
   void tick();
 }

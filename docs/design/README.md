@@ -109,7 +109,7 @@ Breakpoints, the same everywhere:
 
 - **640 px:** below it, tables stack into one block per row, and columns become `label value` lines.
 - **940 px:** below it, the sidebar becomes a top bar with a Menu button.
-- **1100 px:** above it, paired sections such as the dashboard's two tables sit side by side.
+- **1100 px:** above it, paired sections such as the editor's YAML and graph sit side by side. The dashboard's two run tables need their whole width, so they wait until 1700 px.
 
 ### Status tones
 
@@ -286,7 +286,9 @@ The old addresses redirect, so links and bookmarks keep working: `/pipeline` goe
 What is happening, and what needs you.
 
 - **Header:** the title "Dashboard". On the right, a segmented control for 24 h, 7 d and 30 d (default
-  24 h). Production keeps runs 30 days.
+  24 h). Production keeps runs 30 days. Each window is a local calendar span: 24 h is the current local
+  hour plus the 23 before it, and 7 d and 30 d are the current local day plus the 6 and 29 before it —
+  not a rolling duration.
 - **Alarm,** only when `GET /v1/disk` says `low`: `Disk almost full · 3.1 GB free of 40 GB.` with a link
   to Settings.
 - **Counts:** four tiles in a row (2 × 2 below 640 px): running, succeeded, failed and cancelled.
@@ -300,8 +302,9 @@ What is happening, and what needs you.
   - Bars are stacked from the baseline up: failed, cancelled, running, succeeded.
   - It is 160 px tall and as wide as the main area, with a legend under it.
   - An empty bucket has no bar, and the axis says so.
-- **Running now** and **Failed:** two runs tables, side by side above 1100 px.
-  - Running now: Status, Run, Pipeline, Started, Duration, Steps.
+- **Running now** and **Failed:** two runs tables, stacked below 1700 px and side by side above it.
+  - Running now: Run, Pipeline, Started, Duration, Steps; every row is running, so it has no Status
+    column.
   - Failed: Run, Pipeline, Started, Steps, and a Retry button per row, for tokens that can write.
     Retry posts `/v1/runs/:id/retry`, then opens the run.
   - Each table shows at most 10 rows, then a `View all` link to the filtered Runs list.

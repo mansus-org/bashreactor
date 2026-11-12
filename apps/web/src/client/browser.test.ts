@@ -200,6 +200,23 @@ for (const viewport of VIEWPORTS) {
     );
 
     test(
+      "the chart's labels stay at reading size, on the dashboard and a pipeline's runs",
+      async () => {
+        for (const path of ["/app/", "/app/pipelines/shout-report"]) {
+          const { page, watch: pageWatch } = await screen(viewport, path);
+          await waitFor(page, ".chart__axis text");
+          const sizes = await page.evaluate(() =>
+            [...document.querySelectorAll(".chart__axis text")].map((node) => Number.parseFloat(getComputedStyle(node).fontSize)),
+          );
+          expect(Math.min(...sizes)).toBeGreaterThanOrEqual(14);
+          expect(pageWatch.problems()).toEqual([]);
+          await page.close();
+        }
+      },
+      60_000,
+    );
+
+    test(
       "the pipeline editor opens a stored pipeline and draws its graph",
       async () => {
         const { page, watch: pageWatch } = await screen(viewport, "/app/pipelines/shout-report/edit");
@@ -318,6 +335,33 @@ for (const viewport of VIEWPORTS) {
 }
 
 suite("the graph at desktop width", () => {
+  test(
+    "the folded inspector header stays inside the viewport at 1440x900",
+    async () => {
+      const { page, watch: pageWatch } = await screen(DESKTOP, "/app/pipelines/shout-report/edit");
+      await waitFor(page, ".node");
+      const open = await page.evaluate(() => {
+        const stage = document.querySelector(".stage")!.getBoundingClientRect();
+        const body = document.querySelector(".editor__inspector-body") as HTMLElement;
+        return { stageHeight: stage.height, bodyHidden: body.hidden };
+      });
+      expect(open.bodyHidden).toBe(false);
+      expect(open.stageHeight).toBeGreaterThan(200);
+      await press(page, "Collapse");
+      await page.waitForFunction(() => document.querySelector(".editor__inspector-body")?.hasAttribute("hidden") === true);
+      const facts = await page.evaluate(() => {
+        const inspector = document.querySelector(".editor__inspector")!.getBoundingClientRect();
+        const header = document.querySelector(".editor__inspector .bar")!.getBoundingClientRect();
+        return { inspectorBottom: inspector.bottom, headerBottom: header.bottom, viewport: window.innerHeight };
+      });
+      expect(facts.headerBottom).toBeLessThanOrEqual(facts.viewport);
+      expect(facts.inspectorBottom).toBeLessThanOrEqual(facts.viewport);
+      expect(pageWatch.problems()).toEqual([]);
+      await page.close();
+    },
+    60_000,
+  );
+
   test.skip(
     "a port label stays on one line, because a name that breaks mid-word is not readable",
     async () => {
@@ -345,6 +389,36 @@ suite("the graph at desktop width", () => {
       await page.close();
     },
     60_000,
+  );
+});
+
+suite("the dashboard's run tables at three widths", () => {
+  test(
+    "they stack where they do not fit, and sit side by side only where they do",
+    async () => {
+      for (const width of [1280, 1440, 1920]) {
+        const { page, watch: pageWatch } = await screen({ name: `dashboard-${width}`, width, height: 900 });
+        await waitFor(page, ".dash-pair");
+        const facts = await page.evaluate(() => {
+          const pair = document.querySelector(".dash-pair") as HTMLElement;
+          const wraps = [...document.querySelectorAll<HTMLElement>(".dash-panel .table-wrap")];
+          return {
+            columns: getComputedStyle(pair).gridTemplateColumns.trim().split(/\s+/).length,
+            clipped: wraps.some((wrap) => wrap.scrollWidth > wrap.clientWidth + 1),
+            steps: [...document.querySelectorAll<HTMLElement>(".dash-panel .runstable .num")].every(
+              (cell) => getComputedStyle(cell).whiteSpace === "nowrap",
+            ),
+          };
+        });
+        expect(facts.clipped).toBe(false);
+        expect(facts.steps).toBe(true);
+        if (width >= 1700) expect(facts.columns).toBe(2);
+        else expect(facts.columns).toBe(1);
+        expect(pageWatch.problems()).toEqual([]);
+        await page.close();
+      }
+    },
+    120_000,
   );
 });
 

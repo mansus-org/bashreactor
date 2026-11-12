@@ -178,6 +178,10 @@ export class FakeElement {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), handler]);
   }
 
+  removeEventListener(type: string, handler: (event: unknown) => void): void {
+    this.listeners.set(type, (this.listeners.get(type) ?? []).filter((entry) => entry !== handler));
+  }
+
   /** What the browser does when a person types, ticks or submits: run the handlers wired for it. */
   fire(type: string, event: Record<string, unknown> = {}): void {
     for (const handler of this.listeners.get(type) ?? []) handler({ target: this, preventDefault(): void {}, ...event });
@@ -308,7 +312,21 @@ export class FakeDocument {
     return this.body.querySelectorAll(selector);
   }
 
-  addEventListener(): void {}
+  private listeners = new Map<string, Set<(event: unknown) => void>>();
+
+  addEventListener(type: string, handler: (event: unknown) => void): void {
+    const handlers = this.listeners.get(type) ?? new Set();
+    handlers.add(handler);
+    this.listeners.set(type, handlers);
+  }
+
+  removeEventListener(type: string, handler: (event: unknown) => void): void {
+    this.listeners.get(type)?.delete(handler);
+  }
+
+  listenerCount(type: string): number {
+    return this.listeners.get(type)?.size ?? 0;
+  }
 }
 
 class FakeStorage {
@@ -363,6 +381,8 @@ export interface InstalledDom {
   document: FakeDocument;
   /** The browser globals this put in place, so a test can put them back. */
   names: string[];
+  /** What each name held before it was borrowed, including whether it existed at all. */
+  previous: Map<string, { had: boolean; value: unknown }>;
 }
 
 /**
@@ -389,8 +409,10 @@ export function installDom(options: { href?: string } = {}): InstalledDom {
   }
 
   const names: string[] = [];
+  const previous = new Map<string, { had: boolean; value: unknown }>();
   const install = (name: string, value: unknown): void => {
     names.push(name);
+    previous.set(name, { had: Object.prototype.hasOwnProperty.call(globals, name), value: globals[name] });
     globals[name] = value;
   };
 
@@ -409,13 +431,17 @@ export function installDom(options: { href?: string } = {}): InstalledDom {
   install("CSS", { escape: escapeSelector });
   install("ResizeObserver", FakeResizeObserver);
 
-  return { document: doc, names };
+  return { document: doc, names, previous };
 }
 
-/** Puts the globals installDom() took back the way they were. */
+/** Puts the globals installDom() borrowed back exactly as they were. */
 export function uninstallDom(installed: InstalledDom): void {
   const globals = globalThis as unknown as Record<string, unknown>;
-  for (const name of installed.names) delete globals[name];
+  for (const name of installed.names) {
+    const before = installed.previous.get(name);
+    if (before?.had === true) globals[name] = before.value;
+    else delete globals[name];
+  }
 }
 
 /**

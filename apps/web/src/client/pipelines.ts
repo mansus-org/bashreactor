@@ -90,7 +90,7 @@ export async function renderPipelines(view: HTMLElement, _route: Route, signal: 
           el(
             "a",
             {
-              class: "pipelines-name",
+              class: "table__link table__link--name",
               href: `/app/pipelines/${encodeURIComponent(pipeline.name)}`,
               "data-link": "",
             },

@@ -274,6 +274,17 @@ describe("the counts and the chart", () => {
 });
 
 describe("the two run tables", () => {
+  test("Running now has no Status column, because every row in it is running", async () => {
+    const server = new DashboardServer();
+    server.running = [summary("live", "running", new Date(now - 60_000).toISOString())];
+    const { view } = await open({ server });
+    const headers = panel(view, "Running now")
+      .querySelectorAll("thead th")
+      .map((node) => node.textContent.trim());
+    expect(headers).toEqual(["Run", "Pipeline", "Started", "Duration", "Steps"]);
+    expect(panel(view, "Running now").querySelector(".table__link--id")!.textContent).toBe("live");
+  });
+
   test("show ten rows each and link to the filtered list", async () => {
     const server = new DashboardServer();
     server.runs = Array.from({ length: 12 }, (_entry, index) => ago(60_000 + index, "failed", `f-${index}`));
@@ -497,10 +508,11 @@ function ruleBody(selector: string): string {
 }
 
 describe("the dashboard's layout", () => {
-  test("the paired tables only sit side by side above 1100 px", () => {
-    expect(sheet).toContain("@media (min-width: 1100px)");
+  test("the paired tables only sit side by side where both fit whole", () => {
+    expect(sheet).toContain("@media (min-width: 1700px)");
     expect(sheet).toContain(".dash-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }");
     expect(ruleBody(".dash-pair")).toContain("grid-template-columns: minmax(0, 1fr)");
+    expect(sheet).toContain(".runstable time, .runstable .num { white-space: nowrap; }");
   });
 
   test("the counts are four across, and two by two below 640 px", () => {

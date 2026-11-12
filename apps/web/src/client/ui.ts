@@ -2,7 +2,7 @@
 // a second version of one. The doc comment on each export is the whole of the contract another screen
 // needs: what it is for and how it is called.
 
-import { clearAttribute, el, errorBox, flash, insertNode, removeNode, restamp, sign } from "./dom.js";
+import { clearAttribute, el, errorBox, fill, flash, insertNode, removeNode, restamp, sign } from "./dom.js";
 import type { Child } from "./dom.js";
 import { state as stateOf } from "./run-shared.js";
 import type { RunSummary } from "./api.js";
@@ -102,34 +102,39 @@ export interface PageIdLine {
 export interface PageHeaderOptions {
   crumbs?: (Crumb | string)[];
   title: string;
+  /** Kept beside the title, for a stamp that belongs to the name rather than the page. */
+  titleExtra?: Child;
   actions?: Child[];
   idLine?: string | PageIdLine;
   meta?: [string, Child][];
 }
 
+/** The shared breadcrumb line. A screen whose header is its own toolbar can draw just this. */
+export function breadcrumbs(crumbs: (Crumb | string)[]): HTMLElement {
+  return el(
+    "nav",
+    { class: "crumbs", "aria-label": "Breadcrumb" },
+    ...crumbs.flatMap((entry, index) => {
+      const crumb = typeof entry === "string" ? { label: entry } : entry;
+      const current = index === crumbs.length - 1;
+      const node =
+        current || crumb.href === undefined
+          ? el("span", { class: `crumbs__current${crumb.mono === true ? " mono" : ""}` }, crumb.label)
+          : el("a", { class: crumb.mono === true ? "mono" : "", href: crumb.href, "data-link": "" }, crumb.label);
+      return index === 0 ? [node] : [" / ", node];
+    }),
+  );
+}
+
 /**
  * The one header a screen has: breadcrumbs, the Anybody title, actions on the same row, then the id
  * with its stamps and a meta line. `idLine` may be a string, or `{ id, href?, stamps? }` when a run or
- * pipeline adds its state next to the id. `meta` is `[label, value]` pairs, separated by ` · `.
+ * pipeline adds its state next to the id. `titleExtra` sits immediately after the title. `meta` is
+ * `[label, value]` pairs, separated by ` · `.
  */
 export function pageHeader(options: PageHeaderOptions): HTMLElement {
   const crumbs = options.crumbs ?? [];
-  const crumbLine =
-    crumbs.length === 0
-      ? null
-      : el(
-          "nav",
-          { class: "crumbs", "aria-label": "Breadcrumb" },
-          ...crumbs.flatMap((entry, index) => {
-            const crumb = typeof entry === "string" ? { label: entry } : entry;
-            const current = index === crumbs.length - 1;
-            const node =
-              current || crumb.href === undefined
-                ? el("span", { class: `crumbs__current${crumb.mono === true ? " mono" : ""}` }, crumb.label)
-                : el("a", { class: crumb.mono === true ? "mono" : "", href: crumb.href, "data-link": "" }, crumb.label);
-            return index === 0 ? [node] : [" / ", node];
-          }),
-        );
+  const crumbLine = crumbs.length === 0 ? null : breadcrumbs(crumbs);
 
   const idLine =
     options.idLine === undefined
@@ -152,7 +157,7 @@ export function pageHeader(options: PageHeaderOptions): HTMLElement {
           "p",
           { class: "meta-line" },
           ...options.meta.flatMap(([label, value], index) => [
-            index === 0 ? "" : " · ",
+            index === 0 ? null : el("span", { class: "meta-line__sep" }, " · "),
             el("span", { class: "meta-line__label" }, label),
             " ",
             el("span", { class: "meta-line__value" }, value),
@@ -166,7 +171,14 @@ export function pageHeader(options: PageHeaderOptions): HTMLElement {
     el(
       "div",
       { class: "page-header__title-row" },
-      el("h1", { class: "title" }, options.title),
+      options.titleExtra === undefined
+        ? el("h1", { class: "title" }, options.title)
+        : el(
+            "div",
+            { class: "title-group" },
+            el("h1", { class: "title" }, options.title),
+            options.titleExtra,
+          ),
       options.actions === undefined || options.actions.length === 0
         ? null
         : el("div", { class: "page-header__actions" }, options.actions),
@@ -497,7 +509,7 @@ export function table<T>(columns: TableColumn<T>[], rows: T[], options: TableOpt
             !Array.isArray(content) &&
             "tagName" in content &&
             (content as { tagName?: string }).tagName === "A";
-          td.append(isLink ? holder : el("a", { class: "table__link", href, "data-link": "" }, holder));
+          td.append(isLink ? holder : el("a", { class: "table__link table__link--name", href, "data-link": "" }, holder));
         } else {
           td.append(holder);
         }
@@ -585,8 +597,8 @@ export function runsTable(options: RunsTableOptions = {}): { node: HTMLElement; 
 
   function makeRow(run: RunSummary): RunRow {
     const stamp = el("span", { class: "stamp stamp--status" });
-    const runLink = el("a", { class: "table__link mono", href: `/app/runs/${run.id}`, "data-link": "" }, run.id);
-    const pipelineLink = el("a", { href: `/app/pipelines/${run.pipeline}`, "data-link": "" }, run.pipeline);
+    const runLink = el("a", { class: "table__link table__link--id", href: `/app/runs/${run.id}`, "data-link": "" }, run.id);
+    const pipelineLink = el("a", { class: "table__link--name", href: `/app/pipelines/${run.pipeline}`, "data-link": "" }, run.pipeline);
     const version = el("span", { class: "mono" });
     const started = el("time");
     const duration = el("span", { class: "num" });
@@ -770,10 +782,10 @@ export function confirmDialog(options: { title: string; text?: string; confirmLa
       if (settled) return;
       settled = true;
       resolve(answer);
-      if (dialog.open) dialog.close(answer ? "confirm" : "cancel");
-      removeNode(dialog);
+      if (modal.open) modal.close(answer ? "confirm" : "cancel");
+      removeNode(modal);
     };
-    const dialog = el(
+    const modal = el(
       "dialog",
       { class: "dialog" },
       el(
@@ -789,10 +801,69 @@ export function confirmDialog(options: { title: string; text?: string; confirmLa
         ),
       ),
     );
-    dialog.addEventListener("close", () => finish(dialog.returnValue === "confirm"));
-    document.body.append(dialog);
-    dialog.showModal();
+    modal.addEventListener("close", () => finish(modal.returnValue === "confirm"));
+    document.body.append(modal);
+    modal.showModal();
   });
+}
+
+let dialogCount = 0;
+
+export interface DialogOptions {
+  title: Child;
+  body?: Child;
+  /** Called once, however the dialog was closed. */
+  onClose?: () => void;
+  /** Return false to keep Escape from taking the dialog away while it is busy. */
+  canDismiss?: () => boolean;
+}
+
+export interface DialogHandle {
+  node: HTMLDialogElement;
+  body: HTMLElement;
+  title: HTMLElement;
+  setTitle(title: Child): void;
+  setBody(...children: Child[]): void;
+  close(): void;
+}
+
+/**
+ * A modal dialog with a title and a body the caller can replace, for a screen whose dialog has more
+ * than one face. It is appended and opened at once; `close` removes it and calls `onClose` exactly
+ * once, whether it was closed from a button or with Escape.
+ */
+export function dialog(options: DialogOptions): DialogHandle {
+  const id = `dialog-title-${++dialogCount}`;
+  const title = el("h2", { class: "dialog__title", id }, options.title);
+  const body = el("div", { class: "dialog__body" }, title, options.body ?? null);
+  const node = el("dialog", { class: "dialog", "aria-labelledby": id }, body);
+  let closed = false;
+  const finish = (): void => {
+    if (closed) return;
+    closed = true;
+    if (node.open) node.close();
+    removeNode(node);
+    options.onClose?.();
+  };
+  node.addEventListener("close", finish);
+  node.addEventListener("cancel", (event) => {
+    if (options.canDismiss?.() === false) event.preventDefault();
+  });
+  const handle: DialogHandle = {
+    node,
+    body,
+    title,
+    setTitle(next) {
+      fill(title, [next]);
+    },
+    setBody(...children) {
+      fill(body, [title, ...children]);
+    },
+    close: finish,
+  };
+  document.body.append(node);
+  node.showModal();
+  return handle;
 }
 
 /** One 15 px sentence and, at most, one action. */
@@ -890,102 +961,150 @@ function segmentFill(status: string): { fill: string; stroke: string | null; das
 }
 
 const CHART_TONES = ["succeeded", "running", "failed", "cancelled", "interrupted", "waiting_retry"];
+/** The four states a run can be in, whether or not this window has one in it. */
+const CHART_LEGEND = ["succeeded", "running", "failed", "cancelled"] as const;
+
+function niceStep(rough: number): number {
+  if (!Number.isFinite(rough) || rough <= 0) return 1;
+  const power = 10 ** Math.floor(Math.log10(rough));
+  const fraction = rough / power;
+  const multiplier = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return multiplier * power;
+}
+
+/** Round tick values, from zero to the first one at or above `max`. */
+function chartTicks(max: number): number[] {
+  const rough = max / 3;
+  // A count is never half a run; a sub-second duration still needs fractions.
+  const step = max >= 1 && rough < 1 ? 1 : niceStep(rough);
+  const top = Math.ceil(max / step - 1e-9) * step;
+  const count = Math.max(1, Math.round(top / step));
+  return Array.from({ length: count + 1 }, (_unused, index) =>
+    index === 0 ? 0 : Number((index * step).toPrecision(12)),
+  );
+}
+
+const chartObservers = new Map<Element, ResizeObserver>();
+
+/** A chart replaced by a live screen takes its observer with it when the next one is drawn. */
+function sweepCharts(): void {
+  for (const [node, observer] of chartObservers) {
+    if ((node as unknown as { isConnected?: boolean }).isConnected === false) {
+      observer.disconnect();
+      chartObservers.delete(node);
+    }
+  }
+}
 
 /**
  * Inline SVG bars, stacked from the baseline in the order each bar's segments are given. Each bar is a
- * `<g>` with a `<title>`; a bar with `href` is a link. `yFormat` formats the three y ticks, and the
- * numbers are repeated in a visually hidden table. `height` is the whole chart's height.
+ * `<g>` with a `<title>`; a bar with `href` is a link. Y ticks are round numbers with the top one at or
+ * above the maximum, and the numbers are repeated in a visually hidden table. The SVG is drawn at the
+ * plot's own pixel width, so its labels stay at their size on a phone instead of shrinking with a
+ * viewBox. `height` is the whole chart's height.
  */
 export function barChart(options: BarChartOptions): HTMLElement {
   const bars = options.bars;
   const height = options.height ?? 160;
-  const width = 720;
-  const left = 48;
+  const left = 72;
   const right = 8;
   const top = 8;
   const bottom = 22;
-  const plotWidth = Math.max(1, width - left - right);
-  const plotHeight = Math.max(1, height - top - bottom);
   const yFormat = options.yFormat ?? formatCount;
   const totals = bars.map((bar) => bar.segments.reduce((sum, segment) => sum + Math.max(0, segment.value), 0));
   const max = Math.max(1, ...totals);
+  const ticks = chartTicks(max);
   const present = CHART_TONES.filter((status) => bars.some((bar) => bar.segments.some((segment) => segment.status === status && segment.value > 0)));
+  const plot = el("div", { class: "chart__plot" });
+  let drawnWidth = 0;
 
-  const graphic = svg("svg", {
-    class: "chart__svg",
-    viewBox: `0 0 ${width} ${height}`,
-    width: "100%",
-    height,
-    role: "img",
-    "aria-label": options.yLabel ?? "Chart",
-    "shape-rendering": "crispEdges",
-  });
-  graphic.append(tonePatterns());
-  const axis = svg("g", { class: "chart__axis", fill: "currentColor", stroke: "currentColor" });
-  axis.append(svg("line", { x1: left, y1: top, x2: left, y2: top + plotHeight, "stroke-width": 1 }));
-  axis.append(svg("line", { x1: left, y1: top + plotHeight, x2: left + plotWidth, y2: top + plotHeight, "stroke-width": 1 }));
-  const ticks = [...new Set([0, max / 2, max])];
-  for (const tick of ticks) {
-    const y = top + plotHeight - (tick / max) * plotHeight;
-    axis.append(svg("line", { x1: left - 4, y1: y, x2: left, y2: y, "stroke-width": 1 }));
-    const label = svg("text", {
-      x: left - 8,
-      y: y + 4,
-      "text-anchor": "end",
-      "font-size": 12,
-      stroke: "none",
-      fill: "currentColor",
+  function graphicAt(width: number): SVGSVGElement {
+    const plotWidth = Math.max(1, width - left - right);
+    const plotHeight = Math.max(1, height - top - bottom);
+    const scaleMax = ticks[ticks.length - 1] ?? max;
+    const graphic = svg("svg", {
+      class: "chart__svg",
+      viewBox: `0 0 ${width} ${height}`,
+      width,
+      height,
+      role: "img",
+      "aria-label": options.yLabel ?? "Chart",
+      "shape-rendering": "crispEdges",
     });
-    label.textContent = yFormat(tick);
-    axis.append(label);
-  }
-  graphic.append(axis);
-
-  const slot = plotWidth / Math.max(1, bars.length);
-  const barWidth = Math.max(2, Math.min(40, slot * 0.72));
-  bars.forEach((bar, index) => {
-    const x = left + index * slot + (slot - barWidth) / 2;
-    const group = svg("g", { class: "chart__bar", "data-key": bar.key });
-    const title = svg("title");
-    title.textContent = bar.title;
-    group.append(title);
-    let baseline = top + plotHeight;
-    for (const segment of bar.segments) {
-      if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
-      const segmentHeight = (Math.max(0, segment.value) / max) * plotHeight;
-      baseline -= segmentHeight;
-      const fill = segmentFill(segment.status);
-      group.append(
-        svg("rect", {
-          x,
-          y: baseline,
-          width: barWidth,
-          height: segmentHeight,
-          fill: fill.fill,
-          stroke: fill.stroke ?? "none",
-          "stroke-width": fill.stroke === null ? 0 : 1,
-          ...(fill.dash === null ? {} : { "stroke-dasharray": fill.dash }),
-        }),
-      );
-    }
-    if (bar.href !== undefined) {
-      group.setAttribute("data-href", bar.href);
-      group.setAttribute("role", "link");
-      group.setAttribute("tabindex", "0");
-      const open = (): void => {
-        location.href = bar.href!;
-      };
-      group.addEventListener("click", open);
-      group.addEventListener("keydown", (event) => {
-        const key = (event as KeyboardEvent).key;
-        if (key === "Enter" || key === " ") {
-          (event as KeyboardEvent).preventDefault();
-          open();
-        }
+    graphic.append(tonePatterns());
+    const axis = svg("g", { class: "chart__axis", fill: "currentColor", stroke: "currentColor" });
+    axis.append(svg("line", { x1: left, y1: top, x2: left, y2: top + plotHeight, "stroke-width": 1 }));
+    axis.append(svg("line", { x1: left, y1: top + plotHeight, x2: left + plotWidth, y2: top + plotHeight, "stroke-width": 1 }));
+    for (const tick of ticks) {
+      const y = top + plotHeight - (tick / scaleMax) * plotHeight;
+      axis.append(svg("line", { x1: left - 4, y1: y, x2: left, y2: y, "stroke-width": 1 }));
+      const label = svg("text", {
+        x: left - 8,
+        y: y + 5,
+        "text-anchor": "end",
+        "font-size": 14,
+        stroke: "none",
+        fill: "currentColor",
       });
+      label.textContent = yFormat(tick);
+      axis.append(label);
     }
-    graphic.append(group);
-  });
+    graphic.append(axis);
+
+    const slot = plotWidth / Math.max(1, bars.length);
+    const barWidth = Math.max(2, Math.min(40, slot * 0.72));
+    bars.forEach((bar, index) => {
+      const x = left + index * slot + (slot - barWidth) / 2;
+      const group = svg("g", { class: "chart__bar", "data-key": bar.key });
+      const title = svg("title");
+      title.textContent = bar.title;
+      group.append(title);
+      let baseline = top + plotHeight;
+      for (const segment of bar.segments) {
+        if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
+        const segmentHeight = (Math.max(0, segment.value) / scaleMax) * plotHeight;
+        baseline -= segmentHeight;
+        const tone = segmentFill(segment.status);
+        group.append(
+          svg("rect", {
+            x,
+            y: baseline,
+            width: barWidth,
+            height: segmentHeight,
+            fill: tone.fill,
+            stroke: tone.stroke ?? "none",
+            "stroke-width": tone.stroke === null ? 0 : 1,
+            ...(tone.dash === null ? {} : { "stroke-dasharray": tone.dash }),
+          }),
+        );
+      }
+      if (bar.href !== undefined) {
+        group.setAttribute("data-href", bar.href);
+        group.setAttribute("role", "link");
+        group.setAttribute("tabindex", "0");
+        const open = (): void => {
+          location.href = bar.href!;
+        };
+        group.addEventListener("click", open);
+        group.addEventListener("keydown", (event) => {
+          const key = (event as KeyboardEvent).key;
+          if (key === "Enter" || key === " ") {
+            (event as KeyboardEvent).preventDefault();
+            open();
+          }
+        });
+      }
+      graphic.append(group);
+    });
+    return graphic;
+  }
+
+  function draw(): void {
+    const width = plot.clientWidth > 0 ? Math.round(plot.clientWidth) : 720;
+    if (drawnWidth === width && plot.children.length > 0) return;
+    drawnWidth = width;
+    plot.replaceChildren(graphicAt(width));
+  }
 
   const legend =
     options.legend === false
@@ -993,7 +1112,7 @@ export function barChart(options: BarChartOptions): HTMLElement {
       : el(
           "figcaption",
           { class: "chart__legend" },
-          ...present.map((status) =>
+          ...CHART_LEGEND.map((status) =>
             el(
               "span",
               { class: `chart__legend-entry chart__legend-entry--${status}` },
@@ -1025,9 +1144,16 @@ export function barChart(options: BarChartOptions): HTMLElement {
     ),
   );
 
-  return el("figure", { class: "chart" }, graphic, legend, data);
+  const figure = el("figure", { class: "chart" }, plot, legend, data);
+  sweepCharts();
+  draw();
+  if (typeof ResizeObserver !== "undefined") {
+    const observer = new ResizeObserver(() => draw());
+    observer.observe(plot);
+    chartObservers.set(plot, observer);
+  }
+  return figure;
 }
-
 /** The honest answer for a screen that its own ticket has not built yet. */
 export function notImplemented(view: HTMLElement, screen: string, ticket: string): void {
   view.replaceChildren(

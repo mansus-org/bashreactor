@@ -5,6 +5,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildAssets } from "../assets.ts";
 import { installDom, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 
 const dom = installDom({ href: "http://x/app/runs" });
@@ -98,9 +99,28 @@ describe("formatters", () => {
   });
 });
 
+describe("pageHeader", () => {
+  test("draws a shared breadcrumb, and an extra that belongs beside the title", () => {
+    const header = ui.pageHeader({
+      crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: "count-words" }],
+      title: "count-words",
+      titleExtra: ui.typeStamp("bash"),
+    });
+    const crumbs = fake(header.querySelector(".crumbs")!);
+    expect(crumbs.querySelectorAll("a").map((node) => node.textContent)).toEqual(["Blocks"]);
+    expect(crumbs.querySelector(".crumbs__current")!.textContent).toBe("count-words");
+    expect(header.querySelector(".title-group .title")!.textContent).toBe("count-words");
+    expect(header.querySelector(".title-group .stamp")!.textContent).toBe("bash");
+
+    const bare = ui.breadcrumbs([{ label: "Blocks", href: "/app/blocks" }, "New"]);
+    expect(bare.querySelectorAll("a").length).toBe(1);
+    expect(bare.querySelector(".crumbs__current")!.textContent).toBe("New");
+  });
+});
+
 describe("runsTable", () => {
   test("inserts in order, patches in place and flashes only the row that changed", () => {
-    const table = ui.runsTable({ columns: ["status", "run", "version", "steps"] });
+    const table = ui.runsTable({ columns: ["status", "run", "pipeline", "version", "steps"] });
     table.update([run("b", "succeeded")]);
     const body = fake(table.node.querySelector(".table tbody")!);
     const firstRow = body.children[0]!;
@@ -125,6 +145,8 @@ describe("runsTable", () => {
     // And it carries its own status, though it arrived after the table was first drawn.
     expect(body.children[0]!.querySelector(".stamp")!.textContent).toContain("failed");
     expect(firstRow.querySelector(".stamp")!.textContent).toContain("running");
+    expect(firstRow.querySelector(".table__link--id")!.textContent).toBe("b");
+    expect(firstRow.querySelector(".table__link--name")!.textContent).toBe("word-report");
   });
 
   test("shows an em dash for a field an older server did not send", () => {
@@ -188,6 +210,48 @@ describe("tabs and segmented controls", () => {
   });
 });
 
+describe("dialog", () => {
+  test("shows a title and a body, replaces both, and closes once", () => {
+    let closed = 0;
+    const handle = ui.dialog({ title: "First", body: "the first body", onClose: () => void (closed += 1) });
+    expect(document.body.querySelector("dialog")).toBe(handle.node);
+    expect(handle.title.textContent).toBe("First");
+    expect(handle.body.textContent).toContain("the first body");
+
+    handle.setTitle("Second");
+    handle.setBody("the second body");
+    expect(handle.body.textContent).toContain("Second");
+    expect(handle.body.textContent).toContain("the second body");
+    expect(handle.body.textContent).not.toContain("the first body");
+
+    handle.close();
+    expect(document.body.querySelector("dialog")).toBeNull();
+    handle.close();
+    expect(closed).toBe(1);
+  });
+
+  test("Escape cannot take a busy dialog away", () => {
+    let busy = true;
+    let prevented = false;
+    const handle = ui.dialog({ title: "Busy", canDismiss: () => !busy });
+    fake(handle.node).fire("cancel", {
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(true);
+    busy = false;
+    prevented = false;
+    fake(handle.node).fire("cancel", {
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(false);
+    handle.close();
+  });
+});
+
 describe("barChart", () => {
   test("one group with a title per bar, stacked from the baseline, with a hidden table", () => {
     const chart = ui.barChart({
@@ -221,11 +285,19 @@ describe("barChart", () => {
     expect(hidden.textContent).toContain("5 Nov, 20:00");
     expect(hidden.textContent).toContain("1");
     expect(hidden.textContent).toContain("2");
-    expect(chart.querySelectorAll(".chart__legend-entry").length).toBe(2);
+    const legend = [...chart.querySelectorAll(".chart__legend-entry")].map((node) => node.textContent.trim());
+    expect(legend).toEqual(["succeeded", "running", "failed", "cancelled"]);
   });
 });
 
 describe("table", () => {
+  test("every table stacks below 640 px, and not a screen's copy of one", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/@media \(max-width: 640px\) \{\s*\.table \{[^}]*table-layout: auto;/);
+    expect(sheet).toContain(".table tbody td::before, .table tbody th::before { content: attr(data-label)");
+    expect(sheet).not.toMatch(/\.(runs-list__body|blocks-list|block-page|pipeline-runs-table) \.table thead/);
+  });
+
   test("an empty table is a sentence and one action", () => {
     const node = ui.table([{ header: "Name", cell: (row: string) => row }], [], {
       empty: "No blocks in the library yet.",
@@ -250,6 +322,23 @@ describe("table", () => {
     expect(cells[1]!.classList.contains("num")).toBe(true);
     const link = cells[0]!.querySelector("a.table__link")!;
     expect(link.getAttribute("href")).toBe("/app/blocks/count-words");
+    expect(link.classList.contains("table__link--name")).toBe(true);
+  });
+
+  test("a name link is bold reading text, an id link is mono, and both underline on hover", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/\.table__link--name \{[^}]*font-family: var\(--font-text\);[^}]*font-weight: 700;/);
+    expect(sheet).toMatch(/\.table__link--id \{[^}]*font-family: var\(--font-code\);/);
+    expect(sheet).toMatch(/\.table__link--id:hover \{[^}]*text-decoration: underline;/);
+    expect(sheet).not.toContain(".pipelines-name");
+  });
+
+  test("the page title has one font size, not a transition hack's second one", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    const found = /(?:^|\n)\.title \{([^}]*)\}/.exec(sheet);
+    expect(found).not.toBeNull();
+    expect(found![1]!.match(/font-size:/g)?.length).toBe(1);
+    expect(found![1]).toContain("font-size: var(--fs-title);");
   });
 });
 
@@ -260,6 +349,17 @@ describe("codeView", () => {
     expect(numbered.querySelector(".codeview__code")!.textContent).toBe("first\nsecond\n");
     const plain = ui.codeView("only", { lineNumbers: false });
     expect(plain.querySelector(".codeview__gutter")).toBeNull();
+  });
+});
+
+describe("the test kit", () => {
+  test("puts back the globals a file borrowed, rather than deleting someone else's", () => {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    const before = globals.localStorage;
+    const nested = installDom({ href: "http://x/nested" });
+    globals.localStorage = { borrowed: true };
+    uninstallDom(nested);
+    expect(globals.localStorage).toBe(before);
   });
 });
 

@@ -98,8 +98,6 @@ main:focus { outline: none; }
   margin: 0;
   font-family: var(--font-display); font-stretch: 50%; font-weight: 900;
   font-size: var(--fs-title);
-  /* The old run-page test reads the display floor as a clamp; 2rem is --fs-title at the default size. */
-  font-size: clamp(2rem, 2.5vw, 2rem);
   line-height: 1; letter-spacing: 0.01em;
   overflow-wrap: anywhere;
 }
@@ -122,6 +120,7 @@ main:focus { outline: none; }
 .crumbs { font-size: var(--fs-ui); line-height: 20px; }
 .crumbs__current { font-weight: 700; }
 .page-header__title-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--s2) var(--s4); }
+.title-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
 .page-header__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
 .id-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); font-size: var(--fs-ui); }
 .meta-line { font-size: var(--fs-ui); line-height: 20px; }
@@ -272,16 +271,51 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .table__row--link:hover::before {
   content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--ink);
 }
-.table__row--link:hover .table__link { text-decoration: underline; text-decoration-thickness: 2px; }
-.table__link { color: inherit; text-decoration: none; }
+.table__row--link:hover .table__link,
+.table__row--link:hover .table__link--name,
+.table__row--link:hover .table__link--id,
+.table__link:hover,
+.table__link--name:hover,
+.table__link--id:hover {
+  text-decoration: underline; text-decoration-thickness: 2px;
+}
+.table__link, .table__link--name, .table__link--id {
+  color: inherit; text-decoration: none; white-space: nowrap;
+}
 .table__link::after { content: ""; position: absolute; inset: 0; }
+.table__link--name { font-family: var(--font-text); font-weight: 700; }
+.table__link--id { font-family: var(--font-code); font-variant-ligatures: none; }
 .table__empty td {
   height: auto; padding: var(--s4) 0; border-bottom: 0;
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3);
   font-size: var(--fs-body); line-height: 1.5;
 }
 .runstable .stamp { vertical-align: middle; }
-.runstable time { white-space: nowrap; }
+.runstable time, .runstable .num { white-space: nowrap; }
+
+/* A table is the same table on a phone as on a laptop: one block per row, its first cell on top,
+   then a label and value line for every other cell. */
+@media (max-width: 640px) {
+  .table { table-layout: auto; }
+  .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .table, .table tbody, .table tr, .table th, .table td { display: block; width: 100%; }
+  .table tbody tr { padding: var(--s2) 0; border-bottom: var(--rule-dotted); }
+  .table tbody tr:last-child { border-bottom: 0; }
+  .table tbody td, .table tbody th {
+    display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--s2);
+    height: auto; padding: 2px 0; border: 0; text-align: left;
+  }
+  .table tbody td::before, .table tbody th::before { content: attr(data-label); font-weight: 700; }
+  .table tbody td:first-child, .table tbody th:first-child { display: block; padding-bottom: var(--s1); }
+  .table tbody td:first-child::before, .table tbody th:first-child::before { content: none; }
+  .table .num { text-align: left; }
+  .table tbody tr.table__empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
+  .table tbody tr.table__empty td {
+    display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3);
+    padding: var(--s4) 0;
+  }
+  .table tbody tr.table__empty td::before { content: none; }
+}
 
 /* ---------- run history ---------- */
 
@@ -337,6 +371,7 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 /* ---------- charts ---------- */
 
 .chart { display: grid; gap: var(--s2); margin: 0; min-width: 0; }
+.chart__plot { min-width: 0; }
 .chart__svg { display: block; width: 100%; height: auto; color: var(--ink); }
 .chart__legend { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s4); font-size: var(--fs-ui); }
 .chart__legend-entry { display: inline-flex; align-items: center; gap: var(--s1); }
@@ -347,6 +382,72 @@ input[type="checkbox"]:disabled::before { border-style: dashed; }
 .swatch--cancelled { background: var(--tone-hatch); }
 .swatch--interrupted { background: var(--tone-sparse); }
 .swatch--waiting_retry { background: transparent; border-style: dashed; }
+
+/* ---------- the graph, shared by every screen that draws one ---------- */
+
+.stage {
+  position: relative; min-height: 0;
+  border: var(--rule); overflow: auto;
+}
+.canvas { position: relative; }
+.wires { position: absolute; left: 0; top: 0; pointer-events: none; color: var(--ink); }
+.wire { fill: none; stroke: currentColor; stroke-width: 2; }
+.wire--needs { stroke-dasharray: 2 2; }
+.wire.is-on { stroke-width: 4; }
+.wire--needs.is-on { stroke-dasharray: 4 4; }
+.stage--stale .wire { stroke-dasharray: 2 6; stroke-width: 2; }
+
+.node {
+  position: absolute; display: grid; gap: var(--s1);
+  min-height: var(--row-h);
+  padding: var(--s2) var(--s3);
+  border: var(--control-border); border-radius: 0;
+  background: var(--paper); color: var(--ink);
+  font: inherit; font-size: var(--fs-ui); line-height: 1.5;
+  text-align: left; cursor: pointer;
+}
+.node:hover .node__id { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.18em; }
+.node[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.node[aria-pressed="true"] .node__problem .stamp { background: var(--paper); color: var(--ink); }
+.node__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s1) var(--s2); }
+.node__id { font-weight: 700; overflow-wrap: anywhere; }
+.node__title { line-height: 1.3; }
+.node__uses { font-family: var(--font-code); font-variant-ligatures: none; overflow-wrap: anywhere; }
+.node__problem { margin-top: 2px; }
+.node__ports { display: grid; gap: 2px; margin-top: var(--s1); }
+
+/* One column of ports, not one per side. The graph sets a step's width from the room its columns
+   leave behind, and two columns of names inside that width is how `total_words` came out as
+   `total_wor/ds` at desktop width. The mark on each side still says which way the name runs. */
+.ports { display: grid; align-content: start; gap: 2px; min-width: 0; }
+.port {
+  position: relative; display: block;
+  font-family: var(--font-code); font-variant-ligatures: none;
+  line-height: 1.5; overflow-wrap: anywhere;
+}
+.port__mark {
+  position: absolute; top: var(--s1); left: -18px; width: 10px; height: 10px;
+  background: var(--ink); outline: 2px solid var(--paper);
+}
+.port__mark--value { background: var(--paper); outline: var(--control-border); outline-offset: -2px; }
+.stage--flow .port--out { text-align: right; }
+.stage--flow .port--out .port__mark { left: auto; right: -18px; }
+
+.stage--stale .node { background: var(--tone-faint) var(--paper); cursor: default; }
+.stage--stale .node > * { justify-self: start; background: var(--paper); }
+.stage--stale .node__ports { background: none; }
+.stage--stale .port__name { background: var(--paper); }
+
+.legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s4);
+  margin-top: var(--s2); font-size: var(--fs-ui); line-height: 20px;
+}
+.legend > span { display: inline-flex; align-items: center; gap: var(--s1); }
+.sw { display: inline-block; flex: none; }
+.sw--wired { width: 10px; height: 10px; background: var(--ink); }
+.sw--value { width: 10px; height: 10px; border: var(--control-border); }
+.sw--data { width: var(--s5); height: 2px; background: var(--ink); }
+.sw--needs { width: var(--s5); height: 2px; border-top: 2px dashed var(--ink); }
 
 /* ---------- old screen containers, at the new scale ---------- */
 

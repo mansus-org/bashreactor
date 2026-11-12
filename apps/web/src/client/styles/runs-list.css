@@ -23,37 +23,3 @@
 @media (max-width: 640px) {
   .runs-list__pipeline { flex-basis: 100%; }
 }
-
-/* BASHR-62: candidate for base.css, where every table stacks this way below 640 px. Until that
-   rule lives there, this screen's table carries it: the first cell on top, then label/value lines
-   read from each cell's data-label. */
-@media (max-width: 640px) {
-  .runs-list__body .table thead { display: none; }
-  .runs-list__body .table,
-  .runs-list__body .table tbody,
-  .runs-list__body .table tr,
-  .runs-list__body .table td { display: block; width: 100%; }
-  .runs-list__body .table tr { padding: var(--s2) 0; border-bottom: var(--rule-dotted); }
-  .runs-list__body .table tbody tr:last-child { border-bottom: 0; }
-  .runs-list__body .table td {
-    display: grid;
-    grid-template-columns: 8rem minmax(0, 1fr);
-    gap: var(--s2);
-    height: auto;
-    padding: 0;
-    border: 0;
-  }
-  .runs-list__body .table td::before { content: attr(data-label); font-weight: 700; }
-  .runs-list__body .table td:first-child { display: block; padding-bottom: var(--s1); }
-  .runs-list__body .table td:first-child::before { content: none; }
-  .runs-list__body .table .num { text-align: left; }
-  .runs-list__body .table tbody tr.table__empty { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); }
-  .runs-list__body .table tbody tr.table__empty td {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--s3);
-    padding: var(--s4) 0;
-  }
-  .runs-list__body .table tbody tr.table__empty td::before { content: none; }
-}

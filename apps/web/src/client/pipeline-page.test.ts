@@ -328,9 +328,9 @@ describe("the duration chart's ticks", () => {
     const clock = new FakeClock();
     clock.set(T0);
     const { view, controller } = await openPipeline(server, "word-report", "", { clock });
-    await waitFor("the three ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
+    await waitFor("the round ticks", () => view.querySelectorAll(".chart__axis text").length === 4);
 
-    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "0.25 s", "0.5 s"]);
+    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "0.2 s", "0.4 s", "0.6 s"]);
     controller.abort();
   });
 
@@ -340,9 +340,29 @@ describe("the duration chart's ticks", () => {
     const clock = new FakeClock();
     clock.set(T0);
     const { view, controller } = await openPipeline(server, "word-report", "", { clock });
-    await waitFor("the three ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
+    await waitFor("the round ticks", () => view.querySelectorAll(".chart__axis text").length === 4);
 
-    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "2 m 30 s", "5 m"]);
+    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "1 m 40 s", "3 m 20 s", "5 m"]);
+    controller.abort();
+  });
+
+  test("a longest run of 1.58 s has a round top tick above it, not a floored 1 s", async () => {
+    const server = withBlocks(new FakeServer());
+    server.runs = [runLasting("20261105T201258Z-f1549287", 1_580)];
+    const clock = new FakeClock();
+    clock.set(T0);
+    const { view, controller } = await openPipeline(server, "word-report", "", { clock });
+    await waitFor("the round ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
+
+    const labels = view.querySelectorAll(".chart__axis text");
+    expect(labels.map((node) => text(node))).toEqual(["0", "1 s", "2 s"]);
+    // The top tick is 2 s, so every tick and the 1.58 s bar are measured against that, not 1.58 s.
+    const tickYs = labels.map((node) => Number(node.getAttribute("y")) - 5);
+    expect(tickYs.every((y) => y >= 8 && y <= 138)).toBe(true);
+    expect(tickYs[0]).toBeGreaterThan(tickYs[tickYs.length - 1]!);
+    const bar = view.querySelector(".chart__bar rect")!;
+    expect(Number(bar.getAttribute("height"))).toBeCloseTo((1_580 / 2_000) * 130, 1);
+    expect(Number(bar.getAttribute("y"))).toBeCloseTo(8 + 130 - (1_580 / 2_000) * 130, 1);
     controller.abort();
   });
 });

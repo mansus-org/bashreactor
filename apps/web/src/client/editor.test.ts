@@ -7,8 +7,9 @@
 // routes with the shapes apps/api answers, and records the paths it was asked for.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { buildAssets } from "../assets.ts";
 import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Route } from "./app.ts";
 
@@ -410,6 +411,47 @@ describe("the workbench", () => {
     expect(view.querySelector(".editor__inspector")).not.toBeNull();
     expect(view.querySelector(".editor__problems")).not.toBeNull();
     expect(view.querySelector(".editor .legend")!.textContent).toContain("wired");
+  });
+
+  test("the graph's rules are shared, and no screen keeps a second copy", () => {
+    const base = readFileSync(join(import.meta.dir, "styles/base.css"), "utf8");
+    expect(base).toContain(".stage {");
+    expect(base).toContain(".node {");
+    expect(base).toContain(".legend {");
+    for (const file of ["editor.css", "run-page.css", "pipelines.css"]) {
+      const css = readFileSync(join(import.meta.dir, "styles", file), "utf8");
+      expect(css).not.toMatch(/(?:^|\n)\.(stage|node|wire|wires|canvas|ports|port|legend|sw)\b/);
+    }
+  });
+
+  test("selecting a step opens its inspector; Collapse stays collapsed across selections", async () => {
+    const view = await open(PINNED);
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(false);
+    expect(button(view, "Collapse")).toBeDefined();
+
+    button(view, "Collapse")!.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+
+    const check = view.querySelector('.node[data-step="check"]')!;
+    check.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+    expect(button(view, "Expand")).toBeDefined();
+
+    button(view, "Expand")!.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(false);
+    expect(button(view, "Collapse")).toBeDefined();
+
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/\.editor__panes \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
+    expect(sheet).toMatch(/\.editor__right \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;/);
+    expect(sheet).toMatch(/\.editor--inspector-open \.editor__right \{[^}]*grid-template-rows: minmax\(0, 55fr\) minmax\(0, 45fr\);/);
+    expect(sheet).toMatch(/\.editor__inspector \{[^}]*max-height: 45%;/);
+  });
+
+  test("with no step selected the inspector is folded", async () => {
+    const view = await open("name: empty\nsteps: {}\n");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+    expect(button(view, "Expand")).toBeUndefined();
   });
 
   test("the open-by-name box and the New pipeline button are gone; Add step and Undo stay", async () => {

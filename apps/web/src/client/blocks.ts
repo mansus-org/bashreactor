@@ -7,13 +7,14 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { BlockList, BlockVersion, LibraryName } from "./api.js";
-import { announce, el, errorBox, fill, insertNode, stateLine } from "./dom.js";
+import { announce, el, errorBox, fill, stateLine } from "./dom.js";
 import { parseBlock } from "./model.js";
 import type { Contract, Decl, Problem } from "./model.js";
 import type { Route } from "./app.js";
 import { navigate } from "./app.js";
 import {
   alarm,
+  breadcrumbs,
   button,
   codeView,
   emptyState,
@@ -131,7 +132,7 @@ async function renderList(view: HTMLElement, signal?: AbortSignal): Promise<void
     entry,
     nameLink: el(
       "a",
-      { class: "table__link", href: `/app/blocks/${encodeURIComponent(entry.name)}`, "data-link": "" },
+      { class: "table__link table__link--name", href: `/app/blocks/${encodeURIComponent(entry.name)}`, "data-link": "" },
       entry.name,
     ),
     description: el("span", {}, "—"),
@@ -222,22 +223,6 @@ function versionSelect(input: BlockHeaderInput): HTMLSelectElement {
   }
   select.value = String(input.version.version);
   return select;
-}
-
-/**
- * The block's runtime belongs immediately after its name, which is the one part of a page header the
- * shared component does not take. Grouping the title and its stamp keeps them together while the
- * actions stay on the right.
- */
-// BASHR-62: candidate for ui.ts
-function titleWithStamp(header: HTMLElement, node: HTMLElement): void {
-  const title = header.querySelector<HTMLElement>("h1.title");
-  if (title === null) return;
-  const parent = title.parentElement ?? (title as unknown as { parent?: HTMLElement | null }).parent ?? null;
-  if (parent === null) return;
-  const group = el("div", { class: "block-title" });
-  insertNode(parent, group, title);
-  group.append(title, node);
 }
 
 function problemAlarm(problems: Problem[]): HTMLElement {
@@ -398,6 +383,7 @@ async function renderBlockPage(view: HTMLElement, route: Route, name: string, le
   const header = pageHeader({
     crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: name }],
     title: name,
+    titleExtra: parsed === null ? undefined : typeStamp(parsed.runtime),
     actions: [
       versionSelect({ view, name, version, record, route }),
       ...(canWrite()
@@ -405,7 +391,6 @@ async function renderBlockPage(view: HTMLElement, route: Route, name: string, le
         : []),
     ],
   });
-  if (parsed !== null) titleWithStamp(header, typeStamp(parsed.runtime));
   if (parsed !== null && parsed.description !== "") header.append(el("p", { class: "lead" }, parsed.description));
 
   const problems =
@@ -601,34 +586,6 @@ function writerOutputs(parsed: Contract): HTMLElement {
 
 function currentName(parsed: Contract): string | null {
   return parsed.name === null || parsed.name === "" || parsed.name === "new-block" ? null : parsed.name;
-}
-
-/**
- * The writer's breadcrumb. `pageHeader` always draws a title with its crumbs, and the writer's title
- * is its toolbar, so this is the smallest crumb line the writer needs on its own.
- */
-// BASHR-62: candidate for ui.ts
-function writerCrumbs(name: string | null): HTMLElement {
-  const entries =
-    name === null
-      ? [{ label: "Blocks", href: "/app/blocks" }, { label: "New" }]
-      : [
-          { label: "Blocks", href: "/app/blocks" },
-          { label: name, href: `/app/blocks/${encodeURIComponent(name)}` },
-          { label: "New version" },
-        ];
-  return el(
-    "nav",
-    { class: "crumbs", "aria-label": "Breadcrumb" },
-    ...entries.flatMap((entry, index) => {
-      const current = index === entries.length - 1;
-      const node =
-        current || entry.href === undefined
-          ? el("span", { class: "crumbs__current" }, entry.label)
-          : el("a", { href: entry.href, "data-link": "" }, entry.label);
-      return index === 0 ? [node] : [" / ", node];
-    }),
-  );
 }
 
 function renderWriterShell(
@@ -835,7 +792,13 @@ function renderWriterShell(
         void publish();
       },
     },
-    writerCrumbs(base !== null ? base.name : null),
+    base !== null
+      ? breadcrumbs([
+          { label: "Blocks", href: "/app/blocks" },
+          { label: base.name, href: `/app/blocks/${encodeURIComponent(base.name)}` },
+          { label: "New version" },
+        ])
+      : breadcrumbs([{ label: "Blocks", href: "/app/blocks" }, { label: "New" }]),
     el(
       "div",
       { class: "block-writer__toolbar" },
