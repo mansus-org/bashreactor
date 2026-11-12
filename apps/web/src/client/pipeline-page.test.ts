@@ -354,7 +354,15 @@ describe("the duration chart's ticks", () => {
     const { view, controller } = await openPipeline(server, "word-report", "", { clock });
     await waitFor("the round ticks", () => view.querySelectorAll(".chart__axis text").length === 3);
 
-    expect(view.querySelectorAll(".chart__axis text").map((node) => text(node))).toEqual(["0", "1 s", "2 s"]);
+    const labels = view.querySelectorAll(".chart__axis text");
+    expect(labels.map((node) => text(node))).toEqual(["0", "1 s", "2 s"]);
+    // The top tick is 2 s, so every tick and the 1.58 s bar are measured against that, not 1.58 s.
+    const tickYs = labels.map((node) => Number(node.getAttribute("y")) - 5);
+    expect(tickYs.every((y) => y >= 8 && y <= 138)).toBe(true);
+    expect(tickYs[0]).toBeGreaterThan(tickYs[tickYs.length - 1]!);
+    const bar = view.querySelector(".chart__bar rect")!;
+    expect(Number(bar.getAttribute("height"))).toBeCloseTo((1_580 / 2_000) * 130, 1);
+    expect(Number(bar.getAttribute("y"))).toBeCloseTo(8 + 130 - (1_580 / 2_000) * 130, 1);
     controller.abort();
   });
 });

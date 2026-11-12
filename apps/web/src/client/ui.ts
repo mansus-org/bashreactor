@@ -1021,6 +1021,7 @@ export function barChart(options: BarChartOptions): HTMLElement {
   function graphicAt(width: number): SVGSVGElement {
     const plotWidth = Math.max(1, width - left - right);
     const plotHeight = Math.max(1, height - top - bottom);
+    const scaleMax = ticks[ticks.length - 1] ?? max;
     const graphic = svg("svg", {
       class: "chart__svg",
       viewBox: `0 0 ${width} ${height}`,
@@ -1035,7 +1036,7 @@ export function barChart(options: BarChartOptions): HTMLElement {
     axis.append(svg("line", { x1: left, y1: top, x2: left, y2: top + plotHeight, "stroke-width": 1 }));
     axis.append(svg("line", { x1: left, y1: top + plotHeight, x2: left + plotWidth, y2: top + plotHeight, "stroke-width": 1 }));
     for (const tick of ticks) {
-      const y = top + plotHeight - (tick / max) * plotHeight;
+      const y = top + plotHeight - (tick / scaleMax) * plotHeight;
       axis.append(svg("line", { x1: left - 4, y1: y, x2: left, y2: y, "stroke-width": 1 }));
       const label = svg("text", {
         x: left - 8,
@@ -1061,7 +1062,7 @@ export function barChart(options: BarChartOptions): HTMLElement {
       let baseline = top + plotHeight;
       for (const segment of bar.segments) {
         if (segment.value <= 0 || segment.status === "pending" || segment.status === "skipped") continue;
-        const segmentHeight = (Math.max(0, segment.value) / max) * plotHeight;
+        const segmentHeight = (Math.max(0, segment.value) / scaleMax) * plotHeight;
         baseline -= segmentHeight;
         const tone = segmentFill(segment.status);
         group.append(
