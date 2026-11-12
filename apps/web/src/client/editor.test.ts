@@ -7,7 +7,7 @@
 // routes with the shapes apps/api answers, and records the paths it was asked for.
 
 import { afterAll, beforeEach, describe, expect, test } from "bun:test";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { buildAssets } from "../assets.ts";
 import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
@@ -411,6 +411,17 @@ describe("the workbench", () => {
     expect(view.querySelector(".editor__inspector")).not.toBeNull();
     expect(view.querySelector(".editor__problems")).not.toBeNull();
     expect(view.querySelector(".editor .legend")!.textContent).toContain("wired");
+  });
+
+  test("the graph's rules are shared, and no screen keeps a second copy", () => {
+    const base = readFileSync(join(import.meta.dir, "styles/base.css"), "utf8");
+    expect(base).toContain(".stage {");
+    expect(base).toContain(".node {");
+    expect(base).toContain(".legend {");
+    for (const file of ["editor.css", "run-page.css", "pipelines.css"]) {
+      const css = readFileSync(join(import.meta.dir, "styles", file), "utf8");
+      expect(css).not.toMatch(/(?:^|\n)\.(stage|node|wire|wires|canvas|ports|port|legend|sw)\b/);
+    }
   });
 
   test("the inspector folds to its header, so the graph gets the column's spare height", async () => {
