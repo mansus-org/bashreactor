@@ -152,7 +152,7 @@ export function pageHeader(options: PageHeaderOptions): HTMLElement {
           "p",
           { class: "meta-line" },
           ...options.meta.flatMap(([label, value], index) => [
-            index === 0 ? "" : " · ",
+            index === 0 ? null : el("span", { class: "meta-line__sep" }, " · "),
             el("span", { class: "meta-line__label" }, label),
             " ",
             el("span", { class: "meta-line__value" }, value),

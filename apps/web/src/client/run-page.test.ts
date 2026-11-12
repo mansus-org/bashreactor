@@ -653,6 +653,8 @@ describe("the header of a run", () => {
     expect(metaValue(view, "Started").textContent).toBe("4 min ago");
     expect(metaValue(view, "Duration").textContent).toBe("4 m 07 s");
     expect(metaValue(view, "Steps").textContent).toBe("1 / 2");
+    expect(metaValue(view, "Finished").hidden).toBe(true);
+    expect(one(view.querySelector(".meta-line"), "the meta line").textContent).not.toContain("· ·");
 
     const finishedClock = new FakeClock();
     finishedClock.set("2026-11-04T13:00:00Z");

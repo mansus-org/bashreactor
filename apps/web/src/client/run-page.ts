@@ -86,14 +86,19 @@ function stateChanged(before: Run, after: Run): string[] {
   return changed;
 }
 
-function metaPair(header: HTMLElement, label: string): { label: HTMLElement; value: HTMLElement } | null {
+function metaPair(
+  header: HTMLElement,
+  label: string,
+): { label: HTMLElement; value: HTMLElement; separator: HTMLElement | null } | null {
   const labelNode = [...header.querySelectorAll<HTMLElement>(".meta-line__label")].find((node) => node.textContent === label);
   if (labelNode === undefined) return null;
   const parent = labelNode.parentElement ?? (labelNode as unknown as { parent: HTMLElement | null }).parent;
   if (parent === null) return null;
   const index = [...parent.children].indexOf(labelNode);
   const value = parent.children[index + 1] as HTMLElement | undefined;
-  return value === undefined ? null : { label: labelNode, value };
+  const before = parent.children[index - 1] as HTMLElement | undefined;
+  const separator = before?.classList.contains("meta-line__sep") === true ? before : null;
+  return value === undefined ? null : { label: labelNode, value, separator };
 }
 
 function lineNode(line: LogLine, number: number): HTMLElement {
@@ -399,6 +404,7 @@ export async function renderRunPage(
     if (finishedPair !== null) {
       finishedPair.label.hidden = ended === null;
       finishedPair.value.hidden = ended === null;
+      if (finishedPair.separator !== null) finishedPair.separator.hidden = ended === null;
       finishedValue.textContent = ended ?? "";
       if (run.finished_at !== null) {
         finishedValue.setAttribute("datetime", run.finished_at);
