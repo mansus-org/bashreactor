@@ -274,6 +274,17 @@ describe("the counts and the chart", () => {
 });
 
 describe("the two run tables", () => {
+  test("Running now has no Status column, because every row in it is running", async () => {
+    const server = new DashboardServer();
+    server.running = [summary("live", "running", new Date(now - 60_000).toISOString())];
+    const { view } = await open({ server });
+    const headers = panel(view, "Running now")
+      .querySelectorAll("thead th")
+      .map((node) => node.textContent.trim());
+    expect(headers).toEqual(["Run", "Pipeline", "Started", "Duration", "Steps"]);
+    expect(panel(view, "Running now").querySelector(".table__link--id")!.textContent).toBe("live");
+  });
+
   test("show ten rows each and link to the filtered list", async () => {
     const server = new DashboardServer();
     server.runs = Array.from({ length: 12 }, (_entry, index) => ago(60_000 + index, "failed", `f-${index}`));

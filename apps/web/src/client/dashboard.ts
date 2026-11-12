@@ -214,7 +214,7 @@ function chartFor(model: DashboardModel, window: DashboardWindow): HTMLElement {
   });
 }
 
-const TABLE_COLUMNS: RunColumn[] = ["status", "run", "pipeline", "started", "duration", "steps"];
+const TABLE_COLUMNS: RunColumn[] = ["run", "pipeline", "started", "duration", "steps"];
 const FAILED_COLUMNS: RunColumn[] = ["run", "pipeline", "started", "steps"];
 
 interface Tile {
