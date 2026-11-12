@@ -28,6 +28,7 @@
 .editor__panes {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   grid-template-areas: "left right";
   gap: var(--s5);
   flex: 1 1 auto; min-height: 0;

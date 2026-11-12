@@ -335,6 +335,26 @@ for (const viewport of VIEWPORTS) {
 }
 
 suite("the graph at desktop width", () => {
+  test(
+    "the folded inspector header stays inside the viewport at 1440x900",
+    async () => {
+      const { page, watch: pageWatch } = await screen(DESKTOP, "/app/pipelines/shout-report/edit");
+      await waitFor(page, ".node");
+      await press(page, "Collapse");
+      await page.waitForFunction(() => document.querySelector(".editor__inspector-body")?.hasAttribute("hidden") === true);
+      const facts = await page.evaluate(() => {
+        const inspector = document.querySelector(".editor__inspector")!.getBoundingClientRect();
+        const header = document.querySelector(".editor__inspector .bar")!.getBoundingClientRect();
+        return { inspectorBottom: inspector.bottom, headerBottom: header.bottom, viewport: window.innerHeight };
+      });
+      expect(facts.headerBottom).toBeLessThanOrEqual(facts.viewport);
+      expect(facts.inspectorBottom).toBeLessThanOrEqual(facts.viewport);
+      expect(pageWatch.problems()).toEqual([]);
+      await page.close();
+    },
+    60_000,
+  );
+
   test.skip(
     "a port label stays on one line, because a name that breaks mid-word is not readable",
     async () => {

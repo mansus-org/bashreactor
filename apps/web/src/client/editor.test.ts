@@ -424,19 +424,33 @@ describe("the workbench", () => {
     }
   });
 
-  test("the inspector folds to its header, so the graph gets the column's spare height", async () => {
+  test("selecting a step opens its inspector; Collapse stays collapsed across selections", async () => {
     const view = await open(PINNED);
-    const body = view.querySelector(".editor__inspector-body")!;
-    expect(body.hidden).toBe(true);
-    const expand = button(view, "Expand")!;
-    expect(expand).toBeDefined();
-    expand.fire("click");
-    expect(body.hidden).toBe(false);
-    expect(button(view, "Collapse")!.textContent).toBe("Collapse");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(false);
+    expect(button(view, "Collapse")).toBeDefined();
+
+    button(view, "Collapse")!.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+
+    const check = view.querySelector('.node[data-step="check"]')!;
+    check.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+    expect(button(view, "Expand")).toBeDefined();
+
+    button(view, "Expand")!.fire("click");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(false);
+    expect(button(view, "Collapse")).toBeDefined();
 
     const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/\.editor__panes \{[^}]*grid-template-rows: minmax\(0, 1fr\);/);
     expect(sheet).toMatch(/\.editor__right \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto;/);
     expect(sheet).toMatch(/\.editor__inspector \{[^}]*max-height: 45%;/);
+  });
+
+  test("with no step selected the inspector is folded", async () => {
+    const view = await open("name: empty\nsteps: {}\n");
+    expect(view.querySelector(".editor__inspector-body")!.hidden).toBe(true);
+    expect(button(view, "Expand")).toBeUndefined();
   });
 
   test("the open-by-name box and the New pipeline button are gone; Add step and Undo stay", async () => {

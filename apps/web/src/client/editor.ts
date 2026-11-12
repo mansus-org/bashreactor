@@ -782,20 +782,23 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   }
 
   let inspectorOpen = false;
+  let inspectorCollapsed = false;
+  let lastInspectorStep: string | null = null;
 
   /**
-   * The inspector's frame: a header that stays, and a body the reader opens. The graph owns the rest
-   * of the column, which is what makes it readable at a laptop's height.
+   * The inspector's frame: a header that stays, and a body that opens when a step is selected. The
+   * graph owns the rest of the column, which is what makes it readable at a laptop's height.
    */
   function inspectorFrame(title: string, actions: Child[], body: Child[], foldable = false): void {
     const bodyNode = el("div", { class: "editor__inspector-body" }, body);
-    bodyNode.hidden = foldable && !inspectorOpen;
+    bodyNode.hidden = !foldable || !inspectorOpen;
     let toggle: HTMLElement | null = null;
     if (foldable) {
       toggle = button(inspectorOpen ? "Collapse" : "Expand", {
         ariaLabel: inspectorOpen ? "Collapse the step inspector" : "Expand the step inspector",
         onClick: () => {
           inspectorOpen = !inspectorOpen;
+          inspectorCollapsed = !inspectorOpen;
           bodyNode.hidden = !inspectorOpen;
           toggle!.textContent = inspectorOpen ? "Collapse" : "Expand";
           toggle!.setAttribute("aria-expanded", String(inspectorOpen));
@@ -815,13 +818,18 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   }
 
   function renderInspector(): void {
+    const step = analysis.ok && selected !== null ? (analysis.byId[selected] ?? null) : null;
+    const stepId = step?.id ?? null;
+    if (stepId !== lastInspectorStep) {
+      lastInspectorStep = stepId;
+      inspectorOpen = stepId !== null && !inspectorCollapsed;
+    }
     if (!analysis.ok) {
       inspectorFrame("Step", [], [
         el("p", { class: "help" }, `Fix line ${analysis.error.line} in the YAML to edit steps here again.`),
       ]);
       return;
     }
-    const step = selected !== null ? (analysis.byId[selected] ?? null) : null;
     if (step === null) {
       inspectorFrame("Step", [], [
         el("p", { class: "help" }, "Add a step and its block, timeout, retries and wiring can be edited here."),
