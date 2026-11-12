@@ -1221,6 +1221,33 @@ describe("the files tab", () => {
     expect(log.getAttribute("href")).toBe(
       `http://runs.test/v1/runs/${FILES_RUN.id}/file?path=${encodeURIComponent(LOGFILE)}`,
     );
+    expect(log.textContent).toContain("118 B");
+  });
+
+  test("a running attempt offers its log without the manifest's lagging size", async () => {
+    const run = runFixture([step("ingest", "running")], "running");
+    const server = new FakeServer(run);
+    server.files = {
+      ...FILES_MANIFEST,
+      run: run.id,
+      status: "running",
+      steps: {
+        ingest: {
+          attempts: [
+            {
+              ...FILES_MANIFEST.steps.ingest.attempts[0]!,
+              status: "running",
+              log: { path: LOGFILE, size: 201 },
+            },
+          ],
+        },
+      },
+    };
+    const view = await openRun(server);
+    await waitFor("the live log download", () => view.querySelectorAll(".file").some((node) => node.getAttribute("data-download") === "Download log"));
+    const log = fileLink(view, "Download log");
+    expect(log.textContent).toBe("Download log");
+    expect(log.querySelector(".file__size")).toBeNull();
   });
 
   test("a run whose files cannot be listed still shows the run", async () => {

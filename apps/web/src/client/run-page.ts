@@ -589,7 +589,8 @@ export async function renderRunPage(
   function renderLogDownload(): void {
     const listed = files?.steps[selected]?.attempts.find((entry) => entry.n === attempt);
     const logPath = listed?.log?.path;
-    const key = logPath === undefined ? "" : `${logPath}:${listed?.log?.size ?? ""}`;
+    const live = run.steps[selected]?.attempts.find((entry) => entry.n === attempt)?.status === "running";
+    const key = logPath === undefined ? "" : `${logPath}:${live ? "live" : listed?.log?.size ?? ""}`;
     say(logDownloadHost, key, () =>
       logPath === undefined
         ? []
@@ -598,7 +599,7 @@ export async function renderRunPage(
               api.runFileUrl(run.id, logPath),
               "Download log",
               () => void api.saveRunFile(run.id, logPath),
-              listed?.log?.size,
+              live ? undefined : listed?.log?.size,
             ),
           ],
     );
