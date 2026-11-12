@@ -8,7 +8,7 @@ import type { DiskSpace, RunSummary } from "./api.js";
 import { navigate } from "./app.js";
 import type { Route } from "./app.js";
 import { el, errorBox } from "./dom.js";
-import { errorBody, errorWords, wallClock } from "./run-shared.js";
+import { errorBody, errorWords, wallClock, whenShown } from "./run-shared.js";
 import type { Clock } from "./run-shared.js";
 import {
   alarm,
@@ -232,23 +232,6 @@ async function readWindowRuns(since: string): Promise<RunSummary[]> {
     cursor = next;
   }
   return all;
-}
-
-/**
- * Start `again` whenever the tab is shown, the way run-shared's whenShown does. The removal is
- * guarded because the client stand-in DOM used by the sign-in tests has no removeEventListener, and
- * a dashboard reached from that test must still abort cleanly; a browser always has the method.
- */
-function whenShownAgain(signal: AbortSignal, again: () => void): void {
-  const onVisibility = (): void => {
-    if (!document.hidden && !signal.aborted) again();
-  };
-  document.addEventListener("visibilitychange", onVisibility);
-  signal.addEventListener("abort", () => {
-    if (typeof document.removeEventListener === "function") {
-      document.removeEventListener("visibilitychange", onVisibility);
-    }
-  });
 }
 
 interface DashboardData {
@@ -486,7 +469,7 @@ export function renderDashboard(view: HTMLElement, route: Route, signal: AbortSi
     unmake = clock.after(busy ? LIVE_POLL_MS : IDLE_POLL_MS, () => void tick());
   }
 
-  whenShownAgain(signal, () => void tick());
+  whenShown(signal, () => void tick());
   signal.addEventListener("abort", () => unmake?.());
   void tick();
 }
