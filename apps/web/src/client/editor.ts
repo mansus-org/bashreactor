@@ -7,7 +7,8 @@
 
 import { api, ApiError, canWrite } from "./api.js";
 import type { LibraryName, ValidationIssue } from "./api.js";
-import { announce, el, errorBox, isoInstant, sign, when } from "./dom.js";
+import { announce, el, errorBox, isoInstant, when } from "./dom.js";
+import { button, statusStamp, typeStamp } from "./ui.js";
 import { INTEGER, blankOf, openStartRun, parseTyped, writable } from "./start-run.js";
 import { createGraph } from "./graph.js";
 import type { Graph } from "./graph.js";
@@ -132,8 +133,6 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   // "Unchanged" is a comparison against it, not a flag, so typing, undoing and retyping the
   // original all read true.
   let baseline = BLANK;
-  // Whether what is on screen came out of this tab's own draft rather than off the record.
-  let restored = false;
   let undoStack: string[] = [];
   let undoKey: string | null = null;
   let flashed: Record<string, string> = {};
@@ -164,28 +163,20 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const saved = sessionStorage.getItem(draftKey());
     if (saved === null || saved === text) return;
     setText(saved, { source: "load" });
-    restored = true;
     announce("The unsaved edits this tab had are back on screen.");
   }
 
   // ---------- skeleton ----------
 
-  const title = el("h1", { class: "title" });
-  const lead = el("p", { class: "lead" });
-  const status = el("p", { class: "help", role: "status" });
-  const openNameInput = el("input", {
-    id: "open-name",
-    type: "text",
-    spellcheck: "false",
-    list: "pipeline-names",
-    placeholder: "word-report",
-    "aria-describedby": "open-name-help",
-  });
-  // Filled from `GET /v1/pipelines`: the names that have been stored, so the box asks for less than
-  // it used to. A person who knows a name the list has not still types it and gets the same answer.
-  const pipelineNames = el("datalist", { id: "pipeline-names" });
-  const openButton = el("button", { class: "btn", type: "button", onclick: () => void openChosen() }, "Open");
-  const openError = el("p", { class: "form-error", id: "open-error", role: "alert", hidden: true });
+  // The breadcrumb is the only header above the toolbar, and the toolbar is this screen's header:
+  // there is no Anybody title on an editing screen. `pageHeader` always draws one, so the crumb line
+  // is built here from the same classes it uses.
+  const crumbs = el("nav", { class: "crumbs", "aria-label": "Breadcrumb" });
+  const toolbarName = el("h1", { class: "editor__name" });
+  const fromStamp = typeStamp("");
+  const unsavedStamp = statusStamp("unsaved");
+  const status = el("p", { class: "sr", role: "status" });
+  const notice = el("div", { class: "editor__notice" });
   const versionSelect = el("select", {
     id: "open-version",
     "aria-label": "Version of this pipeline",
@@ -198,28 +189,10 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         return;
       }
       // The address bar says which version is open, so a reload or a bookmark comes back here.
-      navigate(`/pipeline/${openName}/${value}`, { replace: true });
+      navigate(`/pipelines/${encodeURIComponent(openName)}/edit?version=${encodeURIComponent(value)}`, { replace: true });
     },
   });
-  const newButton = el("button", {
-    class: "btn",
-    type: "button",
-    onclick: () => {
-      if (!confirmLeave()) return;
-      openName = null;
-      openVersion = "latest";
-      versions = [];
-      issues = [];
-      validated = false;
-      versionSelect.hidden = true;
-      baseline = BLANK;
-      setText(BLANK, { source: "new" });
-    },
-  }, "New pipeline");
-  const validateButton = el("button", { class: "btn", type: "button", onclick: () => void validate() }, "Validate");
-  const saveButton = el("button", { class: "btn", type: "button", onclick: () => void save() }, "Save version");
-  const runButton = el("button", { class: "btn btn--ink", type: "button", onclick: startPipeline }, "Start a run");
-  const runHint = el("p", { class: "help" });
+  const actionHost = el("div", { class: "editor__buttons" });
   const stageNote = el("p", { class: "stale-note", role: "status", hidden: true });
   const stage = el("div", {
     class: "stage",
@@ -231,8 +204,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   const discardButton = el("button", { class: "btn", type: "button", hidden: true, onclick: discardChanges }, "Discard changes");
   const addButton = el("button", { class: "btn", type: "button", onclick: openAddDialog }, "Add step");
   const pinButton = el("button", { class: "btn", type: "button", hidden: true, onclick: pinAll }, "Use library versions");
-  const inspector = el("section", { class: "inspector", id: "inspector", "aria-labelledby": "inspector-title" });
-  const statusStamp = el("a", { class: "stamp", href: "#problems" });
+  const inspector = el("section", { class: "inspector editor__inspector", id: "inspector", "aria-labelledby": "inspector-title" });
 
   const gutter = el("div", { class: "yaml__gutter", "aria-hidden": "true" });
   const paintInner = el("div", { class: "yaml__inner" });
@@ -258,88 +230,154 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
 
   // Leaving must be a choice the person made, not something that happens to them (#24). The router
   // owns the address bar, so this catches the two ways out of a screen that a screen can see coming:
-  // a link clicked here, and the tab going away. Back and forwards are the router's to guard.
-  // Both listeners go away with the screen, because they are registered with its own signal.
+  // a link clicked here or in the sidebar, and the tab going away. Back and forwards are the
+  // router's to guard. Both listeners go away with the screen, because they are registered with its
+  // own signal.
   document.addEventListener("click", leaveAttempt, { capture: true, signal });
   window.addEventListener("beforeunload", unload, { signal });
 
   view.replaceChildren(
     el(
       "div",
-      { class: "head" },
-      el("div", { class: "head__text" }, title, lead, status),
+      { class: "editor" },
+      crumbs,
       el(
         "div",
-        { class: "row" },
+        { class: "editor__toolbar" },
+        el("div", { class: "editor__id" }, toolbarName, fromStamp, unsavedStamp),
+        el("div", { class: "editor__actions" }, el("div", { class: "editor__version" }, versionSelect), actionHost),
+      ),
+      notice,
+      el(
+        "div",
+        { class: "editor__panes" },
         el(
           "div",
-          { class: "field" },
-          el("label", { class: "label", for: "open-name" }, "Stored pipeline"),
-          el("div", { class: "row" }, openNameInput, pipelineNames, openButton, versionSelect),
-          openError,
+          { class: "editor__left" },
           el(
-            "p",
-            { class: "help", id: "open-name-help" },
-            "Choose a stored pipeline, or type its name.",
+            "section",
+            { class: "editor__yaml", "aria-labelledby": "yaml-title" },
+            el("div", { class: "bar" }, el("h2", { class: "h2", id: "yaml-title" }, "YAML")),
+            el("label", { class: "sr", for: "doc" }, "Pipeline YAML"),
+            el("p", { class: "sr", id: "yaml-help" }, "Moving the caret into a step selects it in the graph. Tab leaves this field."),
+            el("div", { class: "yaml" }, gutter, el("div", { class: "yaml__code" }, paint, textarea)),
+          ),
+          el(
+            "section",
+            { class: "problems editor__problems", id: "problems", "aria-labelledby": "problems-title", tabindex: "-1" },
+            el("h3", { class: "h3", id: "problems-title" }, "Problems"),
+            problemsNote,
+            problemsList,
           ),
         ),
-        newButton,
-      ),
-      el(
-        "div",
-        { class: "row" },
-        validateButton,
-        saveButton,
-        runButton,
-      ),
-      runHint,
-    ),
-    el(
-      "div",
-      { class: "ed" },
-      el(
-        "div",
-        { class: "ed__graph" },
         el(
-          "section",
-          { "aria-labelledby": "graph-title" },
-          el("div", { class: "bar" }, el("h2", { class: "h2", id: "graph-title" }, "Graph"), el("div", { class: "row" }, undoButton, discardButton, pinButton, addButton)),
-          stageNote,
-          stage,
+          "div",
+          { class: "editor__right" },
           el(
-            "p",
-            { class: "legend" },
-            el("span", {}, el("span", { class: "sw sw--wired" }), "fed by a reference"),
-            el("span", {}, el("span", { class: "sw sw--value" }), "set to a value"),
-            el("span", {}, el("span", { class: "sw sw--data" }), "output feeds input"),
-            el("span", {}, el("span", { class: "sw sw--needs" }), "order only, no data"),
+            "section",
+            { class: "editor__graph", "aria-labelledby": "graph-title" },
+            el(
+              "div",
+              { class: "bar" },
+              el("h2", { class: "h2", id: "graph-title" }, "Graph"),
+              el("div", { class: "row" }, undoButton, discardButton, pinButton, addButton),
+            ),
+            stageNote,
+            stage,
+            el(
+              "p",
+              { class: "legend" },
+              el("span", {}, el("span", { class: "sw sw--wired" }), "wired"),
+              el("span", {}, el("span", { class: "sw sw--value" }), "value"),
+              el("span", {}, el("span", { class: "sw sw--data" }), "data"),
+              el("span", {}, el("span", { class: "sw sw--needs" }), "order"),
+            ),
           ),
-        ),
-        inspector,
-      ),
-      el(
-        "section",
-        { class: "ed__yaml", "aria-labelledby": "yaml-title" },
-        el("div", { class: "bar" }, el("h2", { class: "h2", id: "yaml-title" }, "YAML"), statusStamp),
-        el("label", { class: "sr", for: "doc" }, "Pipeline YAML"),
-        el(
-          "p",
-          { class: "sr", id: "yaml-help" },
-          "Edits redraw the graph. Moving the caret into a step selects it in the graph. Tab leaves this field.",
-        ),
-        el("div", { class: "yaml" }, gutter, el("div", { class: "yaml__code" }, paint, textarea)),
-        el(
-          "section",
-          { class: "problems", id: "problems", "aria-labelledby": "problems-title", tabindex: "-1" },
-          el("h3", { class: "h3", id: "problems-title" }, "Problems"),
-          problemsNote,
-          problemsList,
+          inspector,
         ),
       ),
+      status,
+      startDialog,
+      addDialog,
     ),
-    startDialog,
-    addDialog,
   );
+
+  /** The route's name, kept apart from `openName` because a failed open still names its pipeline. */
+  let routeName: string | null = null;
+
+  function paintCrumbs(): void {
+    const name = openName ?? routeName;
+    const entries: { label: string; href?: string; mono?: boolean }[] =
+      name === null
+        ? [{ label: "Pipelines", href: "/app/pipelines" }, { label: "New" }]
+        : [
+            { label: "Pipelines", href: "/app/pipelines" },
+            { label: name, href: `/app/pipelines/${encodeURIComponent(name)}` },
+            { label: "Edit" },
+          ];
+    crumbs.replaceChildren(
+      ...entries.flatMap((entry, index) => {
+        const current = index === entries.length - 1;
+        const node =
+          current || entry.href === undefined
+            ? el("span", { class: `crumbs__current${entry.mono === true ? " mono" : ""}` }, entry.label)
+            : el("a", { class: entry.mono === true ? "mono" : "", href: entry.href, "data-link": "" }, entry.label);
+        return index === 0 ? [node] : [" / ", node];
+      }),
+    );
+  }
+
+  /** The toolbar: the name, what it came from, whether it is unsaved, and the version picker. */
+  function paintToolbar(shown: Analysis | null): void {
+    const stored = openName ?? routeName;
+    toolbarName.textContent = stored ?? (shown === null || shown.name === "" ? "New pipeline" : shown.name);
+    const at = openVersion === "latest" ? versions[0]?.version : openVersion;
+    fromStamp.hidden = openName === null || at === undefined;
+    fromStamp.textContent = at === undefined ? "" : `from v${at}`;
+    unsavedStamp.hidden = unchanged();
+    versionSelect.hidden = openName === null;
+  }
+
+  // `button`'s `disabledReason` is built with the button, so the three actions are rebuilt when that
+  // reason changes rather than left to a second, hand-made off state. Focus follows the label, so a
+  // request finishing does not drop the reader off the control they pressed.
+  let actionsKey = "";
+  function paintActions(): void {
+    const local = analysis.problems.length;
+    const remote = issues.length;
+    const blocked = !analysis.ok || local + remote > 0 || (analysis.ok && analysis.steps.length === 0);
+    const reason = !blocked
+      ? ""
+      : readOnly()
+        ? "This token can read only."
+        : !analysis.ok
+          ? "Fix the YAML to save or run."
+          : local + remote > 0
+            ? `Fix ${local + remote} ${local + remote === 1 ? "problem" : "problems"} to save or run.`
+            : "Add a step to save or run.";
+    const key = `${blocked}|${busy}|${reason}`;
+    if (key === actionsKey) return;
+    actionsKey = key;
+    const focused = document.activeElement?.textContent ?? null;
+    actionHost.replaceChildren(
+      button("Validate", { disabled: busy, onClick: () => void validate() }),
+      button("Save version", { disabled: blocked || readOnly(), onClick: () => void save() }),
+      button("Run", {
+        primary: true,
+        disabled: blocked || readOnly(),
+        disabledReason: reason === "" ? undefined : reason,
+        onClick: startPipeline,
+      }),
+    );
+    if (focused !== null) {
+      [...actionHost.querySelectorAll("button")].find((node) => node.textContent === focused)?.focus();
+    }
+  }
+
+  /** The one place a refused open is shown: the server's code and its own words. */
+  function showError(error: { code?: string; message?: string } | null): void {
+    notice.replaceChildren(...(error === null ? [] : [errorBox(error)]));
+  }
 
   // ---------- text is the state ----------
 
@@ -350,7 +388,6 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       // nothing about what is on screen, so it stops being a problem the reader has to clear.
       issues = [];
       validated = false;
-      restored = false;
     }
     text = next;
     if (source !== "yaml") textarea.value = text;
@@ -373,45 +410,16 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const shown = analysis.ok ? analysis : lastGood;
     const stale = !analysis.ok;
 
-    if (shown !== null) {
-      title.textContent = shown.name === "" ? "Untitled pipeline" : shown.name;
-      lead.textContent = shown.description;
-      document.title = `${shown.name === "" ? "Untitled" : shown.name} — Bashreactor`;
-    }
-    status.textContent = unchanged()
-      ? openName === null
-        ? "Not stored yet."
-        : `Stored as v${versions.find((v) => v.version === (openVersion === "latest" ? versions[0]?.version : openVersion))?.version ?? ""}, unchanged.`
-      : restored
-        ? "Unsaved changes, brought back from earlier in this tab."
-        : "Unsaved changes.";
+    document.title = `${shown === null || shown.name === "" ? (openName ?? routeName ?? "New pipeline") : shown.name} — Bashreactor`;
+    paintCrumbs();
+    paintToolbar(shown);
+    paintActions();
 
     stageNote.hidden = !stale;
-    if (!analysis.ok) {
-      stageNote.textContent = `Line ${analysis.error.line} does not parse. The graph shows the last version that did, as a ghost, until it does.`;
-    }
+    if (!analysis.ok) stageNote.textContent = `Line ${analysis.error.line} does not parse.`;
     if (shown !== null) graph.update({ analysis: shown, selected, stale });
 
-    const local = analysis.problems.length;
-    const remote = issues.length;
-    statusStamp.replaceChildren(
-      sign(local + remote > 0 ? "failed" : "succeeded"),
-      stale ? "does not parse" : local + remote > 0 ? `${local + remote} ${local + remote === 1 ? "problem" : "problems"}` : "valid",
-    );
-
-    const blocked = stale || local > 0 || remote > 0 || (shown?.steps.length ?? 0) === 0;
-    runButton.disabled = blocked || readOnly();
-    saveButton.disabled = blocked || readOnly();
-    validateButton.disabled = busy;
     addButton.disabled = readOnly() || !analysis.ok;
-    runHint.textContent = readOnly()
-      ? "This token can read only, so nothing here can be stored or run."
-      : stale || local > 0 || remote > 0
-        ? `Fix ${local + remote === 1 ? "the problem" : `the ${local + remote} problems`} under the YAML to store or run this.`
-        : (shown?.steps.length ?? 0) === 0
-          ? "Add a step to store or run this."
-          : "";
-    runHint.hidden = runHint.textContent === "";
 
     const fixable = analysis.ok ? rewrites(text, analysis, library).length : 0;
     pinButton.hidden = fixable === 0;
@@ -467,33 +475,12 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     event.returnValue = "";
   }
 
-  /** The Open field's own button, which replaces the document and so has to ask first. */
-  function openChosen(): void {
-    const name = openNameInput.value.trim();
-    if (name === "" || !confirmLeave()) return;
-    void openPipeline(name, "latest");
-  }
-
   function discardChanges(): void {
     undoStack.push(text);
     undoKey = null;
     undoButton.disabled = false;
     setText(baseline, { source: "discard" });
     announce("Changes thrown away, and the record is on screen again. Undo brings yours back.");
-  }
-
-  /**
-   * The one place a failed open is shown (#32): beside the field that caused it, and replaced by the
-   * next attempt rather than added to the pile.
-   */
-  function showOpenError(error: { code?: string; message?: string } | null): void {
-    if (error === null) {
-      openError.hidden = true;
-      openError.textContent = "";
-      return;
-    }
-    openError.hidden = false;
-    openError.textContent = `${error.code ?? "internal_error"}: ${error.message ?? "the server answered with no message."}`;
   }
 
   // ---------- the library, which is the API's ----------
@@ -517,16 +504,17 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       .map(([name, version]) => ({ name, uses: libraryRef(name, version) }));
   }
 
-  /** The library's own names, asked for once: what a step can point at, and what the box above the
-   * editor can open. Neither is worth making the document on screen wait for — a list that will not
-   * answer leaves the names this document already names, which is what there was before there was a
-   * list route at all.
+  /** The library's own names, asked for once: what a step can point at. It is not worth making the
+   * document on screen wait for — a list that will not answer leaves the names this document already
+   * names, which is what there was before there was a list route at all.
    */
   async function loadNames(): Promise<void> {
-    const [blocks, pipelines] = await Promise.allSettled([api.allBlocks(), api.allPipelines()]);
-    if (blocks.status === "fulfilled") listed = blocks.value.blocks;
-    if (pipelines.status === "fulfilled") {
-      pipelineNames.replaceChildren(...pipelines.value.pipelines.map((pipeline) => el("option", { value: pipeline.name })));
+    try {
+      const blocks = await api.allBlocks();
+      if (gone()) return;
+      listed = blocks.blocks;
+    } catch {
+      // A list that will not answer leaves the document's own names, which are on screen already.
     }
     if (gone()) return;
     render("names");
@@ -570,7 +558,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         // retry on the next keystroke would be the same answer.
         if (error instanceof ApiError && error.status === 404) continue;
         fetched.delete(key);
-        status.textContent = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+        showError(error instanceof ApiError ? { code: error.code, message: error.message } : { code: "internal_error", message: String(error) });
         return;
       }
       if (analysis.ok) {
@@ -969,13 +957,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const all = [...local.map((problem) => ({ ...problem, path: undefined as string | undefined })), ...remote].toSorted(
       (a, b) => a.line - b.line,
     );
-    problemsNote.textContent = validated
-      ? all.length === 0
-        ? "None. The document is valid, and the API agreed."
-        : "Live checks as you type, and the API's own report from the last Validate."
-      : all.length === 0
-        ? "None so far. The editor's own checks are these; Validate asks the API."
-        : "These are the editor's own checks. Validate asks the API, which is the one that will refuse to store it.";
+    problemsNote.textContent = all.length === 0 ? "None." : validated ? "Checked by the API." : "";
+    problemsNote.hidden = problemsNote.textContent === "";
     problemsList.replaceChildren(
       ...all.map((entry) =>
         el(
@@ -998,8 +981,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   async function openPipeline(name: string, version: number | "latest"): Promise<void> {
     if (name === "") return;
     busy = true;
-    showOpenError(null);
-    status.textContent = `Opening ${name}.`;
+    showError(null);
+    announce(`Opening ${name}.`);
     try {
       const list = await api.pipelines(name);
       if (gone()) return;
@@ -1012,7 +995,6 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       issues = [];
       validated = false;
       baseline = record.yaml;
-      openNameInput.value = name;
       versionSelect.hidden = false;
       versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(wanted);
@@ -1022,16 +1004,17 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     } catch (error) {
       if (gone()) return;
       versionSelect.hidden = true;
-      showOpenError(error instanceof ApiError ? error : { code: "internal_error", message: String(error) });
+      showError(error instanceof ApiError ? { code: error.code, message: error.message } : { code: "internal_error", message: String(error) });
       status.textContent = "";
     } finally {
       busy = false;
+      if (!gone()) paintActions();
     }
   }
 
   async function validate(): Promise<void> {
     busy = true;
-    validateButton.disabled = true;
+    paintActions();
     status.textContent = "Asking the API.";
     try {
       const report = await api.validate(text);
@@ -1043,7 +1026,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       announce(report.valid ? "Valid." : `The API found ${report.issues.length} problems.`);
     } catch (error) {
       if (gone()) return;
-      status.textContent = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+      showError(error instanceof ApiError ? { code: error.code, message: error.message } : { code: "internal_error", message: String(error) });
     } finally {
       busy = false;
       if (!gone()) render("validate");
@@ -1055,7 +1038,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const name = analysis.name;
     if (name === "") return;
     busy = true;
-    saveButton.disabled = true;
+    paintActions();
+    showError(null);
     status.textContent = `Storing ${name}.`;
     // Typing goes on while the request is out, and only what was sent is on the record.
     const sent = text;
@@ -1073,12 +1057,11 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       versionSelect.hidden = false;
       versionSelect.replaceChildren(...versions.toReversed().map(versionOption));
       versionSelect.value = String(record.version);
-      openNameInput.value = name;
       sessionStorage.removeItem(wasKey);
       keepDraft();
       status.textContent = `Stored as v${record.version}.`;
       announce(`${name} stored as version ${record.version}.`);
-      navigate(`/pipeline/${name}/${record.version}`, { replace: true });
+      navigate(`/pipelines/${encodeURIComponent(name)}/edit?version=${encodeURIComponent(String(record.version))}`, { replace: true });
     } catch (error) {
       if (gone()) return;
       // A pipeline that does not validate is a 422 with its first issue, which is the same object the
@@ -1088,7 +1071,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
         render("save");
         status.textContent = "The API refused to store this. Its issue is in the list.";
       } else {
-        status.textContent = error instanceof ApiError ? `${error.code}: ${error.message}` : String(error);
+        showError(error instanceof ApiError ? { code: error.code, message: error.message } : { code: "internal_error", message: String(error) });
       }
     } finally {
       busy = false;
@@ -1108,7 +1091,6 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     const onOffer = offers();
     if (onOffer.length === 0) {
       announce("There is no block in the library yet. Publish one on the Blocks screen first.");
-      status.textContent = "Add a step by typing it in the YAML, or publish a block on the Blocks screen.";
       return;
     }
     const usesSelect = el(
@@ -1200,7 +1182,8 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
       },
       sending: (sending) => {
         busy = sending;
-        status.textContent = sending ? "Starting the run." : "";
+        paintActions();
+        if (sending) status.textContent = "Starting the run.";
       },
     });
   }
@@ -1216,6 +1199,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
   const name = route.parts[0] === "pipelines-new" ? undefined : editing ? route.parts[1] : route.parts[1];
   const versionText = editing ? (route.query.get("version") ?? undefined) : route.parts[2];
   const version = routeVersion(versionText);
+  routeName = name ?? null;
   if (name === undefined) {
     setText(BLANK, { source: "init" });
     restoreDraft();
@@ -1223,8 +1207,7 @@ export function renderPipeline(view: HTMLElement, route: Route, signal: AbortSig
     // `/pipelines/word-report/edit?version=abc` is not version NaN (#35): there is no such version,
     // and that is said here instead of asking the API for a number the route never gave.
     setText(BLANK, { source: "init" });
-    openNameInput.value = name;
-    showOpenError({
+    showError({
       code: "type_mismatch",
       message: `${name} has no version "${versionText ?? ""}". Versions are whole numbers, starting at 1.`,
     });

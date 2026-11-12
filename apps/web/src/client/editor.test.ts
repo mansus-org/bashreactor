@@ -12,13 +12,24 @@ import { join } from "node:path";
 import { blockSource, decls, installDom, observedStages, serveModules, uninstallDom, type FakeElement } from "./client.testkit.ts";
 import type { Route } from "./app.ts";
 
-const dom = installDom({ href: "http://x/app/pipeline/word-report" });
+const globals = globalThis as unknown as Record<string, unknown>;
+// Every global this file replaces is written down here, so the next test file gets the real one back.
+// Bun runs all test files in one process: a fake `document`, `window` or `sessionStorage` that
+// outlives this file is the next file's mystery.
+const before = {
+  document: globals.document,
+  window: globals.window,
+  sessionStorage: globals.sessionStorage,
+  history: globals.history,
+  fetch: globals.fetch,
+};
+const dom = installDom({ href: "http://x/app/pipelines/word-report/edit" });
 
 // The editor keeps work in progress in `sessionStorage`, which the stand-in browser gives every test
 // in this file at once. This is the same store with a `clear`, so one test's draft cannot be the next
 // one's surprise.
 const tab = new Map<string, string>();
-(globalThis as unknown as Record<string, unknown>).sessionStorage = {
+globals.sessionStorage = {
   getItem: (key: string) => tab.get(key) ?? null,
   setItem: (key: string, value: string) => void tab.set(key, value),
   removeItem: (key: string) => void tab.delete(key),
@@ -32,7 +43,10 @@ const windowEvents: { type: string; handler: (event: unknown) => void }[] = [];
 const asked: string[] = [];
 let answers: boolean[] = [];
 
-const fakeWindow = (globalThis as unknown as Record<string, unknown>).window as Record<string, unknown>;
+const fakeWindow = globals.window as Record<string, unknown>;
+const realDocumentListener = (dom.document as unknown as Record<string, unknown>).addEventListener;
+const realWindowListener = fakeWindow.addEventListener;
+const realConfirm = fakeWindow.confirm;
 (dom.document as unknown as Record<string, unknown>).addEventListener = (type: string, handler: (event: unknown) => void) =>
   void pageEvents.push({ type, handler });
 fakeWindow.addEventListener = (type: string, handler: (event: unknown) => void) => void windowEvents.push({ type, handler });
@@ -45,9 +59,15 @@ const { session } = (await import(join(served, "api.js"))) as typeof import("./a
 const { renderPipeline } = (await import(join(served, "editor.js"))) as typeof import("./editor.ts");
 
 afterAll(() => {
+  (dom.document as unknown as Record<string, unknown>).addEventListener = realDocumentListener;
+  fakeWindow.addEventListener = realWindowListener;
+  fakeWindow.confirm = realConfirm;
   uninstallDom(dom);
+  for (const [name, value] of Object.entries(before)) {
+    if (value === undefined) delete globals[name];
+    else globals[name] = value;
+  }
   rmSync(served, { recursive: true, force: true });
-  (globalThis as unknown as Record<string, unknown>).fetch = realFetch;
 });
 
 // ---------- what the API has ----------
@@ -209,7 +229,6 @@ async function answer(href: string, init?: RequestInit): Promise<Response> {
   return json({ code: "not_found", message: `no route ${path}` }, 404);
 }
 
-const realFetch = globalThis.fetch;
 (globalThis as unknown as Record<string, unknown>).fetch = (href: string | URL, init?: RequestInit) => answer(href.toString(), init);
 
 // ---------- opening it ----------
@@ -218,7 +237,7 @@ const settle = async (): Promise<void> => {
   for (let i = 0; i < 30; i++) await new Promise((resolve) => setTimeout(resolve, 0));
 };
 
-const route: Route = { path: "/pipeline/word-report", parts: ["pipeline", "word-report"], query: new URLSearchParams() };
+const route: Route = { path: "/pipelines/word-report/edit", parts: ["pipelines", "word-report", "edit"], query: new URLSearchParams() };
 
 /** What the router does between two screens: paint the next one into the same `view`. */
 function navigateAway(view: FakeElement, title: string): void {
@@ -255,18 +274,28 @@ async function openAt(path: string, signal: AbortSignal = new AbortController().
   calls.length = 0;
   session.identity = { name: "test", scope: "admin", admin: true };
   const view = dom.document.createElement("div");
+  const [pathname = "/", search = ""] = path.split("?");
   renderPipeline(
     view as unknown as HTMLElement,
-    { path, parts: path.split("/").filter((part) => part !== ""), query: new URLSearchParams() },
+    { path: pathname, parts: pathname.split("/").filter((part) => part !== ""), query: new URLSearchParams(search) },
     signal,
   );
   await settle();
   return view;
 }
 
-const stampOf = (view: FakeElement): string => view.querySelector(".ed__yaml .bar .stamp")?.textContent ?? "";
-const openError = (view: FakeElement): FakeElement | undefined => view.querySelector('[id="open-error"]') ?? undefined;
-const visibleHelp = (view: FakeElement): string[] => view.querySelectorAll(".help").filter((node) => !node.hidden).map((node) => node.textContent);
+/** The toolbar's unsaved stamp, or the empty string when the document is the record. */
+const status = (view: FakeElement): string => {
+  const stamp = view.querySelector(".editor__toolbar .stamp--status");
+  return stamp === null || stamp.hidden ? "" : stamp.textContent;
+};
+const fromStamp = (view: FakeElement): string => {
+  const stamp = view.querySelectorAll(".editor__toolbar .stamp--type").find((node) => node.textContent.startsWith("from "));
+  return stamp === null || stamp === undefined || stamp.hidden ? "" : stamp.textContent;
+};
+const noticeOf = (view: FakeElement): FakeElement | undefined => view.querySelector(".editor__notice .state--error") ?? undefined;
+const reason = (view: FakeElement): string => view.querySelector(".editor__toolbar .control-off__reason")?.textContent ?? "";
+const disabled = (node: FakeElement | undefined): boolean => node === undefined || node.disabled || node.getAttribute("disabled") !== null;
 
 /** What the router would answer: a link in the chrome, seen first by whatever is watching. */
 function clickLink(href: string): { prevented: boolean; stopped: boolean } {
@@ -310,7 +339,6 @@ describe("opening a stored pipeline", () => {
     // rest is the document: the list of versions, then the bytes, for each block it names.
     expect(calls).toEqual([
       "/v1/blocks",
-      "/v1/pipelines",
       "/v1/pipelines/word-report",
       "/v1/pipelines/word-report/2",
       "/v1/blocks/generate-corpus",
@@ -327,7 +355,8 @@ describe("opening a stored pipeline", () => {
     expect(view.querySelectorAll(".wire").length).toBe(1);
     expect(view.querySelectorAll(".port").length).toBe(4);
     expect(view.querySelectorAll('.port--out[data-name="corpus"]').length).toBe(1);
-    expect(view.querySelectorAll(".stamp--type").length).toBe(2);
+    expect(view.querySelectorAll(".node .stamp--type").length).toBe(2);
+    expect(fromStamp(view)).toBe("from v2");
     expect(view.querySelectorAll(".node__problem").length).toBe(0);
     expect(view.querySelectorAll(".problems__list li").length).toBe(0);
     expect(view.querySelector(".state--error")).toBeNull();
@@ -335,10 +364,11 @@ describe("opening a stored pipeline", () => {
 
   test("lets the reader store and run what the library can answer", async () => {
     const view = await open(PINNED);
-    expect(button(view, "Save version")?.disabled).toBe(false);
-    expect(button(view, "Start a run")?.disabled).toBe(false);
-    expect(button(view, "Validate")?.disabled).toBe(false);
+    expect(disabled(button(view, "Save version"))).toBe(false);
+    expect(disabled(button(view, "Run"))).toBe(false);
+    expect(disabled(button(view, "Validate"))).toBe(false);
     expect(button(view, "Add step")?.disabled).toBe(false);
+    expect(reason(view)).toBe("");
   });
 
   // A `./x.sh` reference has no version in it, and the contract still has to come from somewhere:
@@ -357,7 +387,56 @@ describe("opening a stored pipeline", () => {
     expect(view.querySelector(".state--error")).toBeNull();
     expect(view.querySelectorAll(".node").length).toBe(1);
     expect(view.querySelectorAll(".node__problem").length).toBe(1);
-    expect(button(view, "Save version")?.disabled).toBe(true);
+    expect(disabled(button(view, "Save version"))).toBe(true);
+    expect(disabled(button(view, "Run"))).toBe(true);
+    expect(reason(view)).toBe("Fix 1 problem to save or run.");
+  });
+});
+
+describe("the workbench", () => {
+  test("the toolbar names the pipeline and the version it came from, and has the version picker", async () => {
+    const view = await open(PINNED);
+    expect(view.querySelector(".editor__name")!.textContent).toBe("word-report");
+    expect(fromStamp(view)).toBe("from v2");
+    expect(view.querySelector('[id="open-version"]')!.hidden).toBe(false);
+    // The toolbar is this screen's header, so there is no Anybody title above it.
+    expect(view.querySelector(".title")).toBeNull();
+  });
+
+  test("the panes are YAML on the left and graph over inspector on the right", async () => {
+    const view = await open(PINNED);
+    expect(view.querySelector(".editor__yaml")).not.toBeNull();
+    expect(view.querySelector(".editor__graph")).not.toBeNull();
+    expect(view.querySelector(".editor__inspector")).not.toBeNull();
+    expect(view.querySelector(".editor__problems")).not.toBeNull();
+    expect(view.querySelector(".editor .legend")!.textContent).toContain("wired");
+  });
+
+  test("the open-by-name box and the New pipeline button are gone; Add step and Undo stay", async () => {
+    const view = await open(PINNED);
+    expect(view.querySelector('[id="open-name"]')).toBeNull();
+    expect(button(view, "Open")).toBeUndefined();
+    expect(button(view, "New pipeline")).toBeUndefined();
+    expect(button(view, "Add step")).toBeDefined();
+    expect(button(view, "Undo")).toBeDefined();
+  });
+
+  test("a problem is a button that puts the caret on its line", async () => {
+    const view = await open(ONE_UNKNOWN);
+    const problems = view.querySelectorAll(".problems__list button");
+    expect(problems.length).toBe(1);
+    const pane = view.querySelector('[id="doc"]')!;
+    let at = -1;
+    (pane as unknown as { setSelectionRange: (start: number, end: number) => void }).setSelectionRange = (start) => {
+      at = start;
+    };
+    problems[0]!.fire("click");
+    const line = Number(/Line (\d+)/.exec(problems[0]!.textContent)![1]);
+    const expected = yamlOf(view)
+      .split("\n")
+      .slice(0, line - 1)
+      .reduce((offset, text) => offset + text.length + 1, 0);
+    expect(at).toBe(expected);
   });
 });
 
@@ -467,7 +546,6 @@ steps:
       lines: \${{ inputs.limit }}
 `;
 
-const status = (view: FakeElement): string => view.querySelector(".head__text .help")?.textContent ?? "";
 const yamlOf = (view: FakeElement): string => view.querySelector('[id="doc"]')!.value;
 
 /** Types into the YAML pane the way a person does: the textarea changes, then it says so. */
@@ -486,7 +564,7 @@ const message = (view: FakeElement): string | null => {
 
 /** Opens the dialog, lets `fill` set its fields, presses Start the run, and returns what was sent. */
 async function startWith(view: FakeElement, fill: (set: (name: string, value: string | boolean) => void) => void = () => {}): Promise<StartBody | undefined> {
-  button(view, "Start a run")!.fire("click");
+  button(view, "Run")!.fire("click");
   fill((name, value) => {
     const control = field(view, name);
     if (typeof value === "boolean") {
@@ -511,7 +589,7 @@ describe("what Start a run sends for each type", () => {
 
   test("a string default of 007 is shown as typed and runs as declared when nobody touches it", async () => {
     const view = await open(WITH_DEFAULTS);
-    button(view, "Start a run")!.fire("click");
+    button(view, "Run")!.fire("click");
     expect(field(view, "code").value).toBe("007");
     const sent = await startWith(view);
     expect(sent?.inputs).toEqual({});
@@ -525,7 +603,7 @@ describe("what Start a run sends for each type", () => {
 
   test("a boolean is a checkbox and leaves as true or false", async () => {
     const view = await open(WITH_DEFAULTS);
-    button(view, "Start a run")!.fire("click");
+    button(view, "Run")!.fire("click");
     expect(field(view, "verbose").getAttribute("type")).toBe("checkbox");
     expect(field(view, "verbose").checked).toBe(false);
     expect(field(view, "loud").checked).toBe(true);
@@ -551,7 +629,7 @@ describe("what Start a run sends for each type", () => {
 
   test("a json default is shown as JSON and runs untouched with its value intact", async () => {
     const view = await open(WITH_DEFAULTS);
-    button(view, "Start a run")!.fire("click");
+    button(view, "Run")!.fire("click");
     expect(field(view, "config").tagName).toBe("TEXTAREA");
     expect(field(view, "config").value).toBe(JSON.stringify({ a: 1, b: [1, 2] }, null, 2));
     expect(field(view, "config").value).not.toContain("[object Object]");
@@ -608,7 +686,7 @@ describe("what Start a run sends for each type", () => {
 
   test("a file says it wants an absolute path on the server, and a relative one is refused", async () => {
     const view = await open(WITH_REQUIRED);
-    button(view, "Start a run")!.fire("click");
+    button(view, "Run")!.fire("click");
     const help = startDialog(view).querySelector('[id="start-in-source-help"]')!.textContent;
     expect(help).toContain("absolute path");
     expect(help).toContain("on the server");
@@ -629,8 +707,8 @@ describe("what Start a run sends for each type", () => {
 describe("what Start a run runs", () => {
   test("a stored pipeline nobody touched runs by name and version", async () => {
     const view = await open(PINNED);
-    expect(status(view)).toBe("Stored as v2, unchanged.");
-    button(view, "Start a run")!.fire("click");
+    expect(status(view)).toBe("");
+    button(view, "Run")!.fire("click");
     expect(startDialog(view).textContent).toContain("This starts the stored version you have open");
     const sent = await startWith(view);
     expect(sent).toEqual({ pipeline: "word-report", version: 2, inputs: {} });
@@ -640,9 +718,9 @@ describe("what Start a run runs", () => {
     const view = await open(PINNED);
     const typed = PINNED.replace("default: 200", "default: 321");
     typeYaml(view, typed);
-    expect(status(view)).toBe("Unsaved changes.");
+    expect(status(view)).toBe("unsaved");
 
-    button(view, "Start a run")!.fire("click");
+    button(view, "Run")!.fire("click");
     expect(startDialog(view).textContent).toContain("These are unsaved changes");
     const sent = await startWith(view);
     expect(sent?.yaml).toBe(typed);
@@ -653,9 +731,9 @@ describe("what Start a run runs", () => {
   test("retyping or undoing back to the stored bytes reads as unchanged and runs by name again", async () => {
     const view = await open(PINNED);
     typeYaml(view, `${PINNED}# one more line\n`);
-    expect(status(view)).toBe("Unsaved changes.");
+    expect(status(view)).toBe("unsaved");
     typeYaml(view, PINNED);
-    expect(status(view)).toBe("Stored as v2, unchanged.");
+    expect(status(view)).toBe("");
     const sent = await startWith(view);
     expect(sent).toEqual({ pipeline: "word-report", version: 2, inputs: {} });
   });
@@ -663,18 +741,18 @@ describe("what Start a run runs", () => {
   test("a graph edit and its Undo end where they began", async () => {
     const view = await open(PINNED);
     button(view, "Remove step")!.fire("click");
-    expect(status(view)).toBe("Unsaved changes.");
+    expect(status(view)).toBe("unsaved");
     expect(yamlOf(view)).not.toBe(PINNED);
     button(view, "Undo")!.fire("click");
     expect(yamlOf(view)).toBe(PINNED);
-    expect(status(view)).toBe("Stored as v2, unchanged.");
+    expect(status(view)).toBe("");
   });
 
   test("YAML that does not parse is unsaved, not unchanged", async () => {
     const view = await open(PINNED);
     typeYaml(view, "name: [broken\n  steps: {");
-    expect(status(view)).toBe("Unsaved changes.");
-    expect(button(view, "Start a run")!.disabled).toBe(true);
+    expect(status(view)).toBe("unsaved");
+    expect(disabled(button(view, "Run"))).toBe(true);
   });
 });
 
@@ -794,20 +872,18 @@ describe("an API report that stops describing the text", () => {
 
     button(view, "Validate")!.fire("click");
     await settle();
-    expect(stampOf(view)).toContain("1 problem");
     expect(view.querySelectorAll(".problems__list li").length).toBe(1);
-    expect(button(view, "Save version")!.disabled).toBe(true);
-    expect(button(view, "Start a run")!.disabled).toBe(true);
-    expect(visibleHelp(view).some((line) => line.startsWith("Fix the problem"))).toBe(true);
+    expect(disabled(button(view, "Save version"))).toBe(true);
+    expect(disabled(button(view, "Run"))).toBe(true);
+    expect(reason(view)).toBe("Fix 1 problem to save or run.");
 
     // The reader deletes the line the report was about. Nothing else should be asked of them.
     typeYaml(view, PINNED);
     await settle(); // the new document names a block the library had no reason to fetch yet
-    expect(stampOf(view)).toBe("valid");
     expect(view.querySelectorAll(".problems__list li").length).toBe(0);
-    expect(button(view, "Save version")!.disabled).toBe(false);
-    expect(button(view, "Start a run")!.disabled).toBe(false);
-    expect(visibleHelp(view).some((line) => line.startsWith("Fix the problem"))).toBe(false);
+    expect(disabled(button(view, "Save version"))).toBe(false);
+    expect(disabled(button(view, "Run"))).toBe(false);
+    expect(reason(view)).toBe("");
   });
 
   test("is still the report while the text it describes is on screen", async () => {
@@ -816,11 +892,11 @@ describe("an API report that stops describing the text", () => {
     button(view, "Validate")!.fire("click");
     await settle();
     expect(validated.length).toBe(1);
-    expect(stampOf(view)).toContain("1 problem");
+    expect(view.querySelectorAll(".problems__list li").length).toBe(1);
     // A re-render that changes nothing changes nothing: the report still stands.
     button(view, "Validate")!.fire("click");
     await settle();
-    expect(stampOf(view)).toContain("1 problem");
+    expect(view.querySelectorAll(".problems__list li").length).toBe(1);
   });
 });
 
@@ -896,6 +972,17 @@ describe("leaving with unsaved changes", () => {
     expect(outcome.stopped).toBe(true);
   });
 
+  test("asks before a sidebar link takes the reader away too", async () => {
+    const view = await open(PINNED);
+    typeYaml(view, MY_EDIT);
+    answers = [false];
+
+    const outcome = clickLink("/app/pipelines");
+    expect(asked.length).toBe(1);
+    expect(outcome.prevented).toBe(true);
+    expect(outcome.stopped).toBe(true);
+  });
+
   test("hands the click to the router when the answer is yes", async () => {
     const view = await open(PINNED);
     typeYaml(view, MY_EDIT);
@@ -926,12 +1013,12 @@ describe("leaving with unsaved changes", () => {
     const leaving = new AbortController();
     const view = await open(PINNED, leaving.signal);
     typeYaml(view, MY_EDIT);
-    expect(status(view)).toBe("Unsaved changes.");
+    expect(status(view)).toBe("unsaved");
 
     leaving.abort(); // what the router does to a screen on its way out
     const back = await open(PINNED);
     expect(yamlOf(back)).toBe(MY_EDIT);
-    expect(status(back)).toContain("Unsaved changes");
+    expect(status(back)).toContain("unsaved");
   });
 
   test("keeps one document's work off another, and forgets it once it is stored", async () => {
@@ -940,7 +1027,7 @@ describe("leaving with unsaved changes", () => {
 
     button(view, "Discard changes")!.fire("click");
     expect(yamlOf(view)).toBe(PINNED);
-    expect(status(view)).toBe("Stored as v2, unchanged.");
+    expect(status(view)).toBe("");
     // Gone from the tab too: a fresh screen opens the record, not the draft that was.
     expect(yamlOf(await open(PINNED))).toBe(PINNED);
   });
@@ -950,43 +1037,31 @@ describe("leaving with unsaved changes", () => {
 
 const BLANK_TEMPLATE = "name: new-pipeline\ndescription: What this pipeline does.\n\nsteps:\n";
 
-describe("the line under the title", () => {
-  test("does not call a blank editor unsaved, before or after New pipeline", async () => {
-    const view = await openAt("/pipeline");
+describe("the toolbar's unsaved stamp", () => {
+  test("does not call a blank editor unsaved", async () => {
+    const view = await openAt("/pipelines-new");
     expect(yamlOf(view)).toBe(BLANK_TEMPLATE);
-    expect(status(view)).toBe("Not stored yet.");
-    button(view, "New pipeline")!.fire("click");
-    expect(status(view)).toBe("Not stored yet.");
+    expect(status(view)).toBe("");
+    expect(fromStamp(view)).toBe("");
 
     typeYaml(view, `${BLANK_TEMPLATE}# one step to go\n`);
-    expect(status(view)).toBe("Unsaved changes.");
+    expect(status(view)).toBe("unsaved");
   });
 });
 
 // ---------- a failed open (finding #32) ----------
 
 describe("a failed open", () => {
-  test("is one line beside the field that caused it, and the next attempt replaces it", async () => {
-    const view = await openAt("/pipeline");
-    const nameInput = view.querySelector('[id="open-name"]')!;
-    nameInput.value = "nope";
-    for (let attempt = 0; attempt < 3; attempt++) {
-      button(view, "Open")!.fire("click");
-      await settle();
-    }
+  test("shows the server's code and words, and still names the pipeline", async () => {
+    refusePipeline = true;
+    const view = await openAt("/pipelines/word-report/edit");
 
-    expect(view.querySelectorAll('[id="open-error"]').length).toBe(1);
-    expect(view.querySelectorAll(".state--error").length).toBe(0);
-    const slot = openError(view)!;
-    expect(slot.hidden).toBe(false);
-    expect(slot.textContent).toContain("pipeline_not_found");
-    expect(slot.textContent).toContain("nope");
-
-    nameInput.value = "word-report";
-    button(view, "Open")!.fire("click");
-    await settle();
-    expect(openError(view)!.hidden).toBe(true);
-    expect(status(view)).toBe("Stored as v2, unchanged.");
+    const slot = noticeOf(view);
+    expect(slot).toBeDefined();
+    expect(slot!.textContent).toContain("pipeline_not_found");
+    expect(slot!.textContent).toContain("word-report");
+    expect(view.querySelector(".crumbs")!.textContent).toContain("word-report");
+    expect(status(view)).toBe("");
   });
 });
 
@@ -1011,7 +1086,7 @@ describe("the version in the address bar", () => {
       expect(view.querySelector('[id="open-version"]')!.value).toBe("2");
       choose(view, "open-version", "1");
       await settle();
-      expect(address.urls).toContain("/app/pipeline/word-report/1");
+      expect(address.urls).toContain("/app/pipelines/word-report/edit?version=1");
     } finally {
       address.stop();
     }
@@ -1033,18 +1108,19 @@ describe("the version in the address bar", () => {
   });
 
   test("opens the version the route names", async () => {
-    await openAt("/pipeline/word-report/1");
+    await openAt("/pipelines/word-report/edit?version=1");
     expect(calls).toContain("/v1/pipelines/word-report/1");
   });
 
   test("says there is no such version, instead of asking the API for NaN", async () => {
-    const view = await openAt("/pipeline/word-report/abc");
+    const view = await openAt("/pipelines/word-report/edit?version=abc");
     // Nothing asked the API for a version of the document; the library's own lists are not the document.
     expect(calls.filter((call) => call.startsWith("/v1/pipelines/"))).toEqual([]);
-    expect(view.querySelectorAll(".state--error").length).toBe(0);
-    expect(openError(view)!.hidden).toBe(false);
-    expect(openError(view)!.textContent).toContain("no version");
-    expect(openError(view)!.textContent).toContain("abc");
+    const slot = noticeOf(view);
+    expect(slot).toBeDefined();
+    expect(slot!.textContent).toContain("no version");
+    expect(slot!.textContent).toContain("abc");
+    expect(view.querySelector(".crumbs")!.textContent).toContain("word-report");
   });
 });
 
