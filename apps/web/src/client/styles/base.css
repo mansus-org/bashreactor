@@ -122,6 +122,7 @@ main:focus { outline: none; }
 .crumbs { font-size: var(--fs-ui); line-height: 20px; }
 .crumbs__current { font-weight: 700; }
 .page-header__title-row { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--s2) var(--s4); }
+.title-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
 .page-header__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
 .id-line { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); font-size: var(--fs-ui); }
 .meta-line { font-size: var(--fs-ui); line-height: 20px; }

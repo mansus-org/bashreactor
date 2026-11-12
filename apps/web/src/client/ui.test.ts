@@ -99,6 +99,25 @@ describe("formatters", () => {
   });
 });
 
+describe("pageHeader", () => {
+  test("draws a shared breadcrumb, and an extra that belongs beside the title", () => {
+    const header = ui.pageHeader({
+      crumbs: [{ label: "Blocks", href: "/app/blocks" }, { label: "count-words" }],
+      title: "count-words",
+      titleExtra: ui.typeStamp("bash"),
+    });
+    const crumbs = fake(header.querySelector(".crumbs")!);
+    expect(crumbs.querySelectorAll("a").map((node) => node.textContent)).toEqual(["Blocks"]);
+    expect(crumbs.querySelector(".crumbs__current")!.textContent).toBe("count-words");
+    expect(header.querySelector(".title-group .title")!.textContent).toBe("count-words");
+    expect(header.querySelector(".title-group .stamp")!.textContent).toBe("bash");
+
+    const bare = ui.breadcrumbs([{ label: "Blocks", href: "/app/blocks" }, "New"]);
+    expect(bare.querySelectorAll("a").length).toBe(1);
+    expect(bare.querySelector(".crumbs__current")!.textContent).toBe("New");
+  });
+});
+
 describe("runsTable", () => {
   test("inserts in order, patches in place and flashes only the row that changed", () => {
     const table = ui.runsTable({ columns: ["status", "run", "version", "steps"] });

@@ -102,34 +102,39 @@ export interface PageIdLine {
 export interface PageHeaderOptions {
   crumbs?: (Crumb | string)[];
   title: string;
+  /** Kept beside the title, for a stamp that belongs to the name rather than the page. */
+  titleExtra?: Child;
   actions?: Child[];
   idLine?: string | PageIdLine;
   meta?: [string, Child][];
 }
 
+/** The shared breadcrumb line. A screen whose header is its own toolbar can draw just this. */
+export function breadcrumbs(crumbs: (Crumb | string)[]): HTMLElement {
+  return el(
+    "nav",
+    { class: "crumbs", "aria-label": "Breadcrumb" },
+    ...crumbs.flatMap((entry, index) => {
+      const crumb = typeof entry === "string" ? { label: entry } : entry;
+      const current = index === crumbs.length - 1;
+      const node =
+        current || crumb.href === undefined
+          ? el("span", { class: `crumbs__current${crumb.mono === true ? " mono" : ""}` }, crumb.label)
+          : el("a", { class: crumb.mono === true ? "mono" : "", href: crumb.href, "data-link": "" }, crumb.label);
+      return index === 0 ? [node] : [" / ", node];
+    }),
+  );
+}
+
 /**
  * The one header a screen has: breadcrumbs, the Anybody title, actions on the same row, then the id
  * with its stamps and a meta line. `idLine` may be a string, or `{ id, href?, stamps? }` when a run or
- * pipeline adds its state next to the id. `meta` is `[label, value]` pairs, separated by ` · `.
+ * pipeline adds its state next to the id. `titleExtra` sits immediately after the title. `meta` is
+ * `[label, value]` pairs, separated by ` · `.
  */
 export function pageHeader(options: PageHeaderOptions): HTMLElement {
   const crumbs = options.crumbs ?? [];
-  const crumbLine =
-    crumbs.length === 0
-      ? null
-      : el(
-          "nav",
-          { class: "crumbs", "aria-label": "Breadcrumb" },
-          ...crumbs.flatMap((entry, index) => {
-            const crumb = typeof entry === "string" ? { label: entry } : entry;
-            const current = index === crumbs.length - 1;
-            const node =
-              current || crumb.href === undefined
-                ? el("span", { class: `crumbs__current${crumb.mono === true ? " mono" : ""}` }, crumb.label)
-                : el("a", { class: crumb.mono === true ? "mono" : "", href: crumb.href, "data-link": "" }, crumb.label);
-            return index === 0 ? [node] : [" / ", node];
-          }),
-        );
+  const crumbLine = crumbs.length === 0 ? null : breadcrumbs(crumbs);
 
   const idLine =
     options.idLine === undefined
@@ -166,7 +171,14 @@ export function pageHeader(options: PageHeaderOptions): HTMLElement {
     el(
       "div",
       { class: "page-header__title-row" },
-      el("h1", { class: "title" }, options.title),
+      options.titleExtra === undefined
+        ? el("h1", { class: "title" }, options.title)
+        : el(
+            "div",
+            { class: "title-group" },
+            el("h1", { class: "title" }, options.title),
+            options.titleExtra,
+          ),
       options.actions === undefined || options.actions.length === 0
         ? null
         : el("div", { class: "page-header__actions" }, options.actions),

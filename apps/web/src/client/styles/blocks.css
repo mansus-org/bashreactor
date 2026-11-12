@@ -3,7 +3,6 @@
 
 .block-page { display: grid; gap: var(--s4); }
 .block-page .page-header { margin-bottom: 0; }
-.block-title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }
 .block-contract { display: grid; gap: var(--s3); min-width: 0; }
 .block-contract .table-wrap { margin-bottom: var(--s3); }
 
