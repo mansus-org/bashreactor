@@ -131,7 +131,7 @@ async function renderList(view: HTMLElement, signal?: AbortSignal): Promise<void
     entry,
     nameLink: el(
       "a",
-      { class: "table__link", href: `/app/blocks/${encodeURIComponent(entry.name)}`, "data-link": "" },
+      { class: "table__link table__link--name", href: `/app/blocks/${encodeURIComponent(entry.name)}`, "data-link": "" },
       entry.name,
     ),
     description: el("span", {}, "—"),

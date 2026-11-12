@@ -126,6 +126,7 @@ describe("runsTable", () => {
     // And it carries its own status, though it arrived after the table was first drawn.
     expect(body.children[0]!.querySelector(".stamp")!.textContent).toContain("failed");
     expect(firstRow.querySelector(".stamp")!.textContent).toContain("running");
+    expect(firstRow.querySelector(".table__link--id")!.textContent).toBe("b");
   });
 
   test("shows an em dash for a field an older server did not send", () => {
@@ -258,6 +259,15 @@ describe("table", () => {
     expect(cells[1]!.classList.contains("num")).toBe(true);
     const link = cells[0]!.querySelector("a.table__link")!;
     expect(link.getAttribute("href")).toBe("/app/blocks/count-words");
+    expect(link.classList.contains("table__link--name")).toBe(true);
+  });
+
+  test("a name link is bold reading text, an id link is mono, and both underline on hover", () => {
+    const sheet = new TextDecoder().decode(buildAssets().files.get("assets/style.css")!.data);
+    expect(sheet).toMatch(/\.table__link--name \{[^}]*font-family: var\(--font-text\);[^}]*font-weight: 700;/);
+    expect(sheet).toMatch(/\.table__link--id \{[^}]*font-family: var\(--font-code\);/);
+    expect(sheet).toMatch(/\.table__row--link:hover \.table__link, \.table__link:hover \{[^}]*text-decoration: underline;/);
+    expect(sheet).not.toContain(".pipelines-name");
   });
 });
 

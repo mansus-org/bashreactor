@@ -7,7 +7,6 @@
 .pipelines-list .table th:nth-child(3) { width: 8%; }
 .pipelines-list .table th:nth-child(4) { width: 21%; }
 .pipelines-list .table th:nth-child(5) { width: 29%; }
-.pipelines-name { font-weight: 700; overflow-wrap: anywhere; }
 .pipelines-list .table td:nth-child(2) .table__cell {
   display: block;
   overflow: hidden;
