@@ -314,8 +314,10 @@ bun run build     # bundle the server into dist/
 
 ## Deploy
 
-Push to `main` builds the Dockerfile and pushes `sha-<commit>` to GHCR; the cluster picks it up at
-`bashreactor.mansus.org`. A pull request pushes `pr-<number>-<commit>` and gets
+A push to `main` deploys once its `ci` run has passed: the Dockerfile is built and `sha-<commit>` is
+pushed to GHCR, and the cluster picks it up at `bashreactor.mansus.org`. A push whose `ci` fails is
+never built, and when two runs finish out of order only the commit `main` points at goes out, so
+production never moves backwards. A pull request pushes `pr-<number>-<commit>` and gets
 `https://bashreactor-pr-<number>.mansus.org` until it closes. See
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml).
 
