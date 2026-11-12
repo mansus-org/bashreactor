@@ -13,7 +13,7 @@
 .block-writer__toolbar {
   position: sticky; top: 0; z-index: 5;
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3);
-  margin: 0 calc(-1 * var(--s2)); padding: var(--s2);
+  padding: var(--s2) 0;
   border-bottom: var(--rule); background: var(--paper);
 }
 .block-writer__title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); min-width: 0; }

@@ -481,6 +481,14 @@ describe("the block writer", () => {
     expect(body).toMatch(/line-height:\s*1\.5/);
   });
 
+  test("the writer's toolbar starts at the content edge, as the editor's does", () => {
+    const writer = ruleBody(".block-writer__toolbar");
+    const editor = ruleBody(".editor__toolbar");
+    expect(writer).toContain("padding: var(--s2) 0;");
+    expect(writer).not.toContain("calc(-1");
+    expect(editor).toContain("padding: var(--s2) 0;");
+  });
+
   test("the writer says where it is, above the toolbar", async () => {
     const view = await open("/blocks/versioned/edit");
     const form = view.querySelector("form")!;
